@@ -178,3 +178,24 @@ impl Default for AppSettings {
     }
   }
 }
+
+#[derive(Serialize)]
+pub struct TransactionHistoryItem {
+  pub txid: String,
+  pub date: String,
+  #[serde(rename = "type")]
+  pub tx_type: String,
+  pub amount: String,
+  pub confirmations: u64,
+  pub address: Option<String>,
+  pub asset: Option<String>,
+  pub fee: Option<String>,
+  pub raw: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct TransactionHistoryResult {
+  pub items: Vec<TransactionHistoryItem>,
+  pub total: usize,
+  pub has_more: bool,
+}

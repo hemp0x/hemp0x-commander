@@ -118,7 +118,7 @@ impl RpcContext {
     }
 }
 
-fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+pub(crate) fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
     let ctx = rpc_context()?;
     ctx.call(method, params)
 }

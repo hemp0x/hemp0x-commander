@@ -10,6 +10,7 @@ use chrono::{Local, TimeZone, DateTime};
 use crate::modules::models::*;
 use crate::modules::utils::{resolve_bin, split_args, parse_balances, version_is_old};
 use crate::modules::files::{data_dir, ensure_config, parse_config, config_path};
+use crate::modules::rpc;
 
 // --- SHELL STATE ---
 #[derive(Default)]
@@ -1284,6 +1285,111 @@ pub fn lock_asset_supply(name: String, current_units: u8) -> Result<String, Stri
     "",
   )?;
   run_cli(&args)
+}
+
+#[tauri::command]
+pub fn get_transaction_history(
+  count: u64,
+  skip: u64,
+  category: Option<String>,
+) -> Result<TransactionHistoryResult, String> {
+  ensure_config()?;
+  let count = std::cmp::max(1, std::cmp::min(count, 500));
+  let skip = std::cmp::min(skip, 1_000_000);
+  let active_filter = category.as_ref().filter(|f| !f.is_empty());
+  let fetch_count = if active_filter.is_some() { 500 } else { count + 1 };
+  let fetch_skip = if active_filter.is_some() { 0 } else { skip };
+
+  let tx_raw = match rpc::call_rpc(
+    "listtransactions",
+    &[
+      serde_json::Value::String("*".to_string()),
+      serde_json::Value::Number(serde_json::value::Number::from(fetch_count)),
+      serde_json::Value::Number(serde_json::value::Number::from(fetch_skip)),
+    ],
+  ) {
+    Ok(result) => result,
+    Err(_rpc_err) => {
+      let raw = run_cli(&[
+        String::from("listtransactions"),
+        String::from("*"),
+        format!("{}", fetch_count),
+        format!("{}", fetch_skip),
+      ])?;
+      serde_json::from_str(&raw).map_err(|e| format!("CLI parse error: {e}"))?
+    }
+  };
+
+  let empty_vec = vec![];
+  let tx_list: &Vec<serde_json::Value> = tx_raw.as_array().unwrap_or(&empty_vec);
+
+  let source: Vec<&serde_json::Value> = match active_filter {
+    Some(filter) => tx_list
+      .iter()
+      .filter(|tx| tx["category"].as_str().unwrap_or("unknown") == filter.as_str())
+      .collect(),
+    None => tx_list.iter().collect(),
+  };
+
+  let source_len = source.len();
+  let items: Vec<TransactionHistoryItem> = source
+    .iter()
+    .rev()
+    .skip(if active_filter.is_some() { skip as usize } else { 0 })
+    .take(count as usize)
+    .map(|tx| map_transaction_history_item(tx))
+    .collect();
+
+  let has_more = if active_filter.is_some() {
+    source_len > (skip + count) as usize
+  } else {
+    source_len > count as usize
+  };
+  let total = if active_filter.is_some() {
+    source_len
+  } else {
+    skip as usize + items.len() + usize::from(has_more)
+  };
+  Ok(TransactionHistoryResult {
+    items,
+    total,
+    has_more,
+  })
+}
+
+fn map_transaction_history_item(tx: &serde_json::Value) -> TransactionHistoryItem {
+  let epoch = tx["time"].as_i64().unwrap_or(0);
+  let dt: DateTime<Local> = chrono::Local
+    .timestamp_opt(epoch, 0)
+    .single()
+    .unwrap_or_else(|| chrono::Local::now());
+  let amount = tx["amount"].as_f64().unwrap_or(0.0);
+
+  let address = tx["address"]
+    .as_str()
+    .filter(|a| !a.is_empty())
+    .map(|a| a.to_string());
+
+  let asset = tx.get("asset")
+    .and_then(|v| v.as_str())
+    .filter(|a| !a.is_empty())
+    .map(|a| a.to_string());
+
+  let fee = tx["fee"]
+    .as_f64()
+    .map(|f| format!("{:.8}", f));
+
+  TransactionHistoryItem {
+    txid: tx["txid"].as_str().unwrap_or("-").to_string(),
+    date: dt.format("%m/%d %H:%M").to_string(),
+    tx_type: tx["category"].as_str().unwrap_or("unknown").to_string(),
+    amount: format!("{:.8}", amount),
+    confirmations: tx["confirmations"].as_u64().unwrap_or(0),
+    address,
+    asset,
+    fee,
+    raw: Some(tx.clone()),
+  }
 }
 
 #[tauri::command]

@@ -39,6 +39,7 @@ pub fn run() {
       commands::send_hemp,
       commands::preview_send_hemp,
       commands::preview_transfer_asset,
+      commands::get_transaction_history,
       commands::list_assets,
       commands::transfer_asset,
       commands::issue_asset,

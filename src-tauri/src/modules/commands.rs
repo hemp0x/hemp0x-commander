@@ -1091,6 +1091,115 @@ fn validate_send_preview_fields(
 }
 
 #[tauri::command]
+pub fn preview_transfer_asset(
+  destination: String,
+  amount: String,
+  asset: String,
+) -> Result<SendPreview, String> {
+  ensure_config()?;
+  let (parsed_amount, mut warnings) =
+    validate_asset_transfer_preview_fields(&destination, &amount, &asset)?;
+  let asset_name = asset.trim().to_string();
+
+  let validate_result = run_cli(&[String::from("validateaddress"), destination.trim().to_string()])
+    .map_err(|e| format!("Node/wallet unavailable: {e}"))?;
+  let validation: serde_json::Value =
+    serde_json::from_str(&validate_result).map_err(|e| format!("Malformed validation response: {e}"))?;
+  if !validation["isvalid"].as_bool().unwrap_or(false) {
+    return Err("Invalid destination address format".to_string());
+  }
+
+  let available_balance = match run_cli(&[String::from("listmyassets"), asset_name.clone(), String::from("false")]) {
+    Ok(raw) => {
+      let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+      if let Some(balance) = asset_balance_from_listmyassets(&value, &asset_name) {
+        format!("{:.8}", balance)
+      } else {
+        warnings.push("Unable to retrieve asset balance".to_string());
+        String::from("unknown")
+      }
+    }
+    Err(_) => {
+      warnings.push("Unable to retrieve available asset balance".to_string());
+      String::from("unknown")
+    }
+  };
+
+  if let Ok(bal) = available_balance.parse::<f64>() {
+    if parsed_amount > bal {
+      warnings.push(format!(
+        "Amount exceeds available {} balance ({}) - transaction may fail",
+        asset_name, available_balance
+      ));
+    }
+  }
+
+  let fee_warning = Some(String::from(
+    "Asset transfers require HEMP for network fees. Ensure your HEMP balance is sufficient.",
+  ));
+
+  let summary = format!(
+    "Transfer {} {} to {}{}",
+    parsed_amount,
+    asset_name,
+    &destination.trim()[..std::cmp::min(16, destination.trim().len())],
+    if destination.trim().len() > 16 { "..." } else { "" }
+  );
+
+  Ok(SendPreview {
+    destination: destination.trim().to_string(),
+    amount: format!("{}", parsed_amount),
+    asset: asset_name,
+    available_balance,
+    fee_estimate: None,
+    fee_warning,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+fn validate_asset_transfer_preview_fields(
+  destination: &str,
+  amount: &str,
+  asset: &str,
+) -> Result<(f64, Vec<String>), String> {
+  let warnings = Vec::new();
+  if destination.trim().is_empty() {
+    return Err("Destination address is required".to_string());
+  }
+
+  let parsed_amount: f64 = amount
+    .trim()
+    .parse()
+    .map_err(|_| "Amount must be a numeric value".to_string())?;
+  if !parsed_amount.is_finite() || parsed_amount <= 0.0 {
+    return Err("Amount must be greater than zero".to_string());
+  }
+
+  if asset.trim().is_empty() {
+    return Err("Asset name is required".to_string());
+  }
+
+  if asset.trim().to_uppercase() == "HEMP" {
+    return Err("Use preview_send_hemp for HEMP sends".to_string());
+  }
+
+  Ok((parsed_amount, warnings))
+}
+
+fn asset_balance_from_listmyassets(value: &serde_json::Value, asset: &str) -> Option<f64> {
+  if let Some(balance) = value.as_f64() {
+    return Some(balance);
+  }
+  let asset_value = value.get(asset)?;
+  if let Some(balance) = asset_value.as_f64() {
+    return Some(balance);
+  }
+  asset_value.get("balance").and_then(|v| v.as_f64())
+}
+
+#[tauri::command]
 pub fn list_utxos() -> Result<Vec<UtxoItem>, String> {
   ensure_config()?;
   let raw = run_cli(&[
@@ -1202,7 +1311,10 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
 
 #[cfg(test)]
 mod tests {
-  use super::{build_reissue_args, validate_send_preview_fields};
+  use super::{
+    asset_balance_from_listmyassets, build_reissue_args, validate_asset_transfer_preview_fields,
+    validate_send_preview_fields,
+  };
 
   #[test]
   fn validates_valid_send_preview_input() {
@@ -1285,5 +1397,83 @@ mod tests {
         "QmHash",
       ]
     );
+  }
+
+  // --- Asset Transfer Preview Tests ---
+
+  #[test]
+  fn asset_preview_rejects_hemp() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "1.0", "HEMP");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_hemp_case_insensitive() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "1.0", "hemp");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_empty_asset() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "1.0", "");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_whitespace_asset() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "1.0", "   ");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_empty_destination() {
+    let result = validate_asset_transfer_preview_fields("", "1.0", "TOKEN");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_zero_amount() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "0", "TOKEN");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_negative_amount() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "-1", "TOKEN");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_rejects_non_numeric_amount() {
+    let result = validate_asset_transfer_preview_fields("Haddr1", "abc", "TOKEN");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn asset_preview_accepts_valid_asset_transfer() {
+    assert!(validate_asset_transfer_preview_fields("Haddr1", "100.0", "TOKEN").is_ok());
+  }
+
+  #[test]
+  fn asset_preview_accepts_fractional_amount() {
+    assert!(validate_asset_transfer_preview_fields("Haddr1", "0.5", "TOKEN").is_ok());
+  }
+
+  #[test]
+  fn parses_asset_balance_from_keyed_number_response() {
+    let value = serde_json::json!({ "TOKEN": 12.5 });
+    assert_eq!(asset_balance_from_listmyassets(&value, "TOKEN"), Some(12.5));
+  }
+
+  #[test]
+  fn parses_asset_balance_from_keyed_object_response() {
+    let value = serde_json::json!({ "TOKEN": { "balance": 7.25 } });
+    assert_eq!(asset_balance_from_listmyassets(&value, "TOKEN"), Some(7.25));
+  }
+
+  #[test]
+  fn parses_asset_balance_from_direct_number_response() {
+    let value = serde_json::json!(3.0);
+    assert_eq!(asset_balance_from_listmyassets(&value, "TOKEN"), Some(3.0));
   }
 }

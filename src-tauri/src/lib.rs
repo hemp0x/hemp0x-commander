@@ -38,6 +38,7 @@ pub fn run() {
       commands::get_network_mode,
       commands::send_hemp,
       commands::preview_send_hemp,
+      commands::preview_transfer_asset,
       commands::list_assets,
       commands::transfer_asset,
       commands::issue_asset,

@@ -99,8 +99,13 @@
         if (!address || !amount)
             return (status = "Address and amount required.");
 
-        if (isAdvanced || asset !== "HEMP") {
+        if (isAdvanced) {
             await validateAddressForExistingReview();
+            return;
+        }
+
+        if (asset !== "HEMP") {
+            await previewAssetTransfer();
             return;
         }
 
@@ -118,6 +123,37 @@
                     input: {
                         status: "Previewed",
                         operation_type: "send",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: previewData,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            showConfirmModal = true;
+        } catch (err) {
+            status = `Preview failed: ${err}`;
+            previewData = null;
+        }
+    }
+
+    async function previewAssetTransfer() {
+        status = "Building asset preview...";
+        try {
+            previewData = await core.invoke("preview_transfer_asset", {
+                destination: address,
+                amount: String(amount),
+                asset,
+            });
+            status = "";
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "asset_transfer",
                         summary: previewData.summary,
                         txid: null,
                         details: previewData,

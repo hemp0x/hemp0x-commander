@@ -138,11 +138,30 @@ pub struct RawTxInput {
   pub vout: u64,
 }
 
-#[derive(Serialize, serde::Deserialize, Default)]
+#[derive(Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
   pub hide_balance: bool,
   pub hide_activity: bool,
   pub show_welcome: bool,
   pub hidden_assets: Vec<String>,
   pub asset_order: Vec<String>,
+  pub auto_start_daemon_on_launch: bool,
+  pub keep_daemon_running_on_close: bool,
+  pub allow_non_bundled_core_next: bool,
+}
+
+impl Default for AppSettings {
+  fn default() -> Self {
+    Self {
+      hide_balance: false,
+      hide_activity: false,
+      show_welcome: true,
+      hidden_assets: Vec::new(),
+      asset_order: Vec::new(),
+      auto_start_daemon_on_launch: false,
+      keep_daemon_running_on_close: false,
+      allow_non_bundled_core_next: false,
+    }
+  }
 }

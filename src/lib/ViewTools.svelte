@@ -10,7 +10,7 @@
   import ToolsConsole from "./tools/ToolsConsole.svelte";
   import ToolsWallet from "./tools/ToolsWallet.svelte";
   import ToolsNetwork from "./tools/ToolsNetwork.svelte";
-  import { nodeStatus } from "../stores.js";
+  import { nodeStatus, daemonRuntime } from "../stores.js";
 
   let activeSubTab = "CONSOLE";
   let networkMode = "mainnet";
@@ -194,6 +194,46 @@
   };
   let updateCheckStatus = "Ready to check for updates";
   let isCheckingUpdate = false;
+
+  let daemonSettings = {
+    auto_start_daemon_on_launch: false,
+    keep_daemon_running_on_close: false,
+    allow_non_bundled_core_next: false,
+  };
+
+  async function loadDaemonSettings() {
+    try {
+      const settings = await core.invoke("load_app_settings");
+      daemonSettings.auto_start_daemon_on_launch = settings.auto_start_daemon_on_launch;
+      daemonSettings.keep_daemon_running_on_close = settings.keep_daemon_running_on_close;
+      daemonSettings.allow_non_bundled_core_next = settings.allow_non_bundled_core_next;
+      daemonRuntime.update((d) => ({
+        ...d,
+        settings: {
+          auto_start_daemon_on_launch: settings.auto_start_daemon_on_launch,
+          keep_daemon_running_on_close: settings.keep_daemon_running_on_close,
+          allow_non_bundled_core_next: settings.allow_non_bundled_core_next,
+        },
+      }));
+    } catch {
+      // use defaults
+    }
+  }
+
+  async function saveDaemonSetting(key, value) {
+    daemonSettings[key] = value;
+    try {
+      const current = await core.invoke("load_app_settings");
+      current[key] = value;
+      await core.invoke("save_app_settings", { settings: current });
+      daemonRuntime.update((d) => ({
+        ...d,
+        settings: { ...d.settings, [key]: value },
+      }));
+    } catch (e) {
+      showToast(`Failed to save setting: ${e}`, "error");
+    }
+  }
 
   // React to node coming online to refresh binary status
   $: if (isNodeOnline && tauriReady) {
@@ -390,6 +430,7 @@
       refreshLog(true); // Silent start
       loadDataInfo(); // Load data folder info
       loadUpdateInfo(); // Load update tab info
+      loadDaemonSettings(); // Load daemon lifecycle settings
     }
   });
 
@@ -676,6 +717,37 @@
                   <div class="coming-soon">
                     &#x1F512; Coming Soon: Verify app integrity with Hemp token
                     signed releases
+                  </div>
+                </div>
+
+                <!-- DAEMON SETTINGS -->
+                <div class="checksum-section" style="margin-top: 1rem;">
+                  <h4 class="section-subtitle">DAEMON SETTINGS</h4>
+                  <div class="daemon-settings-grid">
+                    <label class="setting-row">
+                      <input
+                        type="checkbox"
+                        checked={daemonSettings.auto_start_daemon_on_launch}
+                        on:change={(e) => saveDaemonSetting('auto_start_daemon_on_launch', e.target.checked)}
+                      />
+                      <span>Auto-start daemon on launch</span>
+                    </label>
+                    <label class="setting-row">
+                      <input
+                        type="checkbox"
+                        checked={daemonSettings.keep_daemon_running_on_close}
+                        on:change={(e) => saveDaemonSetting('keep_daemon_running_on_close', e.target.checked)}
+                      />
+                      <span>Keep daemon running when Commander closes</span>
+                    </label>
+                    <label class="setting-row">
+                      <input
+                        type="checkbox"
+                        checked={daemonSettings.allow_non_bundled_core_next}
+                        on:change={(e) => saveDaemonSetting('allow_non_bundled_core_next', e.target.checked)}
+                      />
+                      <span>Allow non-bundled Core Next builds (advanced/developer override)</span>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -1457,6 +1529,37 @@ rpcallowip=127.0.0.1
     border: 1px dashed rgba(255, 255, 255, 0.1);
     border-radius: 6px;
     text-align: center;
+  }
+
+  .daemon-settings-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.5rem 0;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: #aaa;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .setting-row input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-primary);
+  }
+
+  .setting-row span {
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .setting-row:hover {
+    color: #fff;
   }
 
   /* === CONFIG EDITOR === */

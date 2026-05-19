@@ -416,16 +416,19 @@ pub fn list_assets() -> Result<Vec<AssetItem>, String> {
 #[tauri::command]
 pub fn transfer_asset(asset: String, amount: String, to: String) -> Result<String, String> {
   ensure_config()?;
+  validate_asset_name(&asset)?;
+  validate_positive_amount(&amount)?;
+  if to.trim().is_empty() {
+    return Err("Destination address is required".to_string());
+  }
   run_cli(&[String::from("transfer"), asset, amount, to])
 }
 
 #[tauri::command]
 pub fn issue_asset(name: String, qty: String, units: u8, reissuable: bool, ipfs: String) -> Result<String, String> {
   ensure_config()?;
-  let qty_val: f64 = qty
-    .trim()
-    .parse()
-    .map_err(|_| "Quantity must be a number".to_string())?;
+  validate_asset_name(&name)?;
+  let qty_val = parse_positive_amount(&qty)?;
   if units > 8 {
     return Err("Units must be between 0 and 8".to_string());
   }
@@ -503,37 +506,126 @@ pub fn reissue_asset(
   name: String,
   qty: String,
   to_address: String,
-  change_verifier: bool,
-  new_verifier: String,
+  change_address: String,
+  reissuable: bool,
+  new_units: Option<u8>,
   new_ipfs: String,
 ) -> Result<String, String> {
   ensure_config()?;
-  let qty_val: f64 = qty
+  validate_asset_name(&name)?;
+  let qty_val = parse_non_negative_amount(&qty)?;
+  let units = match new_units {
+    Some(units) => units,
+    None => get_asset_units(&name)?,
+  };
+  if units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
+  let to_addr = if to_address.trim().is_empty() {
+    run_cli(&[String::from("getnewaddress")])?
+  } else {
+    to_address
+  };
+  let change_addr = if change_address.trim().is_empty() {
+    to_addr.clone()
+  } else {
+    change_address
+  };
+
+  let args = build_reissue_args(
+    &name,
+    &format!("{qty_val}"),
+    &to_addr,
+    &change_addr,
+    reissuable,
+    units,
+    new_ipfs.trim(),
+  )?;
+
+  run_cli(&args)
+}
+
+fn validate_asset_name(name: &str) -> Result<(), String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Asset name is required".to_string());
+  }
+  if trimmed.len() > 128 {
+    return Err("Asset name is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace()) {
+    return Err("Asset name cannot contain whitespace".to_string());
+  }
+  Ok(())
+}
+
+fn parse_positive_amount(amount: &str) -> Result<f64, String> {
+  let value = amount
     .trim()
-    .parse()
-    .map_err(|_| "Quantity must be a number".to_string())?;
-  
+    .parse::<f64>()
+    .map_err(|_| "Amount must be a number".to_string())?;
+  if !value.is_finite() || value <= 0.0 {
+    return Err("Amount must be greater than zero".to_string());
+  }
+  Ok(value)
+}
+
+fn parse_non_negative_amount(amount: &str) -> Result<f64, String> {
+  let value = amount
+    .trim()
+    .parse::<f64>()
+    .map_err(|_| "Amount must be a number".to_string())?;
+  if !value.is_finite() || value < 0.0 {
+    return Err("Amount cannot be negative".to_string());
+  }
+  Ok(value)
+}
+
+fn validate_positive_amount(amount: &str) -> Result<(), String> {
+  parse_positive_amount(amount).map(|_| ())
+}
+
+fn get_asset_units(name: &str) -> Result<u8, String> {
+  let raw = run_cli(&[String::from("getassetdata"), name.to_string()])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let units = value.get("units").and_then(|v| v.as_u64()).unwrap_or(8) as u8;
+  if units > 8 {
+    return Err("Asset units returned by node are invalid".to_string());
+  }
+  Ok(units)
+}
+
+fn build_reissue_args(
+  name: &str,
+  qty: &str,
+  to_address: &str,
+  change_address: &str,
+  reissuable: bool,
+  new_units: u8,
+  new_ipfs: &str,
+) -> Result<Vec<String>, String> {
+  if to_address.trim().is_empty() {
+    return Err("Reissue destination address is required".to_string());
+  }
+  if change_address.trim().is_empty() {
+    return Err("Reissue change address is required".to_string());
+  }
+  if new_units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
   let mut args = vec![
     String::from("reissue"),
-    name,
-    format!("{qty_val}"),
-    to_address,
+    name.to_string(),
+    qty.to_string(),
+    to_address.to_string(),
+    change_address.to_string(),
+    if reissuable { "true" } else { "false" }.to_string(),
+    new_units.to_string(),
   ];
-  
-  if change_verifier {
-    args.push(String::from("true"));
-    args.push(new_verifier);
+  if !new_ipfs.trim().is_empty() {
+    args.push(new_ipfs.trim().to_string());
   }
-  
-  if !new_ipfs.is_empty() {
-    if args.len() < 6 {
-      args.push(String::from("false"));
-      args.push(String::new());
-    }
-    args.push(new_ipfs);
-  }
-  
-  run_cli(&args)
+  Ok(args)
 }
 
 #[tauri::command]
@@ -971,38 +1063,83 @@ pub fn backup_wallet_to(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn lock_asset_supply(name: String, current_units: u8) -> Result<String, String> {
   ensure_config()?;
+  validate_asset_name(&name)?;
   // To lock: reissue with amount 0, reissuable=false.
   // We need a destination address (can be same wallet).
   let to_addr = run_cli(&[String::from("getnewaddress")])?;
   let change_addr = to_addr.clone();
 
-  // reissue "name" 0 "addr" "change" false units
-  run_cli(&[
-      String::from("reissue"),
-      name,
-      String::from("0"),
-      to_addr,
-      change_addr,
-      String::from("false"), // LOCKED
-      current_units.to_string()
-  ])
+  let args = build_reissue_args(
+    &name,
+    "0",
+    &to_addr,
+    &change_addr,
+    false,
+    current_units,
+    "",
+  )?;
+  run_cli(&args)
 }
 
 #[tauri::command]
 pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8) -> Result<String, String> {
   ensure_config()?;
+  validate_asset_name(&name)?;
+  if ipfs_hash.trim().is_empty() {
+    return Err("IPFS hash or metadata value is required".to_string());
+  }
   // To update IPFS: reissue with amount 0, reissuable=true, same units, new IPFS.
   let to_addr = run_cli(&[String::from("getnewaddress")])?;
   let change_addr = to_addr.clone();
 
-  run_cli(&[
-      String::from("reissue"),
-      name,
-      String::from("0"),
-      to_addr,
-      change_addr,
-      String::from("true"),
-      current_units.to_string(),
-      ipfs_hash
-  ])
+  let args = build_reissue_args(
+    &name,
+    "0",
+    &to_addr,
+    &change_addr,
+    true,
+    current_units,
+    &ipfs_hash,
+  )?;
+  run_cli(&args)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::build_reissue_args;
+
+  #[test]
+  fn builds_reissue_args_in_core_order_without_ipfs() {
+    let args = build_reissue_args("ROOT", "1", "Haddr", "Hchange", true, 8, "").unwrap();
+    assert_eq!(
+      args,
+      vec![
+        "reissue",
+        "ROOT",
+        "1",
+        "Haddr",
+        "Hchange",
+        "true",
+        "8",
+      ]
+    );
+  }
+
+  #[test]
+  fn builds_reissue_args_in_core_order_with_ipfs() {
+    let args = build_reissue_args("ROOT", "0", "Haddr", "Hchange", false, 0, "QmHash").unwrap();
+    assert_eq!(
+      args,
+      vec![
+        "reissue",
+        "ROOT",
+        "0",
+        "Haddr",
+        "Hchange",
+        "false",
+        "0",
+        "QmHash",
+      ]
+    );
+  }
 }

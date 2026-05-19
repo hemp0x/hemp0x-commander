@@ -78,8 +78,7 @@
     import { nodeStatus } from "../stores.js";
     $: isNodeOnline = $nodeStatus.online;
 
-    // Always allow operations - errors will be shown if node is offline
-    let nodeOnline = true; // Default to true, let operations fail gracefully
+    let nodeOnline = false;
 
     onMount(async () => {
         tauriReady =
@@ -153,8 +152,8 @@
             if (!reissueAsset && myAssets.length > 0)
                 reissueAsset = myAssets[0].name;
         } catch (err) {
-            // Don't set nodeOnline to false - just show status
             console.warn("list_assets error:", err);
+            nodeOnline = false;
             status = String(err).includes("error") ? "Node may be offline" : "";
             myAssets = [];
         }
@@ -426,6 +425,7 @@
         issueQty = "1";
         issueUnits = 0;
         issueReissue = true;
+        issueIpfs = "";
         subModalOpen = true; // Open as Modal
     }
 
@@ -513,9 +513,10 @@
                     .invoke("reissue_asset", {
                         name: confirmPayload.name,
                         qty: String(confirmPayload.qty),
-                        toAddress: "", // empty = default wallet address
-                        changeVerifier: false,
-                        newVerifier: "",
+                        toAddress: "",
+                        changeAddress: "",
+                        reissuable: confirmPayload.reissuable,
+                        newUnits: null,
                         newIpfs: "",
                     })
                     .catch((e) => {

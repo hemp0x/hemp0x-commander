@@ -8,6 +8,7 @@
     walletInfo as walletStore,
     networkInfo,
     systemStatus as systemStore,
+    daemonRuntime,
   } from "./stores.js";
 
   import logoNew from "./assets/logonew.png";
@@ -71,6 +72,77 @@
   function toggleHideActivity() {
     hideActivity = !hideActivity;
     localStorage.setItem("hemp0x_hideActivity", hideActivity.toString());
+  }
+
+  // --- DAEMON LIFECYCLE ---
+  let showDaemonConflict = false;
+  let conflictRuntimeStatus = null;
+  let conflictResolved = false;
+  let closeCleanupInProgress = false;
+  let closeCleanupComplete = false;
+  let appSettings = {
+    auto_start_daemon_on_launch: false,
+    keep_daemon_running_on_close: false,
+    allow_non_bundled_core_next: false,
+  };
+
+  async function resolveDaemonConflict(choice) {
+    showDaemonConflict = false;
+    if (choice === "continue") {
+      await core.invoke("release_daemon_ownership");
+    } else if (choice === "stop_and_use_bundled") {
+      try {
+        await core.invoke("stop_node");
+        await new Promise((r) => setTimeout(r, 2000));
+        await core.invoke("start_node");
+        await core.invoke("take_daemon_ownership");
+      } catch (e) {
+        lastError = String(e || "Failed to switch daemon");
+      }
+    } else {
+      await core.invoke("release_daemon_ownership");
+    }
+    conflictResolved = true;
+    daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+    setTimeout(refreshDashboard, 1500);
+  }
+
+  async function loadAppSettings() {
+    try {
+      appSettings = await core.invoke("load_app_settings");
+      daemonRuntime.update((d) => ({
+        ...d,
+        settings: {
+          auto_start_daemon_on_launch: appSettings.auto_start_daemon_on_launch,
+          keep_daemon_running_on_close: appSettings.keep_daemon_running_on_close,
+          allow_non_bundled_core_next: appSettings.allow_non_bundled_core_next,
+        },
+      }));
+    } catch {
+      // use defaults
+    }
+  }
+
+  async function handleCloseRequested() {
+    if (appSettings.keep_daemon_running_on_close) {
+      daemonRuntime.update((d) => ({ ...d, commanderOwns: false }));
+      return;
+    }
+    try {
+      let owns = false;
+      try {
+        const ownership = await core.invoke("get_daemon_ownership");
+        owns = ownership.commander_owns;
+      } catch {
+        // can't determine ownership, leave alone
+      }
+      if (owns) {
+        await core.invoke("stop_node");
+        await core.invoke("release_daemon_ownership");
+      }
+    } catch {
+      // best-effort cleanup
+    }
   }
 
   function closeWelcome() {
@@ -343,6 +415,75 @@
 
     let unlistenNetwork;
     if (tauriReady) {
+      // Handle close event for daemon lifecycle
+      getCurrentWindow().onCloseRequested(async (event) => {
+        if (appSettings.keep_daemon_running_on_close) {
+          return;
+        }
+        if (closeCleanupComplete) {
+          return;
+        }
+        event.preventDefault();
+        if (closeCleanupInProgress) {
+          return;
+        }
+        closeCleanupInProgress = true;
+        await handleCloseRequested();
+        closeCleanupComplete = true;
+        await getCurrentWindow().close();
+      });
+
+      // Init daemon runtime
+      (async function initDaemonRuntime() {
+        try {
+          await loadAppSettings();
+          const status = await core.invoke("get_runtime_status");
+          daemonRuntime.update((d) => ({
+            ...d,
+            bundledCoreNextReady: status.bundled_core_next_ready,
+            probe: status.probe,
+            daemon: {
+              path: status.daemon.path,
+              exists: status.daemon.exists,
+              raw: status.daemon.raw,
+              base_version: status.daemon.base_version,
+              commit_hash: status.daemon.commit_hash,
+              exact_core_next_match: status.daemon.exact_core_next_match,
+            },
+          }));
+
+          // If daemon is already running, show conflict dialog
+          if (status.probe.rpc_port_open) {
+            conflictRuntimeStatus = status;
+            showDaemonConflict = true;
+          } else if (appSettings.auto_start_daemon_on_launch && status.bundled_core_next_ready) {
+            try {
+              await core.invoke("start_node");
+              await core.invoke("take_daemon_ownership");
+              daemonRuntime.update((d) => ({ ...d, commanderOwns: true }));
+              conflictResolved = true;
+              daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+            } catch (e) {
+              console.error("Failed to auto-start daemon:", e);
+            }
+          } else {
+            conflictResolved = true;
+            daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+          }
+
+          // Warn if bundled binary is not exact match
+          if (appSettings.allow_non_bundled_core_next === false &&
+              !status.bundled_core_next_ready &&
+              status.daemon.exists) {
+            console.warn("Bundled Core Next is not the exact required version");
+          }
+        } catch (e) {
+          console.error("Daemon runtime init failed:", e);
+          conflictResolved = true;
+          daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+        }
+      })();
+
       // Load Network Mode
       core
         .invoke("get_network_mode")
@@ -368,7 +509,9 @@
 
     // Adaptive Polling Logic for Performance
     const performPoll = async () => {
-      await refreshDashboard();
+      if (conflictResolved) {
+        await refreshDashboard();
+      }
 
       let delay = 5000;
       if (systemStatus === "yellow") delay = 8000;
@@ -797,6 +940,52 @@
           <button class="welcome-btn" on:click={closeWelcome}
             >[ CONTINUE ]</button
           >
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- DAEMON CONFLICT MODAL -->
+  {#if showDaemonConflict && conflictRuntimeStatus}
+    <div class="welcome-overlay">
+      <div class="welcome-modal">
+        <div class="welcome-header">
+          <h2>Daemon Already Running</h2>
+        </div>
+        <div class="welcome-body">
+          <p class="welcome-text">
+            A Hemp0x daemon was detected on the default ports (RPC: {conflictRuntimeStatus.probe.default_rpc_port}, P2P: {conflictRuntimeStatus.probe.default_p2p_port}).
+          </p>
+          {#if !conflictRuntimeStatus.bundled_core_next_ready}
+            <p class="welcome-caution">
+              The bundled daemon does not match the required Core Next build
+              ({conflictRuntimeStatus.required_base_version}-{conflictRuntimeStatus.required_commit_hash}).
+              {#if conflictRuntimeStatus.daemon.base_version}
+                Bundled binary: v{conflictRuntimeStatus.daemon.base_version}
+                {#if conflictRuntimeStatus.daemon.commit_hash}
+                  ({conflictRuntimeStatus.daemon.commit_hash})
+                {/if}
+              {:else}
+                Bundled binary: unrecognized version
+              {/if}
+            </p>
+          {/if}
+          <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
+            Choose how to proceed:
+          </p>
+        </div>
+        <div class="welcome-footer" style="flex-wrap: wrap; gap: 0.5rem;">
+          <button class="btn-xs" style="flex: 1;" on:click={() => resolveDaemonConflict('continue')}>
+            Continue with existing daemon
+          </button>
+          {#if conflictRuntimeStatus.bundled_core_next_ready}
+            <button class="btn-xs" style="flex: 1;" on:click={() => resolveDaemonConflict('stop_and_use_bundled')}>
+              Stop it and use bundled Core Next
+            </button>
+          {/if}
+          <button class="btn-xs ghost" style="flex: 1;" on:click={() => resolveDaemonConflict('cancel')}>
+            Stay offline
+          </button>
         </div>
       </div>
     </div>

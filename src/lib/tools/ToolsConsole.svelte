@@ -21,6 +21,7 @@
     let selectedCommand = "";
     let cmdLine = "";
     let shellMode = false;
+    let shellWarningShown = false;
     let historyIndex = -1;
     let consoleRef;
 
@@ -239,6 +240,12 @@
     }
 
     function toggleShellMode() {
+        if (!shellMode && !shellWarningShown) {
+            shellWarningShown = true;
+            appendOutput(
+                "Shell Mode runs commands on this computer. Use it only when you understand the command and trust the input. Wallet secrets typed here may appear in history or output.",
+            );
+        }
         shellMode = !shellMode;
     }
 

@@ -10,7 +10,6 @@ build
 # Rust / Tauri
 src-tauri/target
 **/target/
-Cargo.lock
 **/*.rs.bk
 src-tauri/*.exe
 src-tauri/hemp0xd

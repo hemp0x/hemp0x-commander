@@ -54,3 +54,32 @@ export const walletInfo = writable({
 export const uiState = writable({
     toast: null
 });
+
+/**
+ * Daemon Runtime
+ * Tracks daemon lifecycle: ownership, runtime status, launch decisions.
+ */
+export const daemonRuntime = writable({
+    commanderOwns: false,
+    bundledCoreNextReady: false,
+    probe: {
+        rpc_port_open: false,
+        p2p_port_open: false,
+        default_rpc_port: 42068,
+        default_p2p_port: 42069,
+    },
+    daemon: {
+        path: "",
+        exists: false,
+        raw: "",
+        base_version: null,
+        commit_hash: null,
+        exact_core_next_match: false,
+    },
+    settings: {
+        auto_start_daemon_on_launch: false,
+        keep_daemon_running_on_close: false,
+        allow_non_bundled_core_next: false,
+    },
+    conflictResolved: false,
+});

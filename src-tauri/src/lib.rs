@@ -5,6 +5,9 @@ pub mod modules;
 use modules::commands;
 use modules::process;
 use modules::files;
+use modules::runtime;
+use modules::rpc;
+use modules::journal;
 
 
 
@@ -92,6 +95,22 @@ pub fn run() {
       files::get_data_folder_info,
       files::load_app_settings,
       files::save_app_settings,
+      runtime::get_runtime_status,
+      runtime::probe_default_daemon,
+      runtime::take_daemon_ownership,
+      runtime::get_daemon_ownership,
+      runtime::release_daemon_ownership,
+      rpc::rpc_get_blockchain_info,
+      rpc::rpc_get_network_info,
+      rpc::rpc_get_wallet_info,
+      rpc::rpc_call,
+      rpc::rpc_dashboard,
+      journal::get_tx_journal_path,
+      journal::list_tx_journal_entries,
+      journal::add_tx_journal_entry,
+      journal::update_tx_journal_entry,
+      journal::delete_tx_journal_entry,
+      journal::export_tx_journal,
       
       // Additional Commands
       commands::backup_wallet,

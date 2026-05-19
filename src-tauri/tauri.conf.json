@@ -36,8 +36,9 @@
       "icons/icon.png"
     ],
     "externalBin": [
-      "hemp0xd",
-      "hemp0x-cli"
+      "binaries/hemp0xd",
+      "binaries/hemp0x-cli",
+      "binaries/hemp0x-tx"
     ]
   }
 }

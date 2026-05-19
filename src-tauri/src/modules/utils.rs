@@ -21,6 +21,10 @@ pub fn add_bin_candidates(candidates: &mut Vec<PathBuf>, base: PathBuf, name: &s
       if cfg!(unix) {
          candidates.push(path.join(&suffixed_name));
       }
+      candidates.push(path.join("binaries").join(bin_name(name)));
+      if cfg!(unix) {
+         candidates.push(path.join("binaries").join(&suffixed_name));
+      }
       current = path.parent().map(|p| p.to_path_buf());
     } else {
       break;

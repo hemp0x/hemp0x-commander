@@ -47,6 +47,10 @@
   let uiScale = 1;
   let isRefreshing = false; // Prevent overlapping refresh calls
   let networkMode = "mainnet"; // mainnet, testnet, regtest
+  let rpcFailCount = 0;
+  let rpcBackoffUntil = 0; // timestamp ms until which RPC is skipped
+  let lastKnownDashboard = null; // preserve last good data across transient errors
+  let dashboardFailCount = 0;
 
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
@@ -205,9 +209,9 @@
   }
 
   function setOffline(reason = "") {
-    // Optimization: prevent reactivity churn if already offline
     if (nodeInfo.state === "OFFLINE" && lastError === reason) return;
 
+    lastKnownDashboard = null;
     nodeInfo = {
       state: "OFFLINE",
       blocks: "--",
@@ -246,7 +250,6 @@
   }
 
   async function refreshDashboard() {
-    // Skip if already refreshing (prevents stacking and UI lag)
     if (isRefreshing) return;
     isRefreshing = true;
     try {
@@ -254,20 +257,47 @@
         setOffline("Tauri backend not available.");
         return;
       }
-      const data = await core.invoke("dashboard_data");
+
+      const tryRpc = rpcFailCount < 3 && Date.now() > rpcBackoffUntil;
+      let data = null;
+
+      if (tryRpc) {
+        try {
+          data = await core.invoke("rpc_dashboard");
+          rpcFailCount = 0;
+          rpcBackoffUntil = 0;
+        } catch (rpcErr) {
+          rpcFailCount++;
+          if (rpcFailCount >= 3) {
+            rpcBackoffUntil = Date.now() + 120000;
+          } else {
+            rpcBackoffUntil = Date.now() + 1000;
+          }
+        }
+      }
+
+      if (!data) {
+        data = await core.invoke("dashboard_data");
+        if (tryRpc) {
+          rpcFailCount = Math.min(rpcFailCount, 2);
+        }
+      }
+
+      lastKnownDashboard = data;
+      dashboardFailCount = 0;
+
       nodeInfo = data.node;
       walletInfo = data.wallet;
       recentTx = data.tx;
       lastError = "";
 
-      // UPDATE STORES (ONLINE)
       nodeStatus.set({
         online: data.node.state === "RUNNING",
-        version: "--", // Not provided by dashboard_data yet
+        version: "--",
         connections: parseInt(data.node.peers) || 0,
         headers: parseInt(data.node.headers) || 0,
         blocks: parseInt(data.node.blocks) || 0,
-        verificationProgress: 0, // Not provided
+        verificationProgress: 0,
         error: null,
       });
 
@@ -285,7 +315,24 @@
         difficulty: parseFloat(data.node.diff) || 0,
       }));
     } catch (err) {
-      setOffline(String(err || "RPC error"));
+      if (lastKnownDashboard) {
+        dashboardFailCount++;
+        nodeInfo = {
+          ...lastKnownDashboard.node,
+          state: dashboardFailCount >= 3 ? "OFFLINE" : lastKnownDashboard.node.state,
+          synced: dashboardFailCount >= 3 ? false : lastKnownDashboard.node.synced,
+        };
+        walletInfo = lastKnownDashboard.wallet;
+        recentTx = lastKnownDashboard.tx;
+        lastError = String(err || "RPC error");
+        nodeStatus.update((current) => ({
+          ...current,
+          online: dashboardFailCount < 3 && current.online,
+          error: lastError,
+        }));
+      } else {
+        setOffline(String(err || "RPC error"));
+      }
     } finally {
       isRefreshing = false;
     }

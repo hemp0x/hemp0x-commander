@@ -184,21 +184,11 @@ pub fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
     rpc_command_with_result(&method, &params)
 }
 
-#[tauri::command]
-pub fn rpc_dashboard() -> Result<DashboardData, String> {
-    let _cfg = ensure_config()?;
-    let ctx = rpc_context()?;
-
-    let info = ctx.call("getinfo", &[])?;
-    let bc = ctx.call("getblockchaininfo", &[])?;
-    let tx_raw = ctx.call(
-        "listtransactions",
-        &[
-            serde_json::Value::String("*".to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(100)),
-        ],
-    )?;
-
+pub(crate) fn build_dashboard_from_rpc(
+    info: &serde_json::Value,
+    bc: &serde_json::Value,
+    tx_raw: &serde_json::Value,
+) -> Result<DashboardData, String> {
     let blocks_info = info["blocks"].as_u64().unwrap_or(0);
     let peers = info["connections"].as_u64().unwrap_or(0);
     let diff_val = info["difficulty"].as_f64().unwrap_or(0.0);
@@ -281,9 +271,94 @@ pub fn rpc_dashboard() -> Result<DashboardData, String> {
     })
 }
 
+#[tauri::command]
+pub fn rpc_dashboard() -> Result<DashboardData, String> {
+    let _cfg = ensure_config()?;
+    let ctx = rpc_context()?;
+
+    let info = ctx.call("getinfo", &[])?;
+    let bc = ctx.call("getblockchaininfo", &[])?;
+    let tx_raw = ctx.call(
+        "listtransactions",
+        &[
+            serde_json::Value::String("*".to_string()),
+            serde_json::Value::Number(serde_json::value::Number::from(100)),
+        ],
+    )?;
+
+    build_dashboard_from_rpc(&info, &bc, &tx_raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_info(
+        blocks: u64,
+        connections: u64,
+        difficulty: f64,
+        balance: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "blocks": blocks,
+            "connections": connections,
+            "difficulty": difficulty,
+            "balance": balance,
+            "unconfirmed_balance": 0.0,
+            "immature_balance": 0.0,
+            "unlocked_until": 0,
+        })
+    }
+
+    fn fixture_bc(blocks: u64, headers: u64, progress: f64, mediantime: i64) -> serde_json::Value {
+        serde_json::json!({
+            "blocks": blocks,
+            "headers": headers,
+            "verificationprogress": progress,
+            "initialblockdownload": false,
+            "mediantime": mediantime,
+        })
+    }
+
+    fn fixture_tx() -> serde_json::Value {
+        serde_json::json!([
+            {"time": 1716150000, "category": "receive", "amount": 1.5, "confirmations": 3, "txid": "abc123"},
+            {"time": 1716140000, "category": "send", "amount": -0.5, "confirmations": 10, "txid": "def456"},
+        ])
+    }
+
+    #[test]
+    fn build_dashboard_parses_running_state() {
+        let info = fixture_info(100, 8, 1.5, 42.0);
+        let bc = fixture_bc(100, 100, 1.0, chrono::Local::now().timestamp() - 100);
+        let txs = fixture_tx();
+        let result = build_dashboard_from_rpc(&info, &bc, &txs).unwrap();
+        assert_eq!(result.node.state, "RUNNING");
+        assert_eq!(result.node.blocks, 100);
+        assert_eq!(result.node.peers, 8);
+        assert!(result.node.synced);
+        assert_eq!(result.wallet.balance, "42.000");
+        assert_eq!(result.wallet.status, "LOCKED");
+        assert_eq!(result.tx.len(), 2);
+    }
+
+    #[test]
+    fn build_dashboard_detects_unsynced() {
+        let info = fixture_info(50, 1, 0.5, 0.0);
+        let bc = fixture_bc(50, 200, 0.5, 0);
+        let txs = fixture_tx();
+        let result = build_dashboard_from_rpc(&info, &bc, &txs).unwrap();
+        assert!(!result.node.synced);
+    }
+
+    #[test]
+    fn build_dashboard_handles_empty_tx_list() {
+        let info = fixture_info(1, 0, 0.0, 0.0);
+        let bc = fixture_bc(1, 1, 1.0, chrono::Local::now().timestamp() - 50);
+        let txs = serde_json::json!([]);
+        let result = build_dashboard_from_rpc(&info, &bc, &txs).unwrap();
+        assert_eq!(result.tx.len(), 0);
+    }
 
     #[test]
     fn allowed_methods_include_informational_rpcs() {

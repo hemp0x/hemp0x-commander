@@ -105,55 +105,32 @@
         }
 
         if (asset !== "HEMP") {
-            await previewAssetTransfer();
-            return;
-        }
-
-        status = "Building preview...";
-        try {
-            previewData = await core.invoke("preview_send_hemp", {
-                destination: address,
-                amount: String(amount),
-                asset: "HEMP",
-                label: null,
-            });
-            status = "";
-            try {
-                const entry = await core.invoke("add_tx_journal_entry", {
-                    input: {
-                        status: "Previewed",
-                        operation_type: "send",
-                        summary: previewData.summary,
-                        txid: null,
-                        details: previewData,
-                    },
-                });
-                previewJournalId = entry.id;
-            } catch (journalErr) {
-                console.warn("Failed to record journal preview entry:", journalErr);
-                previewJournalId = null;
-            }
-            showConfirmModal = true;
-        } catch (err) {
-            status = `Preview failed: ${err}`;
-            previewData = null;
-        }
-    }
-
-    async function previewAssetTransfer() {
-        status = "Building asset preview...";
-        try {
-            previewData = await core.invoke("preview_transfer_asset", {
+            await buildPreview("preview_transfer_asset", "asset_transfer", {
                 destination: address,
                 amount: String(amount),
                 asset,
             });
+            return;
+        }
+
+        await buildPreview("preview_send_hemp", "send", {
+            destination: address,
+            amount: String(amount),
+            asset: "HEMP",
+            label: null,
+        });
+    }
+
+    async function buildPreview(command, operationType, params) {
+        status = "Building preview...";
+        try {
+            previewData = await core.invoke(command, params);
             status = "";
             try {
                 const entry = await core.invoke("add_tx_journal_entry", {
                     input: {
                         status: "Previewed",
-                        operation_type: "asset_transfer",
+                        operation_type: operationType,
                         summary: previewData.summary,
                         txid: null,
                         details: previewData,
@@ -227,6 +204,7 @@
             previewJournalId = null;
             amount = "";
             address = "";
+            refreshWalletStatus();
         } catch (err) {
             status = `Error: ${err}`;
             if (previewJournalId) {
@@ -245,6 +223,14 @@
     }
 
     function cancelSend() {
+        if (previewJournalId) {
+            core.invoke("update_tx_journal_entry", {
+                id: previewJournalId,
+                status: "Abandoned",
+                txid: null,
+                details: { reason: "user_cancelled" },
+            }).catch((e) => console.warn("Failed to mark journal entry as abandoned:", e));
+        }
         showConfirmModal = false;
         previewData = null;
         previewJournalId = null;

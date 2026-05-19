@@ -93,9 +93,14 @@
     } else if (choice === "stop_and_use_bundled") {
       try {
         await core.invoke("stop_node");
-        await new Promise((r) => setTimeout(r, 2000));
         await core.invoke("start_node");
         await core.invoke("take_daemon_ownership");
+        daemonRuntime.update((d) => ({ ...d, commanderOwns: true }));
+        const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 25000 });
+        daemonRuntime.update((d) => ({ ...d, readiness }));
+        if (!readiness.ready) {
+          lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
+        }
       } catch (e) {
         lastError = String(e || "Failed to switch daemon");
       }
@@ -452,15 +457,28 @@
             },
           }));
 
-          // If daemon is already running, show conflict dialog
           if (status.probe.rpc_port_open) {
             conflictRuntimeStatus = status;
+            try {
+              const identity = await core.invoke("identify_running_daemon", {
+                allowNonBundled: appSettings.allow_non_bundled_core_next,
+              });
+              daemonRuntime.update((d) => ({ ...d, runningIdentity: identity }));
+              conflictRuntimeStatus.identity = identity;
+            } catch {
+              // identity probe is best-effort
+            }
             showDaemonConflict = true;
           } else if (appSettings.auto_start_daemon_on_launch && status.bundled_core_next_ready) {
             try {
               await core.invoke("start_node");
               await core.invoke("take_daemon_ownership");
               daemonRuntime.update((d) => ({ ...d, commanderOwns: true }));
+              const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 30000 });
+              daemonRuntime.update((d) => ({ ...d, readiness }));
+              if (!readiness.ready) {
+                lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
+              }
               conflictResolved = true;
               daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
             } catch (e) {
@@ -471,7 +489,6 @@
             daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
           }
 
-          // Warn if bundled binary is not exact match
           if (appSettings.allow_non_bundled_core_next === false &&
               !status.bundled_core_next_ready &&
               status.daemon.exists) {
@@ -956,6 +973,32 @@
           <p class="welcome-text">
             A Hemp0x daemon was detected on the default ports (RPC: {conflictRuntimeStatus.probe.default_rpc_port}, P2P: {conflictRuntimeStatus.probe.default_p2p_port}).
           </p>
+
+          {#if conflictRuntimeStatus.identity}
+            {#if conflictRuntimeStatus.identity.rpc_authenticated}
+              <p class="welcome-text" style="color: {conflictRuntimeStatus.identity.is_required_core_next ? '#4caf50' : '#ff9800'};">
+                {conflictRuntimeStatus.identity.status}
+              </p>
+              {#if conflictRuntimeStatus.identity.base_version}
+                <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
+                  Version: {conflictRuntimeStatus.identity.base_version}
+                  {#if conflictRuntimeStatus.identity.subversion}
+                    / {conflictRuntimeStatus.identity.subversion}
+                  {/if}
+                  (Protocol: {conflictRuntimeStatus.identity.protocol_version})
+                </p>
+              {/if}
+            {:else}
+              <p class="welcome-caution">
+                {conflictRuntimeStatus.identity.status}
+              </p>
+            {/if}
+          {:else}
+            <p class="welcome-caution">
+              A daemon is listening on the default RPC port, but Commander could not verify its version.
+            </p>
+          {/if}
+
           {#if !conflictRuntimeStatus.bundled_core_next_ready}
             <p class="welcome-caution">
               The bundled daemon does not match the required Core Next build

@@ -2,10 +2,11 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::modules::rpc::rpc_context;
 use crate::modules::utils::resolve_bin;
 
 const REQUIRED_CORE_NEXT_COMMIT: &str = "3aab5c068";
@@ -80,6 +81,13 @@ fn parse_base_version(raw: &str) -> Option<String> {
             && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.')
         {
             return Some(trimmed.to_string());
+        }
+        if let Some((front, _)) = trimmed.split_once('-') {
+            if front.chars().filter(|c| *c == '.').count() >= 2
+                && front.chars().all(|c| c.is_ascii_digit() || c == '.')
+            {
+                return Some(front.to_string());
+            }
         }
     }
     None
@@ -186,5 +194,292 @@ pub fn get_daemon_ownership() -> DaemonOwnership {
     let owns = DAEMON_OWNERSHIP.lock().map(|g| *g).unwrap_or(false);
     DaemonOwnership {
         commander_owns: owns,
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct RunningDaemonIdentity {
+    pub rpc_authenticated: bool,
+    pub base_version: Option<String>,
+    pub subversion: Option<String>,
+    pub protocol_version: Option<u64>,
+    pub numeric_version: Option<u64>,
+    pub is_required_core_next: bool,
+    pub commit_match: bool,
+    pub commit_available: bool,
+    pub status: String,
+}
+
+fn parse_numeric_version(raw: u64) -> String {
+    let major = raw / 1000000;
+    let minor = (raw / 10000) % 100;
+    let revision = (raw / 100) % 100;
+    let build = raw % 100;
+    format!("{major}.{minor}.{revision}.{build}")
+}
+
+#[tauri::command]
+pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemonIdentity {
+    let allow_override = allow_non_bundled.unwrap_or(false);
+    let ctx = match rpc_context() {
+        Ok(c) => c,
+        Err(e) => {
+            return RunningDaemonIdentity {
+                rpc_authenticated: false,
+                base_version: None,
+                subversion: None,
+                protocol_version: None,
+                numeric_version: None,
+                is_required_core_next: false,
+                commit_match: false,
+                commit_available: false,
+                status: format!("RPC not configured: {e}"),
+            };
+        }
+    };
+
+    match ctx.call("getnetworkinfo", &[]) {
+        Ok(data) => {
+            let subver_str = data["subversion"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let numeric_version = data["version"].as_u64();
+
+            let base_version = numeric_version.map(parse_numeric_version);
+            let is_required = base_version.as_deref() == Some(REQUIRED_CORE_BASE_VERSION);
+            let commit_match = subver_str.contains(REQUIRED_CORE_NEXT_COMMIT);
+            let commit_available = parse_commit_hash(&subver_str).is_some();
+            let is_exact = is_required && numeric_version.is_some() && commit_match;
+
+            let status = if is_exact {
+                "A verified Core Next daemon is already running.".to_string()
+            } else if allow_override {
+                format!(
+                    "A daemon is running (non-bundled override active). Version: {} / Subversion: {}",
+                    base_version.as_deref().unwrap_or("?"),
+                    subver_str
+                )
+            } else if is_required && commit_available {
+                format!(
+                    "A daemon is running, but it does not match the bundled Core Next build ({}).",
+                    REQUIRED_CORE_NEXT_COMMIT
+                )
+            } else if is_required {
+                format!(
+                    "A daemon is running with the required base version, but Core RPC did not expose the commit hash needed to verify bundled build {}.",
+                    REQUIRED_CORE_NEXT_COMMIT
+                )
+            } else {
+                format!(
+                    "A daemon is running, but Commander could not verify it is Core Next {} ({}).",
+                    REQUIRED_CORE_BASE_VERSION,
+                    REQUIRED_CORE_NEXT_COMMIT,
+                )
+            };
+
+            RunningDaemonIdentity {
+                rpc_authenticated: true,
+                base_version,
+                subversion: if subver_str.is_empty() { None } else { Some(subver_str) },
+                protocol_version: data["protocolversion"].as_u64(),
+                numeric_version,
+                is_required_core_next: is_exact || (allow_override && is_required),
+                commit_match,
+                commit_available,
+                status,
+            }
+        }
+        Err(e) => RunningDaemonIdentity {
+            rpc_authenticated: false,
+            base_version: None,
+            subversion: None,
+            protocol_version: None,
+            numeric_version: None,
+            is_required_core_next: false,
+            commit_match: false,
+            commit_available: false,
+            status: format!(
+                "A daemon is listening on the default RPC port, but Commander could not verify its version: {e}"
+            ),
+        },
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct DaemonReadiness {
+    pub ready: bool,
+    pub progress: String,
+    pub elapsed_ms: u64,
+    pub retries: u32,
+    pub rpc_error: String,
+}
+
+#[tauri::command]
+pub fn wait_for_daemon_ready(timeout_ms: Option<u64>) -> DaemonReadiness {
+    let timeout_dur = Duration::from_millis(timeout_ms.unwrap_or(30_000));
+    let poll_interval = Duration::from_millis(500);
+    let start = Instant::now();
+
+    let ctx = match rpc_context() {
+        Ok(c) => c,
+        Err(e) => {
+            return DaemonReadiness {
+                ready: false,
+                progress: "RPC configuration failed".to_string(),
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                retries: 0,
+                rpc_error: e,
+            };
+        }
+    };
+
+    let mut retries: u32 = 0;
+    loop {
+        retries += 1;
+        match ctx.call("getnetworkinfo", &[]) {
+            Ok(data) => {
+                let _ = data;
+                return DaemonReadiness {
+                    ready: true,
+                    progress: "Daemon RPC is responding".to_string(),
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    retries,
+                    rpc_error: String::new(),
+                };
+            }
+            Err(e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout_dur {
+                    return DaemonReadiness {
+                        ready: false,
+                        progress: "Daemon did not become ready within timeout".to_string(),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                        retries,
+                        rpc_error: e,
+                    };
+                }
+                if poll_interval > timeout_dur.saturating_sub(elapsed) {
+                    std::thread::sleep(timeout_dur.saturating_sub(elapsed));
+                } else {
+                    std::thread::sleep(poll_interval);
+                }
+                continue;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_base_version_from_typical_output() {
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-3aab5c068";
+        let result = parse_base_version(raw);
+        assert_eq!(result, Some("4.7.0.0".to_string()));
+    }
+
+    #[test]
+    fn parses_base_version_without_v_prefix() {
+        let raw = "Hemp0x Daemon 4.7.0-unk";
+        let result = parse_base_version(raw);
+        assert_eq!(result, Some("4.7.0".to_string()));
+    }
+
+    #[test]
+    fn parses_base_version_from_alpha() {
+        let raw = "Hemp0x RPC client version v4.7.0.0-alpha";
+        assert_eq!(parse_base_version(raw), Some("4.7.0.0".to_string()));
+    }
+
+    #[test]
+    fn parse_base_version_no_version() {
+        assert_eq!(parse_base_version("Hemp0x no version here"), None);
+    }
+
+    #[test]
+    fn parse_base_version_not_enough_dots() {
+        let raw = "version 4.7 something";
+        assert_eq!(parse_base_version(raw), None);
+    }
+
+    #[test]
+    fn parse_base_version_two_digits() {
+        let raw = "v4.70.0.5 (release)";
+        assert_eq!(parse_base_version(raw), Some("4.70.0.5".to_string()));
+    }
+
+    #[test]
+    fn parses_commit_hash_from_known_hash() {
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-3aab5c068";
+        let result = parse_commit_hash(raw);
+        assert_eq!(result, Some("3aab5c068".to_string()));
+    }
+
+    #[test]
+    fn parses_commit_hash_from_arbitrary_hex() {
+        let raw = "Hemp0x Daemon v1.2.3-abc123def456 (release build)";
+        let result = parse_commit_hash(raw);
+        assert!(result.is_some());
+        assert!(result.unwrap().len() >= 8);
+    }
+
+    #[test]
+    fn parse_commit_hash_short_hex_not_returned() {
+        let raw = "Hemp0x Core v4.7.0.0-abc";
+        assert_eq!(parse_commit_hash(raw), None);
+    }
+
+    #[test]
+    fn parse_commit_hash_no_hash() {
+        let raw = "Hemp0x Core v4.7.0.0";
+        assert_eq!(parse_commit_hash(raw), None);
+    }
+
+    #[test]
+    fn parse_numeric_version_standard() {
+        assert_eq!(parse_numeric_version(4070000), "4.7.0.0");
+    }
+
+    #[test]
+    fn parse_numeric_version_nonzero_build() {
+        assert_eq!(parse_numeric_version(4070001), "4.7.0.1");
+    }
+
+    #[test]
+    fn parse_numeric_version_minimal() {
+        assert_eq!(parse_numeric_version(1), "0.0.0.1");
+    }
+
+    #[test]
+    fn probe_default_daemon_returns_expected_structure() {
+        let probe = probe_default_daemon();
+        assert_eq!(probe.default_rpc_port, 42068);
+        assert_eq!(probe.default_p2p_port, 42069);
+    }
+
+    #[test]
+    fn daemon_ownership_cycle() {
+        assert_eq!(get_daemon_ownership().commander_owns, false);
+        let taken = take_daemon_ownership();
+        assert!(taken.commander_owns);
+        assert!(get_daemon_ownership().commander_owns);
+        let released = release_daemon_ownership();
+        assert!(!released.commander_owns);
+        assert!(!get_daemon_ownership().commander_owns);
+    }
+
+    #[test]
+    fn wait_for_daemon_ready_short_timeout_is_non_blocking() {
+        let start = std::time::Instant::now();
+        let result = wait_for_daemon_ready(Some(100));
+        let elapsed = start.elapsed().as_millis();
+        assert!(
+            !result.ready || elapsed < 500,
+            "if daemon is running, response should be sub-second"
+        );
+        assert!(elapsed < 5000, "function should not block for long");
     }
 }

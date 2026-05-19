@@ -100,6 +100,8 @@ pub fn run() {
       runtime::take_daemon_ownership,
       runtime::get_daemon_ownership,
       runtime::release_daemon_ownership,
+      runtime::identify_running_daemon,
+      runtime::wait_for_daemon_ready,
       rpc::rpc_get_blockchain_info,
       rpc::rpc_get_network_info,
       rpc::rpc_get_wallet_info,

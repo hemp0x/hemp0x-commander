@@ -59,49 +59,68 @@ fn rpc_auth() -> Result<String, String> {
     )
 }
 
-fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+pub(crate) struct RpcContext {
+    url: String,
+    auth: String,
+}
+
+pub(crate) fn rpc_context() -> Result<RpcContext, String> {
     let url = rpc_url()?;
     let auth = rpc_auth()?;
+    Ok(RpcContext { url, auth })
+}
 
-    let body = serde_json::json!({
-        "jsonrpc": "1.0",
-        "id": "commander",
-        "method": method,
-        "params": params,
-    });
+impl RpcContext {
+    pub(crate) fn call(
+        &self,
+        method: &str,
+        params: &[serde_json::Value],
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({
+            "jsonrpc": "1.0",
+            "id": "commander",
+            "method": method,
+            "params": params,
+        });
 
-    let response_result = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(15))
-        .build()
-        .post(&url)
-        .set("Authorization", &auth)
-        .set("Content-Type", "application/json")
-        .send_json(&body);
+        let response_result = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(5))
+            .timeout_read(Duration::from_secs(15))
+            .build()
+            .post(&self.url)
+            .set("Authorization", &self.auth)
+            .set("Content-Type", "application/json")
+            .send_json(&body);
 
-    let raw: serde_json::Value = match response_result {
-        Ok(resp) => resp
-            .into_json()
-            .map_err(|e| format!("RPC parse error ({method}): {e}"))?,
-        Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
-            format!("RPC HTTP {status} with unreadable response body ({method}): {e}")
-        })?,
-        Err(e) => return Err(format!("RPC transport error ({method}): {e}")),
-    };
+        let raw: serde_json::Value = match response_result {
+            Ok(resp) => resp
+                .into_json()
+                .map_err(|e| format!("RPC parse error ({method}): {e}"))?,
+            Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
+                format!("RPC HTTP {status} with unreadable response body ({method}): {e}")
+            })?,
+            Err(e) => return Err(format!("RPC transport error ({method}): {e}")),
+        };
 
-    if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
-        let msg = err
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown RPC error");
-        return Err(format!("RPC error ({method}): {msg}"));
+        if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
+            let msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown RPC error");
+            return Err(format!("RPC error ({method}): {msg}"));
+        }
+
+        let result = raw
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(result)
     }
+}
 
-    let result = raw
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    Ok(result)
+fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+    let ctx = rpc_context()?;
+    ctx.call(method, params)
 }
 
 fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcResult {
@@ -134,24 +153,24 @@ pub fn rpc_get_wallet_info() -> RpcResult {
     rpc_command_with_result("getwalletinfo", &[])
 }
 
+const ALLOWED_METHODS: &[&str] = &[
+    "getassetdata",
+    "getbestblockhash",
+    "getblockchaininfo",
+    "getblockcount",
+    "getinfo",
+    "getmempoolinfo",
+    "getmininginfo",
+    "getnetworkinfo",
+    "getpeerinfo",
+    "getwalletinfo",
+    "listassets",
+    "listtransactions",
+    "listunspent",
+];
+
 #[tauri::command]
 pub fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
-    const ALLOWED_METHODS: &[&str] = &[
-        "getassetdata",
-        "getbestblockhash",
-        "getblockchaininfo",
-        "getblockcount",
-        "getinfo",
-        "getmempoolinfo",
-        "getmininginfo",
-        "getnetworkinfo",
-        "getpeerinfo",
-        "getwalletinfo",
-        "listassets",
-        "listtransactions",
-        "listunspent",
-    ];
-
     if !ALLOWED_METHODS.contains(&method.as_str()) {
         return RpcResult {
             success: false,
@@ -168,10 +187,11 @@ pub fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
 #[tauri::command]
 pub fn rpc_dashboard() -> Result<DashboardData, String> {
     let _cfg = ensure_config()?;
+    let ctx = rpc_context()?;
 
-    let info = call_rpc("getinfo", &[])?;
-    let bc = call_rpc("getblockchaininfo", &[])?;
-    let tx_raw = call_rpc(
+    let info = ctx.call("getinfo", &[])?;
+    let bc = ctx.call("getblockchaininfo", &[])?;
+    let tx_raw = ctx.call(
         "listtransactions",
         &[
             serde_json::Value::String("*".to_string()),
@@ -259,4 +279,57 @@ pub fn rpc_dashboard() -> Result<DashboardData, String> {
         wallet,
         tx: txs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowed_methods_include_informational_rpcs() {
+        assert!(ALLOWED_METHODS.contains(&"getinfo"));
+        assert!(ALLOWED_METHODS.contains(&"getblockchaininfo"));
+        assert!(ALLOWED_METHODS.contains(&"getnetworkinfo"));
+        assert!(ALLOWED_METHODS.contains(&"getwalletinfo"));
+        assert!(ALLOWED_METHODS.contains(&"listtransactions"));
+        assert!(ALLOWED_METHODS.contains(&"listunspent"));
+    }
+
+    #[test]
+    fn allowed_methods_exclude_destructive_rpcs() {
+        assert!(!ALLOWED_METHODS.contains(&"sendtoaddress"));
+        assert!(!ALLOWED_METHODS.contains(&"sendmany"));
+        assert!(!ALLOWED_METHODS.contains(&"sendasset"));
+        assert!(!ALLOWED_METHODS.contains(&"fundrawtransaction"));
+        assert!(!ALLOWED_METHODS.contains(&"signrawtransaction"));
+        assert!(!ALLOWED_METHODS.contains(&"issue"));
+        assert!(!ALLOWED_METHODS.contains(&"transfer"));
+        assert!(!ALLOWED_METHODS.contains(&"walletpassphrase"));
+        assert!(!ALLOWED_METHODS.contains(&"encryptwallet"));
+        assert!(!ALLOWED_METHODS.contains(&"dumpwallet"));
+    }
+
+    #[test]
+    fn rpc_result_success_constructor() {
+        let r = RpcResult {
+            success: true,
+            data: serde_json::Value::String("ok".into()),
+            error: String::new(),
+        };
+        assert!(r.success);
+        assert_eq!(r.data, "ok");
+        assert!(r.error.is_empty());
+    }
+
+    #[test]
+    fn rpc_result_error_constructor() {
+        let r = RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: "something went wrong".to_string(),
+        };
+        assert!(!r.success);
+        assert_eq!(r.data, serde_json::Value::Null);
+        assert_eq!(r.error, "something went wrong");
+    }
 }

@@ -995,6 +995,102 @@ pub fn shell_autocomplete(line: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub fn preview_send_hemp(
+  destination: String,
+  amount: String,
+  asset: String,
+  label: Option<String>,
+) -> Result<SendPreview, String> {
+  ensure_config()?;
+  let (parsed_amount, mut warnings) =
+    validate_send_preview_fields(&destination, &amount, &asset, label.as_deref())?;
+
+  let validate_result = run_cli(&[String::from("validateaddress"), destination.trim().to_string()])
+    .map_err(|e| format!("Node/wallet unavailable: {e}"))?;
+  let validation: serde_json::Value =
+    serde_json::from_str(&validate_result).map_err(|e| format!("Malformed validation response: {e}"))?;
+  if !validation["isvalid"].as_bool().unwrap_or(false) {
+    return Err("Invalid destination address format".to_string());
+  }
+
+  let available_balance = match run_cli(&[String::from("getbalance")]) {
+    Ok(raw) => {
+      let bal: f64 = raw.trim().parse().unwrap_or(0.0);
+      format!("{:.8}", bal)
+    }
+    Err(_) => {
+      warnings.push("Unable to retrieve available balance".to_string());
+      String::from("unknown")
+    }
+  };
+
+  let fee_estimate: Option<String> = None;
+  let fee_warning = Some(String::from(
+    "Fee estimation is not yet supported; final fee is determined by the network at broadcast time",
+  ));
+
+  if let Ok(bal) = available_balance.parse::<f64>() {
+    if parsed_amount > bal {
+      warnings.push(format!(
+        "Amount exceeds available balance ({}) - transaction may fail",
+        available_balance
+      ));
+    }
+  }
+
+  let summary = format!(
+    "Send {} HEMP to {}{}",
+    parsed_amount,
+    &destination.trim()[..std::cmp::min(16, destination.trim().len())],
+    if destination.trim().len() > 16 { "..." } else { "" }
+  );
+
+  Ok(SendPreview {
+    destination: destination.trim().to_string(),
+    amount: format!("{}", parsed_amount),
+    asset: "HEMP".to_string(),
+    available_balance,
+    fee_estimate,
+    fee_warning,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+fn validate_send_preview_fields(
+  destination: &str,
+  amount: &str,
+  asset: &str,
+  label: Option<&str>,
+) -> Result<(f64, Vec<String>), String> {
+  let mut warnings = Vec::new();
+  if destination.trim().is_empty() {
+    return Err("Destination address is required".to_string());
+  }
+
+  let parsed_amount: f64 = amount
+    .trim()
+    .parse()
+    .map_err(|_| "Amount must be a numeric value".to_string())?;
+  if !parsed_amount.is_finite() || parsed_amount <= 0.0 {
+    return Err("Amount must be greater than zero".to_string());
+  }
+
+  if asset.trim() != "HEMP" {
+    return Err("This preview command only supports regular HEMP sends".to_string());
+  }
+
+  if let Some(label) = label {
+    if label.len() > 256 {
+      warnings.push("Label is very long and may not be included in the transaction".to_string());
+    }
+  }
+
+  Ok((parsed_amount, warnings))
+}
+
+#[tauri::command]
 pub fn list_utxos() -> Result<Vec<UtxoItem>, String> {
   ensure_config()?;
   let raw = run_cli(&[
@@ -1106,7 +1202,55 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
 
 #[cfg(test)]
 mod tests {
-  use super::build_reissue_args;
+  use super::{build_reissue_args, validate_send_preview_fields};
+
+  #[test]
+  fn validates_valid_send_preview_input() {
+    assert!(validate_send_preview_fields("Haddr1", "1.5", "HEMP", None).is_ok());
+  }
+
+  #[test]
+  fn warns_on_send_preview_input_with_long_label() {
+    let label = "a".repeat(300);
+    let (_, warnings) =
+      validate_send_preview_fields("Haddr1", "0.5", "HEMP", Some(&label)).unwrap();
+    assert_eq!(warnings.len(), 1);
+  }
+
+  #[test]
+  fn rejects_empty_destination() {
+    let result = validate_send_preview_fields("", "1.0", "HEMP", None);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn rejects_zero_amount() {
+    let result = validate_send_preview_fields("Haddr1", "0", "HEMP", None);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn rejects_negative_amount() {
+    let result = validate_send_preview_fields("Haddr1", "-1", "HEMP", None);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn rejects_non_numeric_amount() {
+    let result = validate_send_preview_fields("Haddr1", "abc", "HEMP", None);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn rejects_non_hemp_asset_for_hemp_preview() {
+    let result = validate_send_preview_fields("Haddr1", "1.0", "TOKEN", None);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn accepts_valid_label() {
+    assert!(validate_send_preview_fields("Haddr1", "1.0", "HEMP", Some("My Label")).is_ok());
+  }
 
   #[test]
   fn builds_reissue_args_in_core_order_without_ipfs() {

@@ -49,6 +49,8 @@
 
     // --- CONFIRMATION MODAL ---
     let showConfirmModal = false;
+    let previewData = null;
+    let previewJournalId = null;
 
     // --- LIFECYCLE ---
     onMount(() => {
@@ -97,8 +99,46 @@
         if (!address || !amount)
             return (status = "Address and amount required.");
 
-        // Validate address before proceeding
+        if (isAdvanced || asset !== "HEMP") {
+            await validateAddressForExistingReview();
+            return;
+        }
+
+        status = "Building preview...";
+        try {
+            previewData = await core.invoke("preview_send_hemp", {
+                destination: address,
+                amount: String(amount),
+                asset: "HEMP",
+                label: null,
+            });
+            status = "";
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "send",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: previewData,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            showConfirmModal = true;
+        } catch (err) {
+            status = `Preview failed: ${err}`;
+            previewData = null;
+        }
+    }
+
+    async function validateAddressForExistingReview() {
         status = "Validating address...";
+        previewData = null;
+        previewJournalId = null;
         try {
             const result = await core.invoke("run_cli_command", {
                 command: "validateaddress",
@@ -106,17 +146,14 @@
             });
             const parsed = JSON.parse(result);
             if (!parsed.isvalid) {
-                status = "⚠️ Invalid address format!";
+                status = "Invalid address format.";
                 return;
             }
+            status = "";
+            showConfirmModal = true;
         } catch (err) {
-            status = "⚠️ Could not validate address";
-            return;
+            status = `Could not validate address: ${err}`;
         }
-
-        status = "";
-        // Show confirmation modal
-        showConfirmModal = true;
     }
 
     async function executeSend() {
@@ -124,7 +161,7 @@
         try {
             status = "Broadcasting...";
             let txid;
-            const amountStr = String(amount); // Convert to string for backend
+            const amountStr = String(amount);
             if (asset === "HEMP") {
                 txid = await core.invoke("send_hemp", {
                     to: address,
@@ -138,16 +175,43 @@
                 });
             }
             status = `Sent! ID: ${txid.substr(0, 16)}...`;
-            // Clear form on success
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewData = null;
+            previewJournalId = null;
             amount = "";
             address = "";
         } catch (err) {
             status = `Error: ${err}`;
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(err) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+            }
         }
     }
 
     function cancelSend() {
         showConfirmModal = false;
+        previewData = null;
+        previewJournalId = null;
     }
 
     async function refreshWalletStatus() {
@@ -641,8 +705,10 @@
                     : walletStatus === "LOCKED"
                       ? "LOCKED"
                       : isAdvanced
-                        ? "BROADCAST ADVANCED"
-                        : "BROADCAST TX"}
+                        ? "REVIEW ADVANCED"
+                        : asset === "HEMP"
+                          ? "PREVIEW TX"
+                          : "REVIEW TRANSFER"}
                 <span class="bracket">{`}`}</span>
             </button>
 
@@ -684,9 +750,31 @@
                         )}</span
                     >
                 </div>
-
+                {#if previewData}
+                    <div class="tx-detail">
+                        <span class="label">AVAILABLE:</span>
+                        <span class="value">{previewData.available_balance}</span>
+                    </div>
+                    {#if previewData.fee_estimate}
+                        <div class="tx-detail">
+                            <span class="label">ESTIMATED FEE:</span>
+                            <span class="value">{previewData.fee_estimate}</span>
+                        </div>
+                    {/if}
+                    {#if previewData.fee_warning}
+                        <div class="info-box">
+                            <span class="info-icon">&#9432;</span>
+                            <p>{previewData.fee_warning}</p>
+                        </div>
+                    {/if}
+                    {#each previewData.warnings as warn}
+                        <div class="warning-box">
+                            <span class="warning-title">&#9888; {warn}</span>
+                        </div>
+                    {/each}
+                {/if}
                 <div class="warning-box">
-                    <span class="warning-title">⚠️ IMPORTANT WARNING</span>
+                    <span class="warning-title">&#9888; IMPORTANT WARNING</span>
                     <p>
                         Transactions on the blockchain are <strong
                             >IRREVERSIBLE</strong
@@ -1329,6 +1417,27 @@
     }
     .warning-box strong {
         color: #ff6666;
+    }
+    .info-box {
+        background: rgba(0, 255, 200, 0.08);
+        border: 1px solid rgba(0, 255, 200, 0.25);
+        border-radius: 6px;
+        padding: 0.8rem 1rem;
+        margin-top: 0.8rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .info-icon {
+        color: #00ffc8;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+    .info-box p {
+        margin: 0;
+        color: #aaa;
+        font-size: 0.75rem;
+        line-height: 1.4;
     }
     .modal-footer {
         display: flex;

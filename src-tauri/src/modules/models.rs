@@ -138,6 +138,19 @@ pub struct RawTxInput {
   pub vout: u64,
 }
 
+#[derive(Serialize, Debug)]
+pub struct SendPreview {
+  pub destination: String,
+  pub amount: String,
+  pub asset: String,
+  pub available_balance: String,
+  pub fee_estimate: Option<String>,
+  pub fee_warning: Option<String>,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub validated: bool,
+}
+
 #[derive(Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppSettings {

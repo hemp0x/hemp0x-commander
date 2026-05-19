@@ -68,6 +68,10 @@ pub fn run() {
       commands::lock_asset_supply,
       commands::update_asset_metadata,
       commands::issue_unique_asset,
+      commands::preview_issue_asset,
+      commands::preview_issue_sub_asset,
+      commands::preview_issue_unique_asset,
+      commands::preview_reissue_asset,
 
       // Commands from modules::process
       process::start_node,

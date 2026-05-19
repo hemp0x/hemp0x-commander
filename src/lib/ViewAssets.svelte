@@ -66,6 +66,9 @@
     let confirmOpen = false;
     let confirmPayload = null;
     let confirmType = "";
+    let previewData = null;
+    let previewJournalId = null;
+    let isBroadcasting = false;
 
     // Persistent UI State
     let showHidden = false;
@@ -387,10 +390,11 @@
             amount: transferAmt,
         };
         confirmType = "TRANSFER";
+        previewData = null;
         confirmOpen = true;
     }
 
-    function initiateIssue() {
+    async function initiateIssue() {
         if (!issueName || !issueQty) {
             status = "Name and Qty required.";
             return;
@@ -400,22 +404,239 @@
             return;
         }
 
-        // Build full asset name
         let fullName = issueName.toUpperCase();
         if (issueType === "sub") {
             fullName = `${issueParent}/${issueName.toUpperCase()}`;
         }
 
-        confirmPayload = {
-            name: fullName,
-            qty: issueQty,
-            units: issueUnits,
-            reissuable: issueReissue,
-            ipfs: issueIpfs || null,
-            type: issueType,
-        };
-        confirmType = "ISSUE";
-        confirmOpen = true;
+        status = "Building preview...";
+        try {
+            if (issueType === "sub") {
+                previewData = await core.invoke("preview_issue_sub_asset", {
+                    parent: issueParent,
+                    name: issueName,
+                    qty: String(issueQty),
+                    reissuable: issueReissue,
+                });
+                confirmType = "SUB-ASSET ISSUE";
+            } else {
+                previewData = await core.invoke("preview_issue_asset", {
+                    name: fullName,
+                    qty: String(issueQty),
+                    units: Number(issueUnits),
+                    reissuable: issueReissue,
+                    ipfs: issueIpfs || "",
+                });
+                confirmType = "ROOT ASSET ISSUE";
+            }
+            status = "";
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: issueType === "sub" ? "issue_sub" : "issue_root",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: previewData,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            confirmPayload = null;
+            confirmOpen = true;
+        } catch (err) {
+            status = `Preview failed: ${err}`;
+            previewData = null;
+        }
+    }
+
+    async function initiateReissue() {
+        if (!reissueAsset || !reissueQty) {
+            status = "Asset and Qty required.";
+            return;
+        }
+        status = "Building preview...";
+        try {
+            previewData = await core.invoke("preview_reissue_asset", {
+                name: reissueAsset,
+                qty: String(reissueQty),
+                reissuable: reissueReissuable,
+            });
+            confirmType = "REISSUE";
+            status = "";
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "reissue",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: previewData,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            confirmPayload = null;
+            confirmOpen = true;
+        } catch (err) {
+            status = `Preview failed: ${err}`;
+            previewData = null;
+        }
+    }
+
+    async function initiateNft() {
+        if (!issueParent) {
+            status = "Parent asset required for NFT.";
+            return;
+        }
+        if (!nftTag.trim()) {
+            status = "NFT tag name required.";
+            return;
+        }
+        status = "Building preview...";
+        try {
+            previewData = await core.invoke("preview_issue_unique_asset", {
+                rootName: issueParent,
+                tags: [nftTag.trim()],
+                ipfsHashes: issueIpfs ? [issueIpfs] : [],
+            });
+            confirmType = "NFT MINT";
+            status = "";
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "issue_unique",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: previewData,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            confirmPayload = null;
+            confirmOpen = true;
+        } catch (err) {
+            status = `Preview failed: ${err}`;
+            previewData = null;
+        }
+    }
+
+    async function confirmAction() {
+        if (!tauriReady || isBroadcasting) return;
+        isBroadcasting = true;
+        try {
+            let txid = "";
+            if (confirmType === "TRANSFER") {
+                txid = await core.invoke("transfer_asset", {
+                    asset: confirmPayload.asset,
+                    amount: confirmPayload.amount,
+                    to: confirmPayload.to,
+                });
+                status = `Sent! TXID: ${txid.slice(0, 16)}...`;
+                transferTo = "";
+                transferAmt = "";
+            } else if (confirmType === "ROOT ASSET ISSUE" || confirmType === "SUB-ASSET ISSUE") {
+                txid = await core.invoke("issue_asset", {
+                    name: previewData.asset_name,
+                    qty: String(previewData.qty),
+                    units: Number(previewData.units || 0),
+                    reissuable: previewData.reissuable,
+                    ipfs: previewData.ipfs_hash || "",
+                });
+                status = `${previewData.operation_type === "issue_sub" ? "Sub-asset" : "Asset"} created! TXID: ${txid.slice(0, 16)}...`;
+                issueName = "";
+                issueQty = "1";
+                issueIpfs = "";
+                if (issueType === "sub") issueParent = "";
+            } else if (confirmType === "REISSUE") {
+                txid = await core
+                    .invoke("reissue_asset", {
+                        name: previewData.asset_name,
+                        qty: String(previewData.qty),
+                        toAddress: "",
+                        changeAddress: "",
+                        reissuable: previewData.reissuable,
+                        newUnits: null,
+                        newIpfs: "",
+                    })
+                    .catch((e) => {
+                        throw "Reissue failed: " + e;
+                    });
+                status = `Reissued! TXID: ${txid.slice(0, 16)}...`;
+            } else if (confirmType === "NFT MINT") {
+                const tags = previewData.tags.map(t => t.split("#")[1] || t);
+                const ipfsHashes = previewData.ipfs_hash
+                    ? previewData.ipfs_hash.split(", ").filter(h => h)
+                    : [];
+                txid = await core.invoke("issue_unique_asset", {
+                    rootName: previewData.asset_name,
+                    tags,
+                    ipfsHashes,
+                });
+                status = `NFT minted! TXID: ${txid.slice(0, 16)}...`;
+                nftTag = "";
+                issueIpfs = "";
+                issueParent = "";
+                issueType = "root";
+            }
+            confirmOpen = false;
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewJournalId = null;
+            previewData = null;
+            refreshAssets();
+        } catch (err) {
+            status = "Error: " + err;
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(err) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+            }
+            confirmOpen = false;
+        } finally {
+            isBroadcasting = false;
+        }
+    }
+
+    function cancelConfirm() {
+        if (previewJournalId) {
+            core.invoke("update_tx_journal_entry", {
+                id: previewJournalId,
+                status: "Abandoned",
+                txid: null,
+                details: { reason: "user_cancelled" },
+            }).catch((e) => console.warn("Failed to mark journal entry as abandoned:", e));
+        }
+        confirmOpen = false;
+        previewData = null;
+        previewJournalId = null;
     }
 
     function goToSubAsset(parentName) {
@@ -447,101 +668,6 @@
             govModalOpen = true;
         } catch (e) {
             console.error("Failed to load details for governance", e);
-        }
-    }
-
-    function initiateReissue() {
-        if (!reissueAsset || !reissueQty) {
-            status = "Asset and Qty required.";
-            return;
-        }
-        confirmPayload = {
-            name: reissueAsset,
-            qty: reissueQty,
-            reissuable: reissueReissuable,
-        };
-        confirmType = "REISSUE";
-        confirmOpen = true;
-    }
-
-    function initiateNft() {
-        if (!issueParent) {
-            status = "Parent asset required for NFT.";
-            return;
-        }
-        if (!nftTag.trim()) {
-            status = "NFT tag name required.";
-            return;
-        }
-        confirmPayload = {
-            rootName: issueParent,
-            tag: nftTag.trim(),
-            ipfs: issueIpfs || "",
-        };
-        confirmType = "NFT";
-        confirmOpen = true;
-    }
-
-    async function confirmAction() {
-        if (!tauriReady) return;
-        try {
-            let txid = "";
-            if (confirmType === "TRANSFER") {
-                txid = await core.invoke("transfer_asset", {
-                    asset: confirmPayload.asset,
-                    amount: confirmPayload.amount,
-                    to: confirmPayload.to,
-                });
-                status = `Sent! TXID: ${txid.slice(0, 16)}...`;
-                transferTo = "";
-                transferAmt = "";
-            } else if (confirmType === "ISSUE") {
-                txid = await core.invoke("issue_asset", {
-                    name: confirmPayload.name,
-                    qty: String(confirmPayload.qty),
-                    units: Number(confirmPayload.units),
-                    reissuable: confirmPayload.reissuable,
-                    ipfs: confirmPayload.ipfs || "",
-                });
-                status = `${confirmPayload.type === "sub" ? "Sub-asset" : "Asset"} created! TXID: ${txid.slice(0, 16)}...`;
-                issueName = "";
-                issueQty = "1";
-                issueIpfs = "";
-                if (issueType === "sub") issueParent = "";
-            } else if (confirmType === "REISSUE") {
-                txid = await core
-                    .invoke("reissue_asset", {
-                        name: confirmPayload.name,
-                        qty: String(confirmPayload.qty),
-                        toAddress: "",
-                        changeAddress: "",
-                        reissuable: confirmPayload.reissuable,
-                        newUnits: null,
-                        newIpfs: "",
-                    })
-                    .catch((e) => {
-                        throw "Reissue failed: " + e;
-                    });
-                status = `Reissued! TXID: ${txid.slice(0, 16)}...`;
-            } else if (confirmType === "NFT") {
-                txid = await core.invoke("issue_unique_asset", {
-                    rootName: confirmPayload.rootName,
-                    tags: [confirmPayload.tag],
-                    ipfsHashes: confirmPayload.ipfs
-                        ? [confirmPayload.ipfs]
-                        : [],
-                });
-                status = `NFT minted: ${confirmPayload.rootName}#${confirmPayload.tag}! TXID: ${txid.slice(0, 16)}...`;
-                nftTag = "";
-                issueIpfs = "";
-                issueParent = "";
-                issueType = "root";
-            }
-            confirmOpen = false;
-            refreshAssets();
-        } catch (err) {
-            status = "Error: " + err;
-            confirmOpen = false;
         }
     }
 </script>
@@ -836,7 +962,9 @@
         isOpen={confirmOpen}
         type={confirmType}
         payload={confirmPayload}
-        on:close={() => (confirmOpen = false)}
+        {previewData}
+        {isBroadcasting}
+        on:close={cancelConfirm}
         on:confirm={confirmAction}
     />
 </div>

@@ -429,6 +429,9 @@ pub fn transfer_asset(asset: String, amount: String, to: String) -> Result<Strin
 pub fn issue_asset(name: String, qty: String, units: u8, reissuable: bool, ipfs: String) -> Result<String, String> {
   ensure_config()?;
   validate_asset_name(&name)?;
+  if name.contains('#') {
+    return Err("Use issue_unique_asset for NFT/unique asset issuance".to_string());
+  }
   let qty_val = parse_positive_amount(&qty)?;
   if units > 8 {
     return Err("Units must be between 0 and 8".to_string());
@@ -636,25 +639,67 @@ pub fn issue_unique_asset(
   ipfs_hashes: Vec<String>,
 ) -> Result<String, String> {
   ensure_config()?;
-  
-  if tags.is_empty() {
-    return Err("At least one tag is required".to_string());
-  }
-  
+
+  let (root_name, tags, ipfs_hashes) = normalize_unique_asset_inputs(root_name, tags, ipfs_hashes)?;
+
   let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
-  
-  let ipfs_json = if !ipfs_hashes.is_empty() && ipfs_hashes.iter().any(|h| !h.is_empty()) {
+
+  let ipfs_json = if !ipfs_hashes.is_empty() {
     serde_json::to_string(&ipfs_hashes).map_err(|e| e.to_string())?
   } else {
     String::from("[]")
   };
-  
+
   run_cli(&[
     String::from("issueunique"),
     root_name,
     tags_json,
     ipfs_json,
   ])
+}
+
+fn normalize_unique_asset_inputs(
+  root_name: String,
+  tags: Vec<String>,
+  ipfs_hashes: Vec<String>,
+) -> Result<(String, Vec<String>, Vec<String>), String> {
+  let root_name = root_name.trim().to_uppercase();
+  validate_asset_name(&root_name)?;
+  if root_name.contains('#') {
+    return Err("Unique asset parent name cannot contain '#'".to_string());
+  }
+  if tags.is_empty() {
+    return Err("At least one tag is required".to_string());
+  }
+
+  let normalized_tags: Vec<String> = tags
+    .into_iter()
+    .map(|tag| tag.trim().to_string())
+    .collect();
+  if normalized_tags.iter().any(|tag| tag.is_empty()) {
+    return Err("Tag names cannot be empty".to_string());
+  }
+  if normalized_tags.iter().any(|tag| tag.chars().any(|c| c.is_whitespace())) {
+    return Err("Tag names cannot contain whitespace".to_string());
+  }
+  if normalized_tags.iter().any(|tag| tag.contains('#') || tag.contains('/')) {
+    return Err("Tag names cannot contain '#' or '/'".to_string());
+  }
+
+  let has_ipfs = ipfs_hashes.iter().any(|hash| !hash.trim().is_empty());
+  let normalized_ipfs = if has_ipfs {
+    if ipfs_hashes.len() != normalized_tags.len() {
+      return Err("IPFS hashes array must match tag count when provided".to_string());
+    }
+    ipfs_hashes
+      .into_iter()
+      .map(|hash| hash.trim().to_string())
+      .collect()
+  } else {
+    Vec::new()
+  };
+
+  Ok((root_name, normalized_tags, normalized_ipfs))
 }
 
 #[tauri::command]
@@ -1393,6 +1438,196 @@ fn map_transaction_history_item(tx: &serde_json::Value) -> TransactionHistoryIte
 }
 
 #[tauri::command]
+pub fn preview_issue_asset(
+  name: String,
+  qty: String,
+  units: u8,
+  reissuable: bool,
+  ipfs: String,
+) -> Result<IssuePreview, String> {
+  ensure_config()?;
+  let name = name.trim().to_uppercase();
+  validate_asset_name(&name)?;
+  if name.contains('/') {
+    return Err("Root asset name cannot contain '/'. Use sub-asset creation instead.".to_string());
+  }
+  if name.contains('#') {
+    return Err("Root asset name cannot contain '#'. Use unique/NFT creation instead.".to_string());
+  }
+  let qty_val = parse_positive_amount(&qty)?;
+  if units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
+  let mut warnings = Vec::new();
+  if !ipfs.trim().is_empty() && !ipfs.trim().starts_with("Qm") {
+    warnings.push("IPFS hash does not appear to be a valid CIDv0 format".to_string());
+  }
+  let is_irreversible = !reissuable;
+  if is_irreversible {
+    warnings.push("This asset will NOT be reissuable. This cannot be changed later.".to_string());
+  }
+  let fee_warning = String::from(
+    "Asset creation requires a network fee (typically 0.25 HEMP for root assets). Ensure you have sufficient HEMP.",
+  );
+  warnings.push(fee_warning);
+  let summary = format!(
+    "Issue {} {} of new root asset '{}'{}",
+    qty_val, if units == 0 { "whole units" } else { "units" },
+    name,
+    if reissuable { "" } else { " (NOT reissuable)" }
+  );
+  Ok(IssuePreview {
+    operation_type: "issue".to_string(),
+    asset_name: name,
+    qty: Some(format!("{}", qty_val)),
+    units: Some(units),
+    reissuable: Some(reissuable),
+    ipfs_hash: if ipfs.trim().is_empty() { None } else { Some(ipfs.trim().to_string()) },
+    parent_asset: None,
+    tags: None,
+    is_irreversible,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn preview_issue_sub_asset(
+  parent: String,
+  name: String,
+  qty: String,
+  reissuable: bool,
+) -> Result<IssuePreview, String> {
+  ensure_config()?;
+  let parent = parent.trim().to_uppercase();
+  let name = name.trim().to_uppercase();
+  if parent.is_empty() {
+    return Err("Parent asset name is required".to_string());
+  }
+  if name.is_empty() {
+    return Err("Sub-asset name is required".to_string());
+  }
+  if name.contains('/') || name.contains('#') {
+    return Err("Sub-asset name cannot contain '/' or '#'".to_string());
+  }
+  let full_name = format!("{}/{}", parent, name);
+  validate_asset_name(&full_name)?;
+  let qty_val = parse_positive_amount(&qty)?;
+  let mut warnings = Vec::new();
+  if !reissuable {
+    warnings.push("This sub-asset will NOT be reissuable. This cannot be changed later.".to_string());
+  }
+  let fee_warning = String::from(
+    "Sub-asset creation requires a network fee (typically 0.56 HEMP). Ensure you have sufficient HEMP.",
+  );
+  warnings.push(fee_warning);
+  let summary = format!(
+    "Issue {} {} of new sub-asset '{}' (parent: {}){}",
+    qty_val, "units", full_name, parent,
+    if reissuable { "" } else { " (NOT reissuable)" }
+  );
+  Ok(IssuePreview {
+    operation_type: "issue_sub".to_string(),
+    asset_name: full_name,
+    qty: Some(format!("{}", qty_val)),
+    units: Some(0),
+    reissuable: Some(reissuable),
+    ipfs_hash: None,
+    parent_asset: Some(parent),
+    tags: None,
+    is_irreversible: !reissuable,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn preview_issue_unique_asset(
+  root_name: String,
+  tags: Vec<String>,
+  ipfs_hashes: Vec<String>,
+) -> Result<IssuePreview, String> {
+  ensure_config()?;
+  let (root_name, tags, ipfs_hashes) = normalize_unique_asset_inputs(root_name, tags, ipfs_hashes)?;
+  let has_ipfs = !ipfs_hashes.is_empty();
+  let tag_display: Vec<String> = tags.iter().map(|t| format!("{}#{}", root_name, t)).collect();
+  let mut warnings = Vec::new();
+  warnings.push("NFT/unique assets are permanently non-reissuable with fixed supply of 1 and 0 decimal units.".to_string());
+  let fee_warning = String::from(
+    "Minting NFTs requires burning 5 HEMP per asset. Ensure you have sufficient HEMP.",
+  );
+  warnings.push(fee_warning);
+  if tags.len() > 1 {
+    warnings.push(format!("You are about to mint {} NFTs in a single transaction.", tags.len()));
+  }
+  let summary = format!(
+    "Mint {} unique asset(s) under '{}': {}",
+    tags.len(), root_name, tag_display.join(", ")
+  );
+  Ok(IssuePreview {
+    operation_type: "issue_unique".to_string(),
+    asset_name: root_name.clone(),
+    qty: None,
+    units: None,
+    reissuable: None,
+    ipfs_hash: if has_ipfs { Some(ipfs_hashes.join(", ")) } else { None },
+    parent_asset: Some(root_name),
+    tags: Some(tag_display),
+    is_irreversible: true,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn preview_reissue_asset(
+  name: String,
+  qty: String,
+  reissuable: bool,
+) -> Result<IssuePreview, String> {
+  ensure_config()?;
+  let name = name.trim().to_string();
+  validate_asset_name(&name)?;
+  let qty_val = parse_non_negative_amount(&qty)?;
+  let units = get_asset_units(&name)?;
+  let mut warnings = Vec::new();
+  if qty_val == 0.0 {
+    warnings.push("Reissue amount is zero — no new supply will be created, but metadata/IPFS or reissuable flag may be updated.".to_string());
+  }
+  if !reissuable {
+    warnings.push("Disabling reissuability is IRREVERSIBLE. The asset supply will be permanently locked.".to_string());
+  }
+  let fee_warning = String::from(
+    "Reissue requires a network fee (typically 0.25 HEMP). Ensure you have sufficient HEMP.",
+  );
+  warnings.push(fee_warning);
+  let is_irreversible = !reissuable;
+  let summary = format!(
+    "Reissue {} {} of asset '{}'{}",
+    qty_val, if units == 0 { "whole units" } else { "units" },
+    name,
+    if reissuable { "" } else { " (lock reissuability)" }
+  );
+  Ok(IssuePreview {
+    operation_type: "reissue".to_string(),
+    asset_name: name,
+    qty: Some(format!("{}", qty_val)),
+    units: Some(units),
+    reissuable: Some(reissuable),
+    ipfs_hash: None,
+    parent_asset: None,
+    tags: None,
+    is_irreversible,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+#[tauri::command]
 pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8) -> Result<String, String> {
   ensure_config()?;
   validate_asset_name(&name)?;
@@ -1418,8 +1653,9 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
 #[cfg(test)]
 mod tests {
   use super::{
-    asset_balance_from_listmyassets, build_reissue_args, validate_asset_transfer_preview_fields,
-    validate_send_preview_fields,
+    asset_balance_from_listmyassets, build_reissue_args, validate_asset_name,
+    normalize_unique_asset_inputs, parse_positive_amount, parse_non_negative_amount,
+    validate_asset_transfer_preview_fields, validate_send_preview_fields,
   };
 
   #[test]
@@ -1581,5 +1817,130 @@ mod tests {
   fn parses_asset_balance_from_direct_number_response() {
     let value = serde_json::json!(3.0);
     assert_eq!(asset_balance_from_listmyassets(&value, "TOKEN"), Some(3.0));
+  }
+
+  // --- Asset Name Validation Tests ---
+
+  #[test]
+  fn valid_asset_name_passes() {
+    assert!(validate_asset_name("MYTOKEN").is_ok());
+    assert!(validate_asset_name("A").is_ok());
+    assert!(validate_asset_name("MYTOKEN/SUB").is_ok());
+  }
+
+  #[test]
+  fn empty_asset_name_fails() {
+    assert!(validate_asset_name("").is_err());
+    assert!(validate_asset_name("   ").is_err());
+  }
+
+  #[test]
+  fn overly_long_asset_name_fails() {
+    let long_name = "A".repeat(129);
+    assert!(validate_asset_name(&long_name).is_err());
+    let max_name = "A".repeat(128);
+    assert!(validate_asset_name(&max_name).is_ok());
+  }
+
+  #[test]
+  fn asset_name_with_whitespace_fails() {
+    assert!(validate_asset_name("MY TOKEN").is_err());
+    assert!(validate_asset_name("MY\tTOKEN").is_err());
+  }
+
+  // --- Amount Parsing Tests ---
+
+  #[test]
+  fn positive_amount_parses() {
+    assert!(parse_positive_amount("1.5").is_ok());
+    assert_eq!(parse_positive_amount("100").unwrap(), 100.0);
+  }
+
+  #[test]
+  fn zero_positive_amount_fails() {
+    assert!(parse_positive_amount("0").is_err());
+    assert!(parse_positive_amount("0.0").is_err());
+  }
+
+  #[test]
+  fn negative_positive_amount_fails() {
+    assert!(parse_positive_amount("-1").is_err());
+  }
+
+  #[test]
+  fn non_numeric_positive_amount_fails() {
+    assert!(parse_positive_amount("abc").is_err());
+    assert!(parse_positive_amount("").is_err());
+  }
+
+  #[test]
+  fn non_negative_amount_parses() {
+    assert!(parse_non_negative_amount("0").is_ok());
+    assert!(parse_non_negative_amount("1.5").is_ok());
+  }
+
+  #[test]
+  fn negative_non_negative_amount_fails() {
+    assert!(parse_non_negative_amount("-1").is_err());
+    assert!(parse_non_negative_amount("-0.1").is_err());
+  }
+
+  // --- Reissue Args Tests ---
+
+  #[test]
+  fn reissue_args_reject_empty_to_address() {
+    let result = build_reissue_args("ROOT", "1", "", "Hchange", true, 8, "");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn reissue_args_reject_empty_change_address() {
+    let result = build_reissue_args("ROOT", "1", "Haddr", "", true, 8, "");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn reissue_args_reject_units_over_8() {
+    let result = build_reissue_args("ROOT", "1", "Haddr", "Hchange", true, 9, "");
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn unique_asset_inputs_normalize_clean_values() {
+    let (root, tags, ipfs) = normalize_unique_asset_inputs(
+      " root ".to_string(),
+      vec![" one ".to_string()],
+      vec![" QmTest ".to_string()],
+    )
+    .unwrap();
+    assert_eq!(root, "ROOT");
+    assert_eq!(tags, vec!["one"]);
+    assert_eq!(ipfs, vec!["QmTest"]);
+  }
+
+  #[test]
+  fn unique_asset_inputs_reject_invalid_tags() {
+    assert!(normalize_unique_asset_inputs(
+      "ROOT".to_string(),
+      vec!["bad/tag".to_string()],
+      vec![],
+    )
+    .is_err());
+    assert!(normalize_unique_asset_inputs(
+      "ROOT".to_string(),
+      vec!["bad tag".to_string()],
+      vec![],
+    )
+    .is_err());
+  }
+
+  #[test]
+  fn unique_asset_inputs_require_matching_ipfs_count() {
+    assert!(normalize_unique_asset_inputs(
+      "ROOT".to_string(),
+      vec!["one".to_string(), "two".to_string()],
+      vec!["QmOne".to_string()],
+    )
+    .is_err());
   }
 }

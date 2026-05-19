@@ -180,6 +180,22 @@ impl Default for AppSettings {
 }
 
 #[derive(Serialize)]
+pub struct IssuePreview {
+  pub operation_type: String,
+  pub asset_name: String,
+  pub qty: Option<String>,
+  pub units: Option<u8>,
+  pub reissuable: Option<bool>,
+  pub ipfs_hash: Option<String>,
+  pub parent_asset: Option<String>,
+  pub tags: Option<Vec<String>>,
+  pub is_irreversible: bool,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub validated: bool,
+}
+
+#[derive(Serialize)]
 pub struct TransactionHistoryItem {
   pub txid: String,
   pub date: String,

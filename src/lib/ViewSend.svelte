@@ -100,7 +100,7 @@
             return (status = "Address and amount required.");
 
         if (isAdvanced) {
-            await validateAddressForExistingReview();
+            await buildAdvancedPreview();
             return;
         }
 
@@ -148,10 +148,12 @@
         }
     }
 
-    async function validateAddressForExistingReview() {
+    async function buildAdvancedPreview() {
         status = "Validating address...";
         previewData = null;
         previewJournalId = null;
+
+        let isValid = false;
         try {
             const result = await core.invoke("run_cli_command", {
                 command: "validateaddress",
@@ -162,11 +164,93 @@
                 status = "Invalid address format.";
                 return;
             }
-            status = "";
-            showConfirmModal = true;
+            isValid = true;
         } catch (err) {
             status = `Could not validate address: ${err}`;
+            return;
         }
+
+        const sendAmount = parseFloat(amount);
+        if (isNaN(sendAmount) || sendAmount <= 0) {
+            status = "Amount must be greater than zero.";
+            return;
+        }
+        if (selectedUtxos.size === 0) {
+            status = "Select at least one UTXO.";
+            return;
+        }
+
+        const fee = parseFloat(estimatedFee) || 0;
+        const changeAmount = totalSelected - sendAmount - fee;
+        const warnings = [];
+
+        // Fee safety checks
+        if (fee <= 0) {
+            status = "Fee must be greater than zero.";
+            return;
+        }
+        if (fee < 0.00001) {
+            warnings.push("Fee is below typical relay minimum (0.00001 HEMP).");
+        }
+        if (sendAmount > 0 && fee > sendAmount * 0.2) {
+            warnings.push("Fee exceeds 20% of send amount.");
+        }
+
+        if (totalSelected < sendAmount + fee) {
+            status = "Selected inputs are insufficient for amount + fee.";
+            return;
+        }
+
+        if (changeAmount > 0 && changeAmount < 0.0001) {
+            warnings.push("Change amount is very small and may be treated as dust.");
+        }
+
+        warnings.push("Advanced mode manually spends only selected UTXOs. Unselected inputs are not used for fees or change.");
+
+        const summary = `Advanced send ${sendAmount} HEMP to ${address.substring(0, 16)}${address.length > 16 ? "..." : ""}`;
+
+        previewData = {
+            destination: address,
+            amount: String(sendAmount),
+            asset: "HEMP",
+            available_balance: String(totalSelected),
+            fee_estimate: String(fee),
+            fee_warning: null,
+            warnings,
+            summary,
+            validated: isValid,
+            utxo_count: selectedUtxos.size,
+            input_total: totalSelected,
+            change_amount: changeAmount > 0.00001 ? String(changeAmount) : null,
+        };
+
+        status = "";
+
+        try {
+            const entry = await core.invoke("add_tx_journal_entry", {
+                input: {
+                    status: "Previewed",
+                    operation_type: "advanced_send",
+                    summary: previewData.summary,
+                    txid: null,
+                    details: {
+                        utxo_count: previewData.utxo_count,
+                        input_total: previewData.input_total,
+                        amount: previewData.amount,
+                        destination: previewData.destination,
+                        fee: previewData.fee_estimate,
+                        change_amount: previewData.change_amount,
+                        warnings: previewData.warnings,
+                    },
+                },
+            });
+            previewJournalId = entry.id;
+        } catch (journalErr) {
+            console.warn("Failed to record journal preview entry:", journalErr);
+            previewJournalId = null;
+        }
+
+        showConfirmModal = true;
     }
 
     async function executeSend() {
@@ -540,8 +624,10 @@
 
             const sendAmount = parseFloat(amount);
             if (isNaN(sendAmount) || sendAmount <= 0) throw "Invalid amount";
+            const fee = parseFloat(estimatedFee) || 0;
+            if (fee <= 0) throw "Fee must be greater than zero";
 
-            if (totalSelected < sendAmount + estimatedFee) {
+            if (totalSelected < sendAmount + fee) {
                 throw "Insufficient inputs selected for Amount + Fee";
             }
 
@@ -549,7 +635,7 @@
             const changeAddr = await core.invoke("get_change_address");
 
             // 2. Calculate Change
-            const changeAmount = totalSelected - sendAmount - estimatedFee;
+            const changeAmount = totalSelected - sendAmount - fee;
 
             // 3. Prepare Inputs
             let inputs = [];
@@ -573,15 +659,41 @@
             });
 
             status = `Sent! ID: ${txid.substr(0, 16)}...`;
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewData = null;
+            previewJournalId = null;
             amount = "";
             address = "";
             selectedUtxos.clear();
             totalSelected = 0;
-            // potential refetch
             fetchUtxos();
+            refreshWalletStatus();
         } catch (err) {
             console.error(err);
             status = `Error: ${err}`;
+            if (previewJournalId) {
+                try {
+                    await core.invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(err) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+            }
         }
     }
 </script>
@@ -719,7 +831,7 @@
                 class="btn-send-hero"
                 class:disabled={!isNodeReady || walletStatus === "LOCKED"}
                 disabled={!isNodeReady || walletStatus === "LOCKED"}
-                on:click={isAdvanced ? handleSend : handleSend}
+                on:click={handleSend}
             >
                 <span class="bracket">{`{`}</span>
                 {!isNodeReady
@@ -727,10 +839,10 @@
                     : walletStatus === "LOCKED"
                       ? "LOCKED"
                       : isAdvanced
-                        ? "REVIEW ADVANCED"
+                        ? "PREVIEW ADVANCED TX"
                         : asset === "HEMP"
                           ? "PREVIEW TX"
-                          : "REVIEW TRANSFER"}
+                          : "PREVIEW TRANSFER"}
                 <span class="bracket">{`}`}</span>
             </button>
 
@@ -761,6 +873,10 @@
 
             <div class="modal-body">
                 <div class="tx-detail">
+                    <span class="label">TYPE:</span>
+                    <span class="value">{isAdvanced ? "ADVANCED (COIN CONTROL)" : "STANDARD"}</span>
+                </div>
+                <div class="tx-detail">
                     <span class="label">SENDING:</span>
                     <span class="value neon">{amount} {asset}</span>
                 </div>
@@ -773,14 +889,37 @@
                     >
                 </div>
                 {#if previewData}
-                    <div class="tx-detail">
-                        <span class="label">AVAILABLE:</span>
-                        <span class="value">{previewData.available_balance}</span>
-                    </div>
+                    {#if isAdvanced}
+                        <div class="tx-detail">
+                            <span class="label">INPUTS:</span>
+                            <span class="value">{previewData.utxo_count} UTXOs ({previewData.input_total} HEMP)</span>
+                        </div>
+                        {#if previewData.change_amount}
+                            <div class="tx-detail">
+                                <span class="label">CHANGE:</span>
+                                <span class="value">{previewData.change_amount} HEMP</span>
+                            </div>
+                        {:else}
+                            <div class="tx-detail">
+                                <span class="label">CHANGE:</span>
+                                <span class="value" style="color:#ff6644;">Dust / None (goes to fee)</span>
+                            </div>
+                        {/if}
+                    {:else}
+                        <div class="tx-detail">
+                            <span class="label">AVAILABLE:</span>
+                            <span class="value">{previewData.available_balance}</span>
+                        </div>
+                    {/if}
                     {#if previewData.fee_estimate}
                         <div class="tx-detail">
                             <span class="label">ESTIMATED FEE:</span>
-                            <span class="value">{previewData.fee_estimate}</span>
+                            <span class="value">{previewData.fee_estimate} HEMP</span>
+                        </div>
+                    {:else if isAdvanced}
+                        <div class="tx-detail">
+                            <span class="label">ESTIMATED FEE:</span>
+                            <span class="value">{estimatedFee} HEMP</span>
                         </div>
                     {/if}
                     {#if previewData.fee_warning}

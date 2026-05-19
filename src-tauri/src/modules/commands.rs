@@ -422,7 +422,7 @@ pub fn transfer_asset(asset: String, amount: String, to: String) -> Result<Strin
   if to.trim().is_empty() {
     return Err("Destination address is required".to_string());
   }
-  run_cli(&[String::from("transfer"), asset, amount, to])
+  normalize_cli_txid(run_cli(&[String::from("transfer"), asset, amount, to])?)
 }
 
 #[tauri::command]
@@ -439,7 +439,7 @@ pub fn issue_asset(name: String, qty: String, units: u8, reissuable: bool, ipfs:
   let flag = if reissuable { "true" } else { "false" };
   
   if !ipfs.is_empty() {
-    run_cli(&[
+    normalize_cli_txid(run_cli(&[
       String::from("issue"),
       name,
       format!("{qty_val}"),
@@ -449,9 +449,9 @@ pub fn issue_asset(name: String, qty: String, units: u8, reissuable: bool, ipfs:
       flag.to_string(),
       String::from("true"), 
       ipfs, 
-    ])
+    ])?)
   } else {
-    run_cli(&[
+    normalize_cli_txid(run_cli(&[
       String::from("issue"),
       name,
       format!("{qty_val}"),
@@ -459,7 +459,7 @@ pub fn issue_asset(name: String, qty: String, units: u8, reissuable: bool, ipfs:
       String::new(),
       units.to_string(),
       flag.to_string(),
-    ])
+    ])?)
   }
 }
 
@@ -546,7 +546,7 @@ pub fn reissue_asset(
     new_ipfs.trim(),
   )?;
 
-  run_cli(&args)
+  normalize_cli_txid(run_cli(&args)?)
 }
 
 fn validate_asset_name(name: &str) -> Result<(), String> {
@@ -587,6 +587,28 @@ fn parse_non_negative_amount(amount: &str) -> Result<f64, String> {
 
 fn validate_positive_amount(amount: &str) -> Result<(), String> {
   parse_positive_amount(amount).map(|_| ())
+}
+
+fn normalize_cli_txid(raw: String) -> Result<String, String> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Err("Command completed without returning a transaction id".to_string());
+  }
+
+  if trimmed.starts_with('[') {
+    let value: serde_json::Value =
+      serde_json::from_str(trimmed).map_err(|e| format!("Malformed transaction id response: {e}"))?;
+    if let Some(txid) = value.as_array()
+      .and_then(|items| items.first())
+      .and_then(|item| item.as_str())
+      .filter(|txid| !txid.trim().is_empty())
+    {
+      return Ok(txid.trim().to_string());
+    }
+    return Err("Command did not return a transaction id".to_string());
+  }
+
+  Ok(trimmed.to_string())
 }
 
 fn get_asset_units(name: &str) -> Result<u8, String> {
@@ -632,6 +654,24 @@ fn build_reissue_args(
   Ok(args)
 }
 
+fn build_issue_unique_args(
+  root_name: String,
+  tags: Vec<String>,
+  ipfs_hashes: Vec<String>,
+) -> Result<Vec<String>, String> {
+  let (root_name, tags, ipfs_hashes) = normalize_unique_asset_inputs(root_name, tags, ipfs_hashes)?;
+  let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
+  let mut args = vec![
+    String::from("issueunique"),
+    root_name,
+    tags_json,
+  ];
+  if !ipfs_hashes.is_empty() {
+    args.push(serde_json::to_string(&ipfs_hashes).map_err(|e| e.to_string())?);
+  }
+  Ok(args)
+}
+
 #[tauri::command]
 pub fn issue_unique_asset(
   root_name: String,
@@ -639,23 +679,8 @@ pub fn issue_unique_asset(
   ipfs_hashes: Vec<String>,
 ) -> Result<String, String> {
   ensure_config()?;
-
-  let (root_name, tags, ipfs_hashes) = normalize_unique_asset_inputs(root_name, tags, ipfs_hashes)?;
-
-  let tags_json = serde_json::to_string(&tags).map_err(|e| e.to_string())?;
-
-  let ipfs_json = if !ipfs_hashes.is_empty() {
-    serde_json::to_string(&ipfs_hashes).map_err(|e| e.to_string())?
-  } else {
-    String::from("[]")
-  };
-
-  run_cli(&[
-    String::from("issueunique"),
-    root_name,
-    tags_json,
-    ipfs_json,
-  ])
+  let args = build_issue_unique_args(root_name, tags, ipfs_hashes)?;
+  normalize_cli_txid(run_cli(&args)?)
 }
 
 fn normalize_unique_asset_inputs(
@@ -1329,7 +1354,7 @@ pub fn lock_asset_supply(name: String, current_units: u8) -> Result<String, Stri
     current_units,
     "",
   )?;
-  run_cli(&args)
+  normalize_cli_txid(run_cli(&args)?)
 }
 
 #[tauri::command]
@@ -1656,14 +1681,15 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
     current_units,
     &ipfs_hash,
   )?;
-  run_cli(&args)
+  normalize_cli_txid(run_cli(&args)?)
 }
 
 #[cfg(test)]
 mod tests {
   use super::{
-    asset_balance_from_listmyassets, build_reissue_args, validate_asset_name,
-    normalize_unique_asset_inputs, parse_positive_amount, parse_non_negative_amount,
+    asset_balance_from_listmyassets, build_issue_unique_args, build_reissue_args,
+    normalize_cli_txid, normalize_unique_asset_inputs, parse_non_negative_amount,
+    parse_positive_amount, validate_asset_name,
     validate_asset_transfer_preview_fields, validate_send_preview_fields,
   };
 
@@ -1951,5 +1977,48 @@ mod tests {
       vec!["QmOne".to_string()],
     )
     .is_err());
+  }
+
+  #[test]
+  fn issue_unique_args_omit_empty_ipfs_argument() {
+    let args = build_issue_unique_args(
+      "ROOT".to_string(),
+      vec!["one".to_string()],
+      vec![],
+    )
+    .unwrap();
+    assert_eq!(args, vec![
+      "issueunique".to_string(),
+      "ROOT".to_string(),
+      "[\"one\"]".to_string(),
+    ]);
+  }
+
+  #[test]
+  fn issue_unique_args_include_matching_ipfs_argument() {
+    let args = build_issue_unique_args(
+      "ROOT".to_string(),
+      vec!["one".to_string()],
+      vec!["QmOne".to_string()],
+    )
+    .unwrap();
+    assert_eq!(args, vec![
+      "issueunique".to_string(),
+      "ROOT".to_string(),
+      "[\"one\"]".to_string(),
+      "[\"QmOne\"]".to_string(),
+    ]);
+  }
+
+  #[test]
+  fn cli_txid_normalizer_extracts_array_txid() {
+    assert_eq!(
+      normalize_cli_txid("[\"abc123\"]".to_string()).unwrap(),
+      "abc123"
+    );
+    assert_eq!(
+      normalize_cli_txid("  abc123  ".to_string()).unwrap(),
+      "abc123"
+    );
   }
 }

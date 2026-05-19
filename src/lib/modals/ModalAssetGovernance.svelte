@@ -21,6 +21,9 @@
     let isHolding = false;
     let holdTimer;
 
+    // Journal State
+    let previewJournalId = null;
+
     // Alert State
     let alertOpen = false;
     let alertTitle = "";
@@ -109,13 +112,49 @@
     // Called by timer when 10s is up
     async function handleTransferLogic() {
         isSubmitting = true;
+        const ownerToken = (asset?.name || "") + "!";
+        const dest = newOwnerAddress;
         try {
-            const ownerToken = (asset?.name || "") + "!";
-            await invoke("transfer_asset", {
+            const details = {
+                operation_type: "owner_transfer",
+                asset_name: asset?.name || "",
+                owner_token: ownerToken,
+                destination: dest,
+                irreversible: true,
+            };
+            try {
+                const entry = await invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "owner_transfer",
+                        summary: `Transfer ownership of ${asset?.name} to ${dest.substring(0, 16)}${dest.length > 16 ? "..." : ""}`,
+                        txid: null,
+                        details,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            const txid = await invoke("transfer_asset", {
                 asset: ownerToken,
                 amount: "1.0",
-                to: newOwnerAddress,
+                to: dest,
             });
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewJournalId = null;
             triggerAlert(
                 "Ownership Transferred",
                 "You have successfully transferred ownership. You no longer control this asset.",
@@ -123,6 +162,19 @@
                 true, // Close modal after OK
             );
         } catch (e) {
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(e) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+                previewJournalId = null;
+            }
             triggerAlert("Error", e.toString(), "error");
         } finally {
             isSubmitting = false;
@@ -139,10 +191,45 @@
         isSubmitting = true;
         try {
             const units = asset?.units ?? 8;
-            await invoke("lock_asset_supply", {
-                name: asset?.name || "",
+            const assetName = asset?.name || "";
+            const details = {
+                operation_type: "lock_supply",
+                asset_name: assetName,
+                current_units: units,
+                irreversible: true,
+            };
+            try {
+                const entry = await invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "lock_supply",
+                        summary: `Permanently lock supply of ${assetName}`,
+                        txid: null,
+                        details,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            const txid = await invoke("lock_asset_supply", {
+                name: assetName,
                 currentUnits: units,
             });
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewJournalId = null;
             triggerAlert(
                 "Supply Locked",
                 "The asset supply has been permanently locked.",
@@ -150,6 +237,19 @@
                 true,
             );
         } catch (e) {
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(e) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+                previewJournalId = null;
+            }
             triggerAlert("Error", e.toString(), "error");
         } finally {
             isSubmitting = false;
@@ -160,11 +260,47 @@
         isSubmitting = true;
         try {
             const units = asset?.units ?? 8;
-            await invoke("update_asset_metadata", {
-                name: asset?.name || "",
-                ipfsHash: newIpfsHash,
+            const assetName = asset?.name || "";
+            const ipfs = newIpfsHash.trim();
+            const details = {
+                operation_type: "metadata_update",
+                asset_name: assetName,
+                ipfs_hash: ipfs,
+                current_units: units,
+            };
+            try {
+                const entry = await invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "metadata_update",
+                        summary: `Update metadata for ${assetName}${ipfs ? " with IPFS " + ipfs.substring(0, 16) + "..." : ""}`,
+                        txid: null,
+                        details,
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+            const txid = await invoke("update_asset_metadata", {
+                name: assetName,
+                ipfsHash: ipfs,
                 currentUnits: units,
             });
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Broadcasted",
+                        txid: txid,
+                        details: null,
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to update journal entry:", journalErr);
+                }
+            }
+            previewJournalId = null;
             triggerAlert(
                 "Metadata Updated",
                 "Asset metadata has been updated on the blockchain.",
@@ -172,6 +308,19 @@
                 true,
             );
         } catch (e) {
+            if (previewJournalId) {
+                try {
+                    await invoke("update_tx_journal_entry", {
+                        id: previewJournalId,
+                        status: "Failed",
+                        txid: null,
+                        details: { error: String(e) },
+                    });
+                } catch (journalErr) {
+                    console.warn("Failed to record journal failure:", journalErr);
+                }
+                previewJournalId = null;
+            }
             triggerAlert("Error", e.toString(), "error");
         } finally {
             isSubmitting = false;
@@ -278,7 +427,7 @@
                                 {:else if isHolding}
                                     HOLD TO TRANSFER ({lockHoldSeconds}s)...
                                 {:else}
-                                    HOLD 10s TO TRANSFER OWNDERSHIP
+                                    HOLD 10s TO TRANSFER OWNERSHIP
                                 {/if}
                             </button>
                         </div>

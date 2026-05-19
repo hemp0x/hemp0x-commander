@@ -12,6 +12,8 @@
     // Bindable fields
     export let name = "";
     export let qty = "1";
+    export let units = 0;
+    export let ipfs = "";
     export let reissuable = true;
 
     function close() {
@@ -53,7 +55,7 @@
 
                 <div class="form-group narrow">
                     <span class="label-text">COST</span>
-                    <div class="static-value">0.56 HEMP</div>
+                    <div class="static-value">0.05 HEMP</div>
                 </div>
 
                 <div class="form-group wide">
@@ -77,6 +79,29 @@
                         class="glass-input mono"
                         placeholder="1"
                         bind:value={qty}
+                    />
+                </div>
+
+                <div class="form-group narrow">
+                    <label for="sub-units">DECIMALS</label>
+                    <input
+                        id="sub-units"
+                        type="number"
+                        class="glass-input mono"
+                        min="0"
+                        max="8"
+                        bind:value={units}
+                    />
+                </div>
+
+                <div class="form-group full-width">
+                    <label for="sub-ipfs">IPFS HASH (Optional)</label>
+                    <input
+                        id="sub-ipfs"
+                        type="text"
+                        class="glass-input mono"
+                        placeholder="Qm..."
+                        bind:value={ipfs}
                     />
                 </div>
 

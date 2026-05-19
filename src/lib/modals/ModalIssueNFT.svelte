@@ -52,7 +52,7 @@
 
                 <div class="form-group narrow">
                     <span class="label-text">COST</span>
-                    <div class="static-value">5 HEMP</div>
+                    <div class="static-value">0.01 HEMP</div>
                 </div>
 
                 <div class="form-group narrow">

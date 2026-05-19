@@ -58,7 +58,7 @@
                 </div>
                 <div class="form-group narrow">
                     <span class="label-text">COST</span>
-                    <div class="static-value">0.25 HEMP</div>
+                    <div class="static-value">0.05 HEMP</div>
                 </div>
                 <div class="form-group full-width">
                     <label for="reissue-qty">ADD QUANTITY</label>

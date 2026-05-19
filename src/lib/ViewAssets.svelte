@@ -417,6 +417,8 @@
                     name: issueName,
                     qty: String(issueQty),
                     reissuable: issueReissue,
+                    units: Number(issueUnits),
+                    ipfs: issueIpfs || "",
                 });
                 confirmType = "SUB-ASSET ISSUE";
             } else {
@@ -888,6 +890,8 @@
         parentName={issueParent}
         bind:name={issueName}
         bind:qty={issueQty}
+        bind:units={issueUnits}
+        bind:ipfs={issueIpfs}
         bind:reissuable={issueReissue}
         on:close={() => (subModalOpen = false)}
         on:create={() => {

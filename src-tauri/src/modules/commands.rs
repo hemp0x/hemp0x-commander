@@ -1498,6 +1498,8 @@ pub fn preview_issue_sub_asset(
   name: String,
   qty: String,
   reissuable: bool,
+  units: u8,
+  ipfs: String,
 ) -> Result<IssuePreview, String> {
   ensure_config()?;
   let parent = parent.trim().to_uppercase();
@@ -1511,6 +1513,9 @@ pub fn preview_issue_sub_asset(
   if name.contains('/') || name.contains('#') {
     return Err("Sub-asset name cannot contain '/' or '#'".to_string());
   }
+  if units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
   let full_name = format!("{}/{}", parent, name);
   validate_asset_name(&full_name)?;
   let qty_val = parse_positive_amount(&qty)?;
@@ -1518,22 +1523,26 @@ pub fn preview_issue_sub_asset(
   if !reissuable {
     warnings.push("This sub-asset will NOT be reissuable. This cannot be changed later.".to_string());
   }
+  if !ipfs.trim().is_empty() && !ipfs.trim().starts_with("Qm") {
+    warnings.push("IPFS hash does not appear to be a valid CIDv0 format".to_string());
+  }
   let fee_warning = String::from(
-    "Sub-asset creation requires a network fee (typically 0.56 HEMP). Ensure you have sufficient HEMP.",
+    "Sub-asset creation requires a network fee (0.05 HEMP burn). Ensure you have sufficient HEMP.",
   );
   warnings.push(fee_warning);
   let summary = format!(
     "Issue {} {} of new sub-asset '{}' (parent: {}){}",
-    qty_val, "units", full_name, parent,
+    qty_val, if units == 0 { "whole units" } else { "units" },
+    full_name, parent,
     if reissuable { "" } else { " (NOT reissuable)" }
   );
   Ok(IssuePreview {
     operation_type: "issue_sub".to_string(),
     asset_name: full_name,
     qty: Some(format!("{}", qty_val)),
-    units: Some(0),
+    units: Some(units),
     reissuable: Some(reissuable),
-    ipfs_hash: None,
+    ipfs_hash: if ipfs.trim().is_empty() { None } else { Some(ipfs.trim().to_string()) },
     parent_asset: Some(parent),
     tags: None,
     is_irreversible: !reissuable,
@@ -1556,7 +1565,7 @@ pub fn preview_issue_unique_asset(
   let mut warnings = Vec::new();
   warnings.push("NFT/unique assets are permanently non-reissuable with fixed supply of 1 and 0 decimal units.".to_string());
   let fee_warning = String::from(
-    "Minting NFTs requires burning 5 HEMP per asset. Ensure you have sufficient HEMP.",
+    "Minting NFTs requires a 0.01 HEMP burn per asset. Ensure you have sufficient HEMP.",
   );
   warnings.push(fee_warning);
   if tags.len() > 1 {
@@ -1601,7 +1610,7 @@ pub fn preview_reissue_asset(
     warnings.push("Disabling reissuability is IRREVERSIBLE. The asset supply will be permanently locked.".to_string());
   }
   let fee_warning = String::from(
-    "Reissue requires a network fee (typically 0.25 HEMP). Ensure you have sufficient HEMP.",
+    "Reissue requires a network fee (0.05 HEMP burn). Ensure you have sufficient HEMP.",
   );
   warnings.push(fee_warning);
   let is_irreversible = !reissuable;

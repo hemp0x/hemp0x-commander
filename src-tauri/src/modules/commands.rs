@@ -1464,6 +1464,9 @@ pub fn broadcast_advanced_transaction(
 
   let complete = signed_res["complete"].as_bool().unwrap_or(false);
   if !complete {
+    if let Some(errors) = signed_res.get("errors") {
+      return Err(format!("Failed to sign transaction completely: {errors}"));
+    }
     return Err("Failed to sign transaction completely.".to_string());
   }
   let signed_hex = signed_res["hex"].as_str().ok_or("No signed hex returned")?.to_string();

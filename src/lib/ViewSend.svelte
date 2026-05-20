@@ -46,6 +46,7 @@
     let selectedUtxos = new Set(); // Set of "txid:vout" strings
     let totalSelected = 0;
     let estimatedFee = 0.01; // Increased default fee to satisfy min relay fee
+    let previewing = false; // In-flight guard for advanced preview/journal entry
     let broadcasting = false; // In-flight guard for advanced broadcast
 
     // --- CONFIRMATION MODAL ---
@@ -150,108 +151,114 @@
     }
 
     async function buildAdvancedPreview() {
+        if (previewing || broadcasting) return;
+        previewing = true;
         status = "Validating address...";
         previewData = null;
         previewJournalId = null;
 
-        let isValid = false;
         try {
-            const result = await core.invoke("run_cli_command", {
-                command: "validateaddress",
-                args: address,
-            });
-            const parsed = JSON.parse(result);
-            if (!parsed.isvalid) {
-                status = "Invalid address format.";
+            let isValid = false;
+            try {
+                const result = await core.invoke("run_cli_command", {
+                    command: "validateaddress",
+                    args: address,
+                });
+                const parsed = JSON.parse(result);
+                if (!parsed.isvalid) {
+                    status = "Invalid address format.";
+                    return;
+                }
+                isValid = true;
+            } catch (err) {
+                status = `Could not validate address: ${err}`;
                 return;
             }
-            isValid = true;
-        } catch (err) {
-            status = `Could not validate address: ${err}`;
-            return;
-        }
 
-        const sendAmount = parseFloat(amount);
-        if (isNaN(sendAmount) || sendAmount <= 0) {
-            status = "Amount must be greater than zero.";
-            return;
-        }
-        if (selectedUtxos.size === 0) {
-            status = "Select at least one UTXO.";
-            return;
-        }
+            const sendAmount = parseFloat(amount);
+            if (isNaN(sendAmount) || sendAmount <= 0) {
+                status = "Amount must be greater than zero.";
+                return;
+            }
+            if (selectedUtxos.size === 0) {
+                status = "Select at least one UTXO.";
+                return;
+            }
 
-        const fee = parseFloat(estimatedFee) || 0;
-        const changeAmount = totalSelected - sendAmount - fee;
-        const warnings = [];
+            const fee = parseFloat(estimatedFee) || 0;
+            const changeAmount = totalSelected - sendAmount - fee;
+            const warnings = [];
 
-        // Fee safety checks
-        if (fee <= 0) {
-            status = "Fee must be greater than zero.";
-            return;
-        }
-        if (fee < 0.00001) {
-            warnings.push("Fee is below typical relay minimum (0.00001 HEMP).");
-        }
-        if (sendAmount > 0 && fee > sendAmount * 0.2) {
-            warnings.push("Fee exceeds 20% of send amount.");
-        }
+            // Fee safety checks
+            if (fee <= 0) {
+                status = "Fee must be greater than zero.";
+                return;
+            }
+            if (fee < 0.00001) {
+                warnings.push("Fee is below typical relay minimum (0.00001 HEMP).");
+            }
+            if (sendAmount > 0 && fee > sendAmount * 0.2) {
+                warnings.push("Fee exceeds 20% of send amount.");
+            }
 
-        if (totalSelected < sendAmount + fee) {
-            status = "Selected inputs are insufficient for amount + fee.";
-            return;
-        }
+            if (totalSelected < sendAmount + fee) {
+                status = "Selected inputs are insufficient for amount + fee.";
+                return;
+            }
 
-        if (changeAmount > 0 && changeAmount < 0.0001) {
-            warnings.push("Change amount is very small and may be treated as dust.");
-        }
+            if (changeAmount > 0 && changeAmount < 0.0001) {
+                warnings.push("Change amount is very small and may be treated as dust.");
+            }
 
-        warnings.push("Advanced mode manually spends only selected UTXOs. Unselected inputs are not used for fees or change.");
+            warnings.push("Advanced mode manually spends only selected UTXOs. Unselected inputs are not used for fees or change.");
 
-        const summary = `Advanced send ${sendAmount} HEMP to ${address.substring(0, 16)}${address.length > 16 ? "..." : ""}`;
+            const summary = `Advanced send ${sendAmount} HEMP to ${address.substring(0, 16)}${address.length > 16 ? "..." : ""}`;
 
-        previewData = {
-            destination: address,
-            amount: String(sendAmount),
-            asset: "HEMP",
-            available_balance: String(totalSelected),
-            fee_estimate: String(fee),
-            fee_warning: null,
-            warnings,
-            summary,
-            validated: isValid,
-            utxo_count: selectedUtxos.size,
-            input_total: totalSelected,
-            change_amount: changeAmount > 0.00001 ? String(changeAmount) : null,
-        };
+            previewData = {
+                destination: address,
+                amount: String(sendAmount),
+                asset: "HEMP",
+                available_balance: String(totalSelected),
+                fee_estimate: String(fee),
+                fee_warning: null,
+                warnings,
+                summary,
+                validated: isValid,
+                utxo_count: selectedUtxos.size,
+                input_total: totalSelected,
+                change_amount: changeAmount > 0.00001 ? String(changeAmount) : null,
+            };
 
-        status = "";
+            status = "";
 
-        try {
-            const entry = await core.invoke("add_tx_journal_entry", {
-                input: {
-                    status: "Previewed",
-                    operation_type: "advanced_send",
-                    summary: previewData.summary,
-                    txid: null,
-                    details: {
-                        utxo_count: previewData.utxo_count,
-                        input_total: previewData.input_total,
-                        amount: previewData.amount,
-                        destination: previewData.destination,
-                        fee: previewData.fee_estimate,
-                        change_amount: previewData.change_amount,
-                        warnings: previewData.warnings,
+            try {
+                const entry = await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "advanced_send",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: {
+                            utxo_count: previewData.utxo_count,
+                            input_total: previewData.input_total,
+                            amount: previewData.amount,
+                            destination: previewData.destination,
+                            fee: previewData.fee_estimate,
+                            change_amount: previewData.change_amount,
+                            warnings: previewData.warnings,
+                        },
                     },
-                },
-            });
-            previewJournalId = entry.id;
-        } catch (journalErr) {
-            console.warn("Failed to record journal preview entry:", journalErr);
-            previewJournalId = null;
-        }
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
 
-        showConfirmModal = true;
+            showConfirmModal = true;
+        } finally {
+            previewing = false;
+        }
     }
 
     async function executeSend() {
@@ -870,12 +877,14 @@
         <footer class="slab-footer">
             <button
                 class="btn-send-hero"
-                class:disabled={!isNodeReady || walletStatus === "LOCKED"}
-                disabled={!isNodeReady || walletStatus === "LOCKED"}
+                class:disabled={!isNodeReady || walletStatus === "LOCKED" || previewing}
+                disabled={!isNodeReady || walletStatus === "LOCKED" || previewing}
                 on:click={handleSend}
             >
                 <span class="bracket">{`{`}</span>
-                {!isNodeReady
+                {previewing
+                    ? "BUILDING PREVIEW"
+                    : !isNodeReady
                     ? "NOT CONNECTED"
                     : walletStatus === "LOCKED"
                       ? "LOCKED"

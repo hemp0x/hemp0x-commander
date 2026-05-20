@@ -907,6 +907,19 @@ fn validate_migration_wallet_name(wallet_name: &str) -> Result<String, String> {
   if name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.contains(':') {
     return Err("Wallet name cannot contain path separators, drive separators, '.', or '..'".to_string());
   }
+  if name.chars().any(|c| c.is_control() || matches!(c, '*' | '?' | '"' | '<' | '>' | '|')) {
+    return Err("Wallet name contains characters that are not safe for wallet file names".to_string());
+  }
+  let upper = name.to_uppercase();
+  let device_name = upper.split('.').next().unwrap_or("");
+  let reserved = [
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  ];
+  if reserved.contains(&device_name) {
+    return Err("Wallet name cannot be a reserved device name".to_string());
+  }
   Ok(name)
 }
 
@@ -2840,6 +2853,16 @@ mod tests {
     assert!(validate_migration_wallet_name("bad/name").is_err());
     assert!(validate_migration_wallet_name("bad\\name").is_err());
     assert!(validate_migration_wallet_name("C:wallet").is_err());
+  }
+
+  #[test]
+  fn migration_restore_rejects_reserved_wallet_names() {
+    assert!(validate_migration_wallet_name("CON").is_err());
+    assert!(validate_migration_wallet_name("nul.dat").is_err());
+    assert!(validate_migration_wallet_name("LPT1").is_err());
+    assert!(validate_migration_wallet_name("wallet?name").is_err());
+    assert!(validate_migration_wallet_name("wallet\nname").is_err());
+    assert!(validate_migration_wallet_name("safe_wallet").is_ok());
   }
 
   #[test]

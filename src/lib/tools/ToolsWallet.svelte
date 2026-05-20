@@ -698,7 +698,7 @@
     let migrationRestorePath = "";
     let migrationRestoreName = "";
     let migrationRestorePass = "";
-    let migrationRestoreBirth = null;
+    let migrationRestoreBirth = "";
     let migrationRestoreConfirm = "";
     const RESTORE_CONFIRM = "RESTORE WALLET";
 
@@ -720,6 +720,33 @@
             return;
         }
 
+        if (migrationExportPrivate) {
+            openModal(
+                "EXPORT PRIVATE MIGRATION PACKAGE?",
+                "This encrypted file can restore your wallet if the export passphrase is known. Store the file and passphrase separately and never share either one.",
+                [
+                    {
+                        label: "EXPORT",
+                        style: "danger",
+                        onClick: () => {
+                            closeModal();
+                            performMigrationExport();
+                        },
+                    },
+                    {
+                        label: "CANCEL",
+                        style: "ghost",
+                        onClick: closeModal,
+                    },
+                ],
+            );
+            return;
+        }
+
+        await performMigrationExport();
+    }
+
+    async function performMigrationExport() {
         migrationWorking = true;
         try {
             migrationExportResult = await core.invoke("export_wallet_migration", {
@@ -821,6 +848,10 @@
             migrationError = "Export passphrase is required";
             return;
         }
+        if (migrationRestoreBirth !== "" && (!Number.isInteger(Number(migrationRestoreBirth)) || Number(migrationRestoreBirth) < 0)) {
+            migrationError = "Birth height must be a non-negative whole number";
+            return;
+        }
 
         migrationWorking = true;
         migrationError = "";
@@ -830,7 +861,7 @@
                 path: migrationRestorePath,
                 walletName: migrationRestoreName,
                 passphrase: migrationRestorePass,
-                birthHeight: migrationRestoreBirth,
+                birthHeight: migrationRestoreBirth === "" ? null : Number(migrationRestoreBirth),
             });
             showToast("Wallet restored successfully", "success");
         } catch (e) {
@@ -841,6 +872,13 @@
         migrationRestorePass = "";
         migrationRestoreConfirm = "";
     }
+
+    onDestroy(() => {
+        migrationExportPass = "";
+        migrationValidatePass = "";
+        migrationRestorePass = "";
+        migrationRestoreConfirm = "";
+    });
 </script>
 
 <div class="tool-grid wallet-view">
@@ -989,7 +1027,7 @@
                     <p style="color:{migrationValidateResult.valid ? 'var(--color-primary)' : '#ff5555'}; margin:0;">
                         {migrationValidateResult.valid ? 'VALID' : 'INVALID'}
                     </p>
-                    <p style="color:#888; margin:0.25rem 0;">Network: {migrationValidateResult.chain_network} | Matches: {migrationValidateResult.matches_current_chain}</p>
+                    <p style="color:#888; margin:0.25rem 0;">Network: {migrationValidateResult.chain?.network ?? "unknown"} | Matches: {migrationValidateResult.chain?.matches_current_chain ?? "unknown"}</p>
                     <p style="color:#888; margin:0;">Restorable: {migrationValidateResult.restorable}</p>
                     {#if migrationValidateResult.restorable_reason}
                         <p style="color:#888; margin:0;">Reason: {migrationValidateResult.restorable_reason}</p>
@@ -1015,6 +1053,7 @@
             </button>
             <input type="text" class="input-glass" placeholder="New Wallet Name" bind:value={migrationRestoreName} style="font-size:0.75rem; padding:0.5rem;"/>
             <input type="password" class="input-glass" placeholder="Export Passphrase" bind:value={migrationRestorePass} style="font-size:0.75rem; padding:0.5rem;"/>
+            <input type="number" min="0" step="1" class="input-glass" placeholder="Birth Height (optional)" bind:value={migrationRestoreBirth} style="font-size:0.75rem; padding:0.5rem;"/>
             <input type="text" class="input-glass" placeholder="Type RESTORE WALLET to confirm" bind:value={migrationRestoreConfirm} style="font-size:0.75rem; padding:0.5rem;"/>
             <button
                 class="cyber-btn danger"

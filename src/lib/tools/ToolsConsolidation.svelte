@@ -22,6 +22,7 @@
     let previewData = null;
     let previewJournalId = null;
     let showPreviewModal = false;
+    let previewing = false;
     let broadcasting = false;
     let status = "";
 
@@ -40,6 +41,25 @@
         }
         return count;
     })();
+
+    $: pruneSelectionToFiltered(filteredUtxos);
+
+    function pruneSelectionToFiltered(visibleUtxos) {
+        const visibleIds = new Set(visibleUtxos.map((u) => `${u.txid}:${u.vout}`));
+        let changed = false;
+        const next = new Set();
+        for (const id of selectedIds) {
+            if (visibleIds.has(id)) {
+                next.add(id);
+            } else {
+                changed = true;
+            }
+        }
+        if (changed) {
+            selectedIds = next;
+            calculateTotal();
+        }
+    }
 
     function calculateTotal() {
         let sum = 0;
@@ -127,6 +147,7 @@
 
     async function handlePreview() {
         if (!tauriReady) return;
+        if (previewing || broadcasting) return;
         if (selectedCount === 0) {
             status = "Select at least one UTXO to consolidate.";
             return;
@@ -137,6 +158,7 @@
         }
 
         status = "Building consolidation preview...";
+        previewing = true;
         previewData = null;
         previewJournalId = null;
 
@@ -187,6 +209,8 @@
         } catch (err) {
             status = "Preview failed: " + err;
             previewData = null;
+        } finally {
+            previewing = false;
         }
     }
 
@@ -416,10 +440,10 @@
     <div class="action-row">
         <button
             class="cyber-btn primary"
-            disabled={selectedCount === 0 || !destination.trim() || loading || broadcasting}
+            disabled={selectedCount === 0 || !destination.trim() || loading || previewing || broadcasting}
             on:click={handlePreview}
         >
-            {broadcasting ? "BROADCASTING..." : "PREVIEW CONSOLIDATION"}
+            {broadcasting ? "BROADCASTING..." : previewing ? "PREVIEWING..." : "PREVIEW CONSOLIDATION"}
         </button>
         {#if status}
             <span class="status-text mono">{status}</span>

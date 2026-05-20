@@ -1425,6 +1425,12 @@ pub fn preview_wallet_consolidation(
   if selected_utxos.is_empty() {
     return Err("None of the selected UTXOs matched the current wallet UTXO set".to_string());
   }
+  if selected_utxos.len() != selected_keys.len() {
+    return Err(format!(
+      "{} selected UTXOs are no longer available. Refresh UTXOs and preview again.",
+      selected_keys.len().saturating_sub(selected_utxos.len())
+    ));
+  }
 
   let fee = ESTIMATED_CONSOLIDATION_FEE;
 
@@ -1508,9 +1514,10 @@ pub fn broadcast_wallet_consolidation(
     return Err("Consolidation destination address is required".to_string());
   }
 
-  if !fee.is_finite() || fee <= 0.0 {
-    return Err("Fee must be greater than zero".to_string());
+  if !fee.is_finite() || (fee - ESTIMATED_CONSOLIDATION_FEE).abs() > f64::EPSILON {
+    return Err("Consolidation fee changed after preview. Refresh UTXOs and preview again.".to_string());
   }
+  let fee = ESTIMATED_CONSOLIDATION_FEE;
 
   validate_destination_address(&destination)?;
 

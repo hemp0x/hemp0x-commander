@@ -46,6 +46,7 @@
     let selectedUtxos = new Set(); // Set of "txid:vout" strings
     let totalSelected = 0;
     let estimatedFee = 0.01; // Increased default fee to satisfy min relay fee
+    let broadcasting = false; // In-flight guard for advanced broadcast
 
     // --- CONFIRMATION MODAL ---
     let showConfirmModal = false;
@@ -581,6 +582,10 @@
         isAdvanced = !isAdvanced;
         if (isAdvanced) {
             await fetchUtxos();
+        } else {
+            selectedUtxos = new Set();
+            totalSelected = 0;
+            utxos = [];
         }
     }
 
@@ -590,13 +595,45 @@
             const data = await core.invoke("list_utxos");
             // Relaxed filter: Show everything that isn't explicitly false, handle missing keys
             utxos = data.sort((a, b) => b.amount - a.amount);
+            // Prune selected UTXOs that no longer exist in refreshed set
+            pruneSelection(utxos);
         } catch (e) {
             console.error("Failed to list UTXOs", e);
             status = "Error fetching UTXOs";
         }
     }
 
+    function pruneSelection(currentUtxos) {
+        const currentIds = new Set(currentUtxos.map((u) => `${u.txid}:${u.vout}`));
+        let changed = false;
+        const next = new Set();
+        for (const id of selectedUtxos) {
+            const utxo = currentUtxos.find((u) => `${u.txid}:${u.vout}` === id);
+            if (currentIds.has(id) && utxo && !isUnsafe(utxo)) {
+                next.add(id);
+            } else {
+                changed = true;
+            }
+        }
+        if (changed) {
+            selectedUtxos = next;
+            calculateSelectedTotal();
+        }
+    }
+
+    function isUnsafe(u) {
+        if (u.spendable === false) return true;
+        if (u.safe === false) return true;
+        if (u.asset && u.asset !== "HEMP") return true;
+        if (u.asset_amount && u.asset_amount > 0 && u.asset !== "HEMP") return true;
+        return false;
+    }
+
     function toggleUtxo(u) {
+        if (isUnsafe(u)) {
+            status = "Unsafe, unspendable, or asset-bearing UTXOs cannot be used in advanced HEMP sends.";
+            return;
+        }
         const id = `${u.txid}:${u.vout}`;
         if (selectedUtxos.has(id)) {
             selectedUtxos.delete(id);
@@ -618,6 +655,8 @@
     }
 
     async function executeAdvancedSend() {
+        if (broadcasting) return;
+        broadcasting = true;
         showConfirmModal = false;
         try {
             status = "Preparing Advanced Tx...";
@@ -694,6 +733,8 @@
                     console.warn("Failed to record journal failure:", journalErr);
                 }
             }
+        } finally {
+            broadcasting = false;
         }
     }
 </script>
@@ -951,13 +992,14 @@
             </div>
 
             <div class="modal-footer">
-                <button class="btn-cancel" on:click={cancelSend}
+                <button class="btn-cancel" on:click={cancelSend} disabled={broadcasting}
                     >[ CANCEL ]</button
                 >
                 <button
                     class="btn-confirm"
+                    disabled={broadcasting}
                     on:click={isAdvanced ? executeAdvancedSend : executeSend}
-                    >[ CONFIRM SEND ]</button
+                    >{broadcasting ? "[ BROADCASTING... ]" : "[ CONFIRM SEND ]"}</button
                 >
             </div>
         </div>
@@ -986,14 +1028,17 @@
                             <th>AMOUNT</th>
                             <th>ADDRESS</th>
                             <th>CONF</th>
+                            <th>STATUS</th>
                         </tr>
                     </thead>
                     <tbody>
                         {#each utxos as u}
+                            {@const unsafe = isUnsafe(u)}
                             <tr
                                 class:selected={selectedUtxos.has(
                                     `${u.txid}:${u.vout}`,
                                 )}
+                                class:unsafe={unsafe}
                                 on:click={() => toggleUtxo(u)}
                             >
                                 <td>
@@ -1002,6 +1047,7 @@
                                         class:checked={selectedUtxos.has(
                                             `${u.txid}:${u.vout}`,
                                         )}
+                                        class:disabled={unsafe}
                                     ></div>
                                 </td>
                                 <td class="amount-cell"
@@ -1018,6 +1064,17 @@
                                     {/if}
                                 </td>
                                 <td>{u.confirmations}</td>
+                                <td class="status-cell">
+                                    {#if u.spendable === false}
+                                        <span class="badge bad">UNSPENDABLE</span>
+                                    {:else if u.safe === false}
+                                        <span class="badge warn-badge">UNSAFE</span>
+                                    {:else if u.asset && u.asset !== "HEMP"}
+                                        <span class="badge asset-badge">{u.asset}</span>
+                                    {:else}
+                                        <span class="badge ok">OK</span>
+                                    {/if}
+                                </td>
                             </tr>
                         {/each}
                     </tbody>
@@ -1499,6 +1556,42 @@
         background: var(--color-primary);
         border-color: var(--color-primary);
         box-shadow: 0 0 5px var(--color-primary);
+    }
+    .checkbox.disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+        background: rgba(255, 68, 68, 0.08);
+        border-color: rgba(255, 68, 68, 0.35);
+    }
+    .utxo-table tr.unsafe {
+        opacity: 0.6;
+    }
+    .status-cell {
+        text-align: center;
+    }
+    .badge {
+        font-size: 0.6rem;
+        padding: 0.1rem 0.4rem;
+        border-radius: 3px;
+        font-family: var(--font-mono);
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+    }
+    .badge.ok {
+        background: rgba(0, 255, 65, 0.1);
+        color: var(--color-primary);
+    }
+    .badge.bad {
+        background: rgba(255, 68, 68, 0.15);
+        color: #ff6644;
+    }
+    .badge.warn-badge {
+        background: rgba(255, 170, 0, 0.15);
+        color: #ffaa00;
+    }
+    .badge.asset-badge {
+        background: rgba(0, 180, 255, 0.15);
+        color: #00b4ff;
     }
 
     .modal-box {

@@ -604,6 +604,50 @@ fn validate_destination_address(destination: &str) -> Result<(), String> {
   Ok(())
 }
 
+fn detect_duplicate_inputs(inputs: &[RawTxInput]) -> bool {
+  let keys: std::collections::HashSet<String> = inputs
+    .iter()
+    .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
+    .collect();
+  keys.len() != inputs.len()
+}
+
+fn parse_output_sum(outputs: &HashMap<String, String>) -> Result<f64, String> {
+  let mut sum = 0.0_f64;
+  for (addr, amount_str) in outputs {
+    if addr.trim().is_empty() {
+      return Err("Output address cannot be empty".to_string());
+    }
+    let amount: f64 = amount_str
+      .trim()
+      .parse()
+      .map_err(|_| format!("Output amount '{}' is not a valid number", amount_str))?;
+    if !amount.is_finite() || amount <= 0.0 {
+      return Err(format!("Output amount '{}' must be a positive number", amount_str));
+    }
+    sum += amount;
+  }
+  Ok(sum)
+}
+
+fn is_utxo_unsafe_for_hemp(spendable: Option<bool>, safe: Option<bool>, asset: Option<&str>, asset_amount: Option<f64>) -> bool {
+  if spendable == Some(false) {
+    return true;
+  }
+  if safe == Some(false) {
+    return true;
+  }
+  if asset_amount.unwrap_or(0.0) > 0.0 {
+    return true;
+  }
+  if let Some(a) = asset {
+    if a != "HEMP" {
+      return true;
+    }
+  }
+  false
+}
+
 fn normalize_cli_txid(raw: String) -> Result<String, String> {
   let trimmed = raw.trim();
   if trimmed.is_empty() {
@@ -1306,9 +1350,106 @@ pub fn broadcast_advanced_transaction(
 ) -> Result<String, String> {
   ensure_config()?;
 
+  if inputs.is_empty() {
+    return Err("At least one input UTXO is required".to_string());
+  }
+
+  if outputs.is_empty() {
+    return Err("At least one output address and amount is required".to_string());
+  }
+
+  if detect_duplicate_inputs(&inputs) {
+    return Err("Duplicate inputs detected. Each UTXO can only be used once.".to_string());
+  }
+
+  let output_total = parse_output_sum(&outputs)?;
+  for output_address in outputs.keys() {
+    validate_destination_address(output_address)?;
+  }
+
+  let selected_keys: std::collections::HashSet<String> = inputs
+    .iter()
+    .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
+    .collect();
+
+  let raw = run_cli(&[
+    String::from("listunspent"),
+    String::from("0"),
+    String::from("9999999"),
+    String::from("[]"),
+    String::from("true"),
+  ])?;
+  let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+  let mut input_total = 0.0_f64;
+  let mut matched_count = 0usize;
+
+  for u in &all_utxos {
+    let txid = u["txid"].as_str().unwrap_or("");
+    let vout = u["vout"].as_u64().unwrap_or(0);
+    let key = format!("{}:{}", txid, vout);
+    if selected_keys.contains(&key) {
+      matched_count += 1;
+      let amount = u["amount"].as_f64().unwrap_or(0.0);
+      let spendable = u["spendable"].as_bool();
+      let safe = u["safe"].as_bool();
+      let asset = u["asset"].as_str();
+      let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64());
+
+      if is_utxo_unsafe_for_hemp(spendable, safe, asset, asset_amount) {
+        if spendable == Some(false) {
+          return Err(format!(
+            "UTXO {}:{} is not spendable by the wallet. Deselect it from advanced send.",
+            txid, vout
+          ));
+        }
+        if safe == Some(false) {
+          return Err(format!(
+            "UTXO {}:{} is marked unsafe. Deselect it from advanced send or wait for more confirmations.",
+            txid, vout
+          ));
+        }
+        if asset.is_some() && asset != Some("HEMP") {
+          return Err(format!(
+            "UTXO {}:{} carries a non-HEMP asset ({}). It cannot be included in a HEMP advanced send.",
+            txid, vout,
+            asset.unwrap_or("unknown")
+          ));
+        }
+        if asset_amount.unwrap_or(0.0) > 0.0 {
+          return Err(format!(
+            "UTXO {}:{} carries asset data and cannot be included in a HEMP advanced send.",
+            txid, vout
+          ));
+        }
+        return Err(format!(
+          "UTXO {}:{} is unsafe for HEMP advanced send.",
+          txid, vout
+        ));
+      }
+
+      input_total += amount;
+    }
+  }
+
+  if matched_count != selected_keys.len() {
+    return Err(format!(
+      "{} selected UTXOs are no longer available. Refresh UTXOs and preview again.",
+      selected_keys.len().saturating_sub(matched_count)
+    ));
+  }
+
+  let fee = input_total - output_total;
+  if fee <= 0.0 {
+    return Err(format!(
+      "Selected inputs total {} HEMP is insufficient to cover outputs total {} HEMP plus fee",
+      input_total, output_total
+    ));
+  }
+
   let inputs_json = serde_json::to_string(&inputs).map_err(|e| e.to_string())?;
   let outputs_json = serde_json::to_string(&outputs).map_err(|e| e.to_string())?;
-  
+
   let raw_hex = run_cli(&[
     String::from("createrawtransaction"),
     inputs_json,
@@ -1320,7 +1461,7 @@ pub fn broadcast_advanced_transaction(
     raw_hex,
   ])?;
   let signed_res: serde_json::Value = serde_json::from_str(&signed_res_raw).map_err(|e| e.to_string())?;
-  
+
   let complete = signed_res["complete"].as_bool().unwrap_or(false);
   if !complete {
     return Err("Failed to sign transaction completely.".to_string());
@@ -1332,7 +1473,7 @@ pub fn broadcast_advanced_transaction(
     signed_hex,
   ])?;
 
-  Ok(txid)
+  normalize_cli_txid(txid)
 }
 
 #[tauri::command]
@@ -2000,10 +2141,12 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
   use super::{
     asset_balance_from_listmyassets, build_issue_unique_args, build_reissue_args,
-    normalize_cli_txid, normalize_unique_asset_inputs, parse_non_negative_amount,
-    parse_positive_amount, validate_asset_name,
+    detect_duplicate_inputs, is_utxo_unsafe_for_hemp, normalize_cli_txid,
+    normalize_unique_asset_inputs, parse_non_negative_amount,
+    parse_output_sum, parse_positive_amount, validate_asset_name,
     validate_asset_transfer_preview_fields, validate_send_preview_fields,
   };
 
@@ -2334,5 +2477,123 @@ mod tests {
       normalize_cli_txid("  abc123  ".to_string()).unwrap(),
       "abc123"
     );
+  }
+
+  #[test]
+  fn cli_txid_normalizer_rejects_empty_output() {
+    assert!(normalize_cli_txid("".to_string()).is_err());
+    assert!(normalize_cli_txid("   ".to_string()).is_err());
+  }
+
+  #[test]
+  fn cli_txid_normalizer_rejects_empty_array() {
+    assert!(normalize_cli_txid("[]".to_string()).is_err());
+  }
+
+  // --- Duplicate Input Detection Tests ---
+
+  #[test]
+  fn detects_duplicate_inputs() {
+    use super::RawTxInput;
+    let inputs = vec![
+      RawTxInput { txid: "abc".to_string(), vout: 0 },
+      RawTxInput { txid: "abc".to_string(), vout: 0 },
+    ];
+    assert!(detect_duplicate_inputs(&inputs));
+  }
+
+  #[test]
+  fn no_duplicate_for_distinct_inputs() {
+    use super::RawTxInput;
+    let inputs = vec![
+      RawTxInput { txid: "abc".to_string(), vout: 0 },
+      RawTxInput { txid: "abc".to_string(), vout: 1 },
+      RawTxInput { txid: "def".to_string(), vout: 0 },
+    ];
+    assert!(!detect_duplicate_inputs(&inputs));
+  }
+
+  #[test]
+  fn no_duplicate_for_single_input() {
+    use super::RawTxInput;
+    let inputs = vec![
+      RawTxInput { txid: "abc".to_string(), vout: 0 },
+    ];
+    assert!(!detect_duplicate_inputs(&inputs));
+  }
+
+  // --- Output Parsing Tests ---
+
+  #[test]
+  fn parses_valid_output_map() {
+    let mut outputs = HashMap::new();
+    outputs.insert("Haddr1".to_string(), "1.5".to_string());
+    outputs.insert("Hchange".to_string(), "0.3".to_string());
+    let sum = parse_output_sum(&outputs).unwrap();
+    assert!((sum - 1.8).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn parses_single_output() {
+    let mut outputs = HashMap::new();
+    outputs.insert("Haddr1".to_string(), "100.0".to_string());
+    let sum = parse_output_sum(&outputs).unwrap();
+    assert!((sum - 100.0).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn rejects_empty_output_address() {
+    let mut outputs = HashMap::new();
+    outputs.insert("".to_string(), "1.0".to_string());
+    assert!(parse_output_sum(&outputs).is_err());
+  }
+
+  #[test]
+  fn rejects_non_numeric_output_amount() {
+    let mut outputs = HashMap::new();
+    outputs.insert("Haddr1".to_string(), "abc".to_string());
+    assert!(parse_output_sum(&outputs).is_err());
+  }
+
+  #[test]
+  fn rejects_zero_output_amount() {
+    let mut outputs = HashMap::new();
+    outputs.insert("Haddr1".to_string(), "0.0".to_string());
+    assert!(parse_output_sum(&outputs).is_err());
+  }
+
+  #[test]
+  fn rejects_negative_output_amount() {
+    let mut outputs = HashMap::new();
+    outputs.insert("Haddr1".to_string(), "-1.0".to_string());
+    assert!(parse_output_sum(&outputs).is_err());
+  }
+
+  // --- Unsafe UTXO Detection Tests ---
+
+  #[test]
+  fn safe_hemp_utxo_is_not_unsafe() {
+    assert!(!is_utxo_unsafe_for_hemp(Some(true), Some(true), Some("HEMP"), None));
+    assert!(!is_utxo_unsafe_for_hemp(None, None, None, None));
+  }
+
+  #[test]
+  fn unspendable_utxo_is_unsafe() {
+    assert!(is_utxo_unsafe_for_hemp(Some(false), Some(true), Some("HEMP"), None));
+  }
+
+  #[test]
+  fn unsafe_marked_utxo_is_unsafe() {
+    assert!(is_utxo_unsafe_for_hemp(Some(true), Some(false), Some("HEMP"), None));
+  }
+
+  #[test]
+  fn asset_utxo_is_unsafe() {
+    assert!(is_utxo_unsafe_for_hemp(Some(true), Some(true), Some("TOKEN"), None));
+  }
+
+  #[test]
+  fn asset_amount_utxo_is_unsafe() {
+    assert!(is_utxo_unsafe_for_hemp(Some(true), Some(true), None, Some(1.0)));
   }
 }

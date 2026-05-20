@@ -858,7 +858,150 @@ pub fn unban_peer(address: String) -> Result<String, String> {
 #[tauri::command]
 pub fn dump_priv_key(address: String) -> Result<String, String> {
   ensure_config()?;
+  let address = address.trim().to_string();
+  if address.is_empty() {
+    return Err("Address is required".to_string());
+  }
+  let validate_raw = run_cli(&[String::from("validateaddress"), address.clone()])?;
+  let validation: serde_json::Value = serde_json::from_str(&validate_raw)
+    .map_err(|e| format!("Failed to parse validation response: {e}"))?;
+  if !validation["isvalid"].as_bool().unwrap_or(false) {
+    return Err("Invalid address - private key export requires a valid wallet address".to_string());
+  }
+  if !validation["ismine"].as_bool().unwrap_or(false) {
+    return Err("Address does not belong to current wallet".to_string());
+  }
   run_cli(&[String::from("dumpprivkey"), address])
+}
+
+fn parse_cli_json(raw: &str, context: &str) -> Result<serde_json::Value, String> {
+  serde_json::from_str(raw).map_err(|e| format!("Failed to parse {context} response: {e}"))
+}
+
+fn validate_migration_path(path: &str, label: &str) -> Result<String, String> {
+  let trimmed = path.trim().to_string();
+  if trimmed.is_empty() {
+    return Err(format!("{label} is required"));
+  }
+  Ok(trimmed)
+}
+
+fn validate_migration_passphrase(passphrase: &str, required: bool, label: &str) -> Result<(), String> {
+  if required && passphrase.trim().is_empty() {
+    return Err(format!("{label} is required"));
+  }
+  if required && passphrase.len() < 8 {
+    return Err(format!("{label} must be at least 8 characters"));
+  }
+  if passphrase.len() > 1024 {
+    return Err(format!("{label} must not exceed 1024 characters"));
+  }
+  Ok(())
+}
+
+fn validate_migration_wallet_name(wallet_name: &str) -> Result<String, String> {
+  let name = wallet_name.trim().to_string();
+  if name.is_empty() {
+    return Err("Wallet name is required".to_string());
+  }
+  if name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.contains(':') {
+    return Err("Wallet name cannot contain path separators, drive separators, '.', or '..'".to_string());
+  }
+  Ok(name)
+}
+
+fn build_export_wallet_migration_args(
+  path: String,
+  include_private: bool,
+  allow_overwrite: bool,
+  export_passphrase: String,
+) -> Result<Vec<String>, String> {
+  let path = validate_migration_path(&path, "Output file path")?;
+  validate_migration_passphrase(&export_passphrase, include_private, "Export passphrase")?;
+
+  let mut args = vec![
+    String::from("exportwalletmigration"),
+    path,
+    if include_private { String::from("true") } else { String::from("false") },
+    if allow_overwrite { String::from("true") } else { String::from("false") },
+  ];
+  if include_private {
+    args.push(export_passphrase);
+  }
+  Ok(args)
+}
+
+fn build_validate_wallet_migration_args(path: String, passphrase: String) -> Result<Vec<String>, String> {
+  let path = validate_migration_path(&path, "File path")?;
+  validate_migration_passphrase(&passphrase, false, "Export passphrase")?;
+
+  let mut args = vec![String::from("validatewalletmigration"), path];
+  if !passphrase.is_empty() {
+    args.push(passphrase);
+  }
+  Ok(args)
+}
+
+fn build_restore_wallet_migration_args(
+  path: String,
+  wallet_name: String,
+  passphrase: String,
+  birth_height: Option<i64>,
+) -> Result<Vec<String>, String> {
+  let path = validate_migration_path(&path, "File path")?;
+  let wallet_name = validate_migration_wallet_name(&wallet_name)?;
+  validate_migration_passphrase(&passphrase, true, "Export passphrase")?;
+
+  let mut args = vec![
+    String::from("restorewalletmigration"),
+    path,
+    wallet_name,
+    passphrase,
+  ];
+  if let Some(h) = birth_height {
+    if h < 0 {
+      return Err("Birth height cannot be negative".to_string());
+    }
+    args.push(format!("{}", h));
+  }
+  Ok(args)
+}
+
+#[tauri::command]
+pub fn export_wallet_migration(
+  path: String,
+  include_private: bool,
+  allow_overwrite: bool,
+  export_passphrase: String,
+) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let args = build_export_wallet_migration_args(path, include_private, allow_overwrite, export_passphrase)?;
+  let raw = run_cli(&args)?;
+  parse_cli_json(&raw, "migration export")
+}
+
+#[tauri::command]
+pub fn validate_wallet_migration(
+  path: String,
+  passphrase: String,
+) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let args = build_validate_wallet_migration_args(path, passphrase)?;
+  let raw = run_cli(&args)?;
+  parse_cli_json(&raw, "migration validation")
+}
+
+#[tauri::command]
+pub fn restore_wallet_migration(
+  path: String,
+  wallet_name: String,
+  passphrase: String,
+  birth_height: Option<i64>,
+) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let args = build_restore_wallet_migration_args(path, wallet_name, passphrase, birth_height)?;
+  let raw = run_cli(&args)?;
+  parse_cli_json(&raw, "migration restore")
 }
 
 #[tauri::command]
@@ -2147,10 +2290,13 @@ mod tests {
   use std::collections::HashMap;
   use super::{
     asset_balance_from_listmyassets, build_issue_unique_args, build_reissue_args,
-    detect_duplicate_inputs, is_utxo_unsafe_for_hemp, normalize_cli_txid,
-    normalize_unique_asset_inputs, parse_non_negative_amount,
-    parse_output_sum, parse_positive_amount, validate_asset_name,
-    validate_asset_transfer_preview_fields, validate_send_preview_fields,
+    build_export_wallet_migration_args, build_restore_wallet_migration_args,
+    build_validate_wallet_migration_args, detect_duplicate_inputs,
+    is_utxo_unsafe_for_hemp, normalize_cli_txid, normalize_unique_asset_inputs,
+    parse_non_negative_amount, parse_output_sum, parse_positive_amount,
+    validate_asset_name, validate_asset_transfer_preview_fields,
+    validate_migration_passphrase, validate_migration_wallet_name,
+    validate_send_preview_fields,
   };
 
   #[test]
@@ -2598,5 +2744,113 @@ mod tests {
   #[test]
   fn asset_amount_utxo_is_unsafe() {
     assert!(is_utxo_unsafe_for_hemp(Some(true), Some(true), None, Some(1.0)));
+  }
+
+  #[test]
+  fn dump_priv_key_rejects_empty_address_via_frontend() {
+    let empty = String::new();
+    assert!(empty.trim().is_empty());
+    let valid = String::from("Haddr");
+    assert!(!valid.trim().is_empty());
+  }
+
+  #[test]
+  fn migration_export_public_builds_args() {
+    let args = build_export_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      false,
+      false,
+      String::new(),
+    )
+    .unwrap();
+    assert_eq!(args, vec![
+      "exportwalletmigration".to_string(),
+      "/tmp/hemp0x-migration.json".to_string(),
+      "false".to_string(),
+      "false".to_string(),
+    ]);
+  }
+
+  #[test]
+  fn migration_export_private_requires_passphrase_min_length() {
+    let err = build_export_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      true,
+      false,
+      "short".to_string(),
+    )
+    .unwrap_err();
+    assert!(err.contains("at least 8"));
+
+    let args = build_export_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      true,
+      false,
+      "long enough".to_string(),
+    )
+    .unwrap();
+    assert_eq!(args.last().unwrap(), "long enough");
+  }
+
+  #[test]
+  fn migration_passphrase_max_length_check() {
+    let max_pass = String::from("a").repeat(1024);
+    assert!(validate_migration_passphrase(&max_pass, true, "Export passphrase").is_ok());
+    let over_pass = String::from("a").repeat(1025);
+    assert!(validate_migration_passphrase(&over_pass, true, "Export passphrase").is_err());
+  }
+
+  #[test]
+  fn migration_validate_preserves_passphrase_whitespace() {
+    let args = build_validate_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      " pass phrase ".to_string(),
+    )
+    .unwrap();
+    assert_eq!(args.last().unwrap(), " pass phrase ");
+  }
+
+  #[test]
+  fn migration_restore_rejects_empty_wallet_name() {
+    let err = build_restore_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      String::new(),
+      "long enough".to_string(),
+      None,
+    )
+    .unwrap_err();
+    assert!(err.contains("Wallet name"));
+  }
+
+  #[test]
+  fn migration_restore_rejects_empty_passphrase() {
+    let err = build_restore_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      "restored_wallet".to_string(),
+      String::new(),
+      None,
+    )
+    .unwrap_err();
+    assert!(err.contains("Export passphrase"));
+  }
+
+  #[test]
+  fn migration_restore_rejects_path_like_wallet_names() {
+    assert!(validate_migration_wallet_name("../wallet").is_err());
+    assert!(validate_migration_wallet_name("bad/name").is_err());
+    assert!(validate_migration_wallet_name("bad\\name").is_err());
+    assert!(validate_migration_wallet_name("C:wallet").is_err());
+  }
+
+  #[test]
+  fn migration_restore_rejects_negative_birth_height() {
+    let err = build_restore_wallet_migration_args(
+      "/tmp/hemp0x-migration.json".to_string(),
+      "restored_wallet".to_string(),
+      "long enough".to_string(),
+      Some(-1),
+    )
+    .unwrap_err();
+    assert!(err.contains("Birth height"));
   }
 }

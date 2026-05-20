@@ -1,5 +1,5 @@
 <script>
-    import { createEventDispatcher, onMount, onDestroy } from "svelte";
+    import { createEventDispatcher, onDestroy } from "svelte";
     import { fly, fade } from "svelte/transition";
     import { core } from "@tauri-apps/api";
     import { save, open } from "@tauri-apps/plugin-dialog";
@@ -326,6 +326,42 @@
     let unlockPassword = "";
     let unlockError = "";
 
+    // Hardened export danger flow state
+    let showExportDangerModal = false;
+    let exportDangerPhrase = "";
+    let exportDangerCountdown = 0;
+    let exportDangerTimer = null;
+    const DANGER_CONFIRM = "SHOW PRIVATE KEY";
+    const DANGER_COUNTDOWN = 5;
+
+    function clearExportDangerState() {
+        exportDangerPhrase = "";
+        exportDangerCountdown = 0;
+        if (exportDangerTimer) {
+            clearInterval(exportDangerTimer);
+            exportDangerTimer = null;
+        }
+    }
+
+    function closeExportDangerModal() {
+        showExportDangerModal = false;
+        clearExportDangerState();
+        showKeyModal = false;
+        showExportEncryptModal = false;
+        exportEncPass = "";
+        exportEncPassConfirm = "";
+        processingKeys = false;
+    }
+
+    onDestroy(() => {
+        clearExportDangerState();
+        exportEncPass = "";
+        exportEncPassConfirm = "";
+        unlockPassword = "";
+        pendingImportData = null;
+        keyList = [];
+    });
+
     async function openExportModal() {
         if (!tauriReady) return;
         keyModalMode = "export";
@@ -468,15 +504,59 @@
             return;
         }
 
-        try {
-            unlockingFile = false;
-            showExportEncryptModal = true;
-        } catch (e) {
-            console.error(e);
+        exportDangerPhrase = "";
+        exportDangerCountdown = 0;
+        if (exportDangerTimer) {
+            clearInterval(exportDangerTimer);
+            exportDangerTimer = null;
+        }
+        showExportDangerModal = true;
+    }
+
+    function startDangerCountdown() {
+        if (exportDangerTimer) return;
+        exportDangerCountdown = DANGER_COUNTDOWN;
+        exportDangerTimer = setInterval(() => {
+            exportDangerCountdown -= 1;
+            if (exportDangerCountdown <= 0) {
+                exportDangerCountdown = 0;
+                clearInterval(exportDangerTimer);
+                exportDangerTimer = null;
+            }
+        }, 1000);
+    }
+
+    function resetDangerCountdown() {
+        exportDangerCountdown = 0;
+        if (exportDangerTimer) {
+            clearInterval(exportDangerTimer);
+            exportDangerTimer = null;
         }
     }
 
+    $: if (showExportDangerModal && exportDangerPhrase === DANGER_CONFIRM && !exportDangerTimer) {
+        startDangerCountdown();
+    }
+    $: if (showExportDangerModal && exportDangerPhrase !== DANGER_CONFIRM && exportDangerTimer) {
+        resetDangerCountdown();
+    }
+
+    function onDangerConfirmed() {
+        if (exportDangerCountdown > 0) return;
+        if (exportDangerPhrase !== DANGER_CONFIRM) return;
+
+        showExportDangerModal = false;
+        clearExportDangerState();
+
+        unlockingFile = false;
+        showExportEncryptModal = true;
+    }
+
     async function finalizeExport() {
+        if (!exportEncPass || exportEncPass.length < 8) {
+            showToast("Export encryption password must be at least 8 characters", "error");
+            return;
+        }
         if (exportEncPass !== exportEncPassConfirm) {
             showToast("Passwords do not match", "error");
             return;
@@ -550,6 +630,14 @@
             showToast("Export Failed: " + e, "error");
             // If error was lock related, we might want to prompt unlock again, but we just did.
         }
+        try {
+            await core.invoke("wallet_lock");
+        } catch (e) {
+            // Some unencrypted wallets do not need a lock operation.
+        }
+        exportEncPass = "";
+        exportEncPassConfirm = "";
+        unlockPassword = "";
         processingKeys = false;
     }
 
@@ -591,6 +679,167 @@
                 "warning",
             );
         }
+    }
+
+    // --- MIGRATION TOOLS ---
+    let migrationExportPath = "";
+    let migrationExportPrivate = false;
+    let migrationExportOverwrite = false;
+    let migrationExportPass = "";
+    let migrationWorking = false;
+    let migrationExportResult = null;
+    let migrationRestoreResult = null;
+    let migrationError = "";
+
+    let migrationValidatePath = "";
+    let migrationValidatePass = "";
+    let migrationValidateResult = null;
+
+    let migrationRestorePath = "";
+    let migrationRestoreName = "";
+    let migrationRestorePass = "";
+    let migrationRestoreBirth = null;
+    let migrationRestoreConfirm = "";
+    const RESTORE_CONFIRM = "RESTORE WALLET";
+
+    async function migrateExport() {
+        if (migrationWorking) return;
+        migrationError = "";
+        migrationExportResult = null;
+
+        if (!migrationExportPath) {
+            migrationError = "Select a destination file first";
+            return;
+        }
+        if (migrationExportPrivate && !migrationExportPass) {
+            migrationError = "Export passphrase is required for private export";
+            return;
+        }
+        if (migrationExportPrivate && migrationExportPass.length < 8) {
+            migrationError = "Export passphrase must be at least 8 characters";
+            return;
+        }
+
+        migrationWorking = true;
+        try {
+            migrationExportResult = await core.invoke("export_wallet_migration", {
+                path: migrationExportPath,
+                includePrivate: migrationExportPrivate,
+                allowOverwrite: migrationExportOverwrite,
+                exportPassphrase: migrationExportPass,
+            });
+            showToast("Migration package exported successfully", "success");
+        } catch (e) {
+            migrationError = String(e);
+            showToast("Export failed: " + e, "error");
+        }
+        migrationWorking = false;
+        migrationExportPass = "";
+    }
+
+    async function migrateSelectExportPath() {
+        try {
+            const selected = await save({
+                title: "Save Migration Package",
+                defaultPath: "hemp0x_migration.json",
+                filters: [{ name: "JSON Migration", extensions: ["json"] }],
+            });
+            if (selected) {
+                migrationExportPath = selected;
+            }
+        } catch (e) { /* user cancelled */ }
+    }
+
+    async function migrateSelectValidatePath() {
+        try {
+            const selected = await open({
+                title: "Select Migration Package",
+                multiple: false,
+                filters: [{ name: "Migration Files", extensions: ["json"] }],
+            });
+            if (selected) {
+                migrationValidatePath = selected;
+                migrationValidateResult = null;
+                migrationError = "";
+            }
+        } catch (e) { /* user cancelled */ }
+    }
+
+    async function migrateValidate() {
+        if (migrationWorking) return;
+        migrationError = "";
+        migrationValidateResult = null;
+
+        if (!migrationValidatePath) {
+            migrationError = "Select a file first";
+            return;
+        }
+
+        migrationWorking = true;
+        try {
+            migrationValidateResult = await core.invoke("validate_wallet_migration", {
+                path: migrationValidatePath,
+                passphrase: migrationValidatePass,
+            });
+            showToast("Validation complete", "info");
+        } catch (e) {
+            migrationError = String(e);
+            showToast("Validation failed: " + e, "error");
+        }
+        migrationWorking = false;
+        migrationValidatePass = "";
+    }
+
+    async function migrateSelectRestorePath() {
+        try {
+            const selected = await open({
+                title: "Select Migration Package to Restore",
+                multiple: false,
+                filters: [{ name: "Migration Files", extensions: ["json"] }],
+            });
+            if (selected) {
+                migrationRestorePath = selected;
+            }
+        } catch (e) { /* user cancelled */ }
+    }
+
+    async function migrateRestore() {
+        if (migrationWorking) return;
+        if (migrationRestoreConfirm !== RESTORE_CONFIRM) {
+            showToast("Type RESTORE WALLET to confirm", "warning");
+            return;
+        }
+        if (!migrationRestorePath) {
+            migrationError = "Select a migration file first";
+            return;
+        }
+        if (!migrationRestoreName) {
+            migrationError = "Enter a wallet name for the restored wallet";
+            return;
+        }
+        if (!migrationRestorePass) {
+            migrationError = "Export passphrase is required";
+            return;
+        }
+
+        migrationWorking = true;
+        migrationError = "";
+        migrationRestoreResult = null;
+        try {
+            migrationRestoreResult = await core.invoke("restore_wallet_migration", {
+                path: migrationRestorePath,
+                walletName: migrationRestoreName,
+                passphrase: migrationRestorePass,
+                birthHeight: migrationRestoreBirth,
+            });
+            showToast("Wallet restored successfully", "success");
+        } catch (e) {
+            migrationError = String(e);
+            showToast("Restore failed: " + e, "error");
+        }
+        migrationWorking = false;
+        migrationRestorePass = "";
+        migrationRestoreConfirm = "";
     }
 </script>
 
@@ -685,6 +934,113 @@
     </div>
 </div>
 
+<!-- ================= MIGRATION TOOLS ================= -->
+<div class="glass-panel panel-soft" style="margin: 1rem 0; padding: 0;">
+    <header class="card-header">
+        <span class="card-title">MIGRATION TOOLS</span>
+    </header>
+    <div style="padding: 1.5rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
+        <!-- EXPORT -->
+        <div style="display:flex; flex-direction:column; gap: 0.75rem;">
+            <h4 style="color:var(--color-primary); margin:0; font-size:0.8rem;">EXPORT MIGRATION PACKAGE</h4>
+            <p class="desc">Creates a local migration artifact for Webcom/Commander compatibility.</p>
+            <button class="cyber-btn ghost wide" on:click={migrateSelectExportPath}>
+                {migrationExportPath ? migrationExportPath.split('/').pop().split('\\').pop() : "CHOOSE DESTINATION"}
+            </button>
+            <label class="toggle" style="font-size:0.75rem; color:#888;">
+                <input type="checkbox" bind:checked={migrationExportPrivate} />
+                Include private keys (encrypted)
+            </label>
+            {#if migrationExportPrivate}
+                <input type="password" class="input-glass" placeholder="Export Passphrase (min 8 chars)" bind:value={migrationExportPass} style="font-size:0.75rem; padding:0.5rem;"/>
+            {/if}
+            <label class="toggle" style="font-size:0.75rem; color:#888;">
+                <input type="checkbox" bind:checked={migrationExportOverwrite} />
+                Allow overwrite existing file
+            </label>
+            <button class="cyber-btn" on:click={migrateExport} disabled={migrationWorking || !migrationExportPath}>
+                {migrationWorking ? "EXPORTING..." : "[ EXPORT ]"}
+            </button>
+            {#if migrationError}
+                <p style="color:#ff5555; font-size:0.7rem; margin:0;">{migrationError}</p>
+            {/if}
+            {#if migrationExportResult}
+                <div style="background:rgba(0,255,65,0.05); padding:0.5rem; border-radius:4px; font-size:0.7rem; max-height:120px; overflow-y:auto;">
+                    <p style="color:var(--color-primary); margin:0;">Exported: {migrationExportResult.filename}</p>
+                    <p style="color:#888; margin:0.25rem 0;">Chain: {migrationExportResult.chain}</p>
+                    <p style="color:#888; margin:0;">Private: {migrationExportResult.private_keys_included}</p>
+                </div>
+            {/if}
+        </div>
+
+        <!-- VALIDATE -->
+        <div style="display:flex; flex-direction:column; gap: 0.75rem;">
+            <h4 style="color:var(--color-primary); margin:0; font-size:0.8rem;">VALIDATE MIGRATION PACKAGE</h4>
+            <p class="desc">Check a migration envelope before restoring.</p>
+            <button class="cyber-btn ghost wide" on:click={migrateSelectValidatePath}>
+                {migrationValidatePath ? migrationValidatePath.split('/').pop().split('\\').pop() : "SELECT FILE"}
+            </button>
+            <input type="password" class="input-glass" placeholder="Export Passphrase (if encrypted)" bind:value={migrationValidatePass} style="font-size:0.75rem; padding:0.5rem;"/>
+            <button class="cyber-btn" on:click={migrateValidate} disabled={migrationWorking || !migrationValidatePath}>
+                {migrationWorking ? "VALIDATING..." : "[ VALIDATE ]"}
+            </button>
+            {#if migrationValidateResult}
+                <div style="background:rgba(0,255,65,0.05); padding:0.5rem; border-radius:4px; font-size:0.7rem; max-height:160px; overflow-y:auto;">
+                    <p style="color:{migrationValidateResult.valid ? 'var(--color-primary)' : '#ff5555'}; margin:0;">
+                        {migrationValidateResult.valid ? 'VALID' : 'INVALID'}
+                    </p>
+                    <p style="color:#888; margin:0.25rem 0;">Network: {migrationValidateResult.chain_network} | Matches: {migrationValidateResult.matches_current_chain}</p>
+                    <p style="color:#888; margin:0;">Restorable: {migrationValidateResult.restorable}</p>
+                    {#if migrationValidateResult.restorable_reason}
+                        <p style="color:#888; margin:0;">Reason: {migrationValidateResult.restorable_reason}</p>
+                    {/if}
+                    {#if migrationValidateResult.warnings?.length}
+                        {#each migrationValidateResult.warnings as w}
+                            <p style="color:#ffaa00; margin:0; font-size:0.65rem;">{w}</p>
+                        {/each}
+                    {/if}
+                </div>
+            {/if}
+            {#if migrationError}
+                <p style="color:#ff5555; font-size:0.7rem; margin:0;">{migrationError}</p>
+            {/if}
+        </div>
+
+        <!-- RESTORE -->
+        <div style="display:flex; flex-direction:column; gap: 0.75rem;">
+            <h4 style="color:var(--color-danger, #ff5555); margin:0; font-size:0.8rem;">RESTORE MIGRATION PACKAGE</h4>
+            <p class="desc" style="color:#ffaa00;"><strong>WARNING:</strong> Backup your current wallet first. This creates a new wallet. Restart required.</p>
+            <button class="cyber-btn ghost danger wide" on:click={migrateSelectRestorePath}>
+                {migrationRestorePath ? migrationRestorePath.split('/').pop().split('\\').pop() : "SELECT FILE"}
+            </button>
+            <input type="text" class="input-glass" placeholder="New Wallet Name" bind:value={migrationRestoreName} style="font-size:0.75rem; padding:0.5rem;"/>
+            <input type="password" class="input-glass" placeholder="Export Passphrase" bind:value={migrationRestorePass} style="font-size:0.75rem; padding:0.5rem;"/>
+            <input type="text" class="input-glass" placeholder="Type RESTORE WALLET to confirm" bind:value={migrationRestoreConfirm} style="font-size:0.75rem; padding:0.5rem;"/>
+            <button
+                class="cyber-btn danger"
+                on:click={migrateRestore}
+                disabled={migrationWorking || !migrationRestorePath || !migrationRestoreName || !migrationRestorePass || migrationRestoreConfirm !== RESTORE_CONFIRM}
+            >
+                {migrationWorking ? "RESTORING..." : "[ RESTORE WALLET ]"}
+            </button>
+            {#if migrationRestoreResult && !migrationError}
+                <div style="background:rgba(0,255,65,0.05); padding:0.5rem; border-radius:4px; font-size:0.7rem; max-height:120px; overflow-y:auto;">
+                    <p style="color:var(--color-primary); margin:0;">Wallet: {migrationRestoreResult.wallet_name}</p>
+                    <p style="color:#888; margin:0.25rem 0;">Use -wallet={migrationRestoreResult.wallet_arg}</p>
+                    {#if migrationRestoreResult.warnings?.length}
+                        {#each migrationRestoreResult.warnings as w}
+                            <p style="color:#ffaa00; margin:0; font-size:0.65rem;">{w}</p>
+                        {/each}
+                    {/if}
+                </div>
+            {/if}
+            {#if migrationError}
+                <p style="color:#ff5555; font-size:0.7rem; margin:0;">{migrationError}</p>
+            {/if}
+        </div>
+    </div>
+</div>
+
 <!-- ================= MODALS ================= -->
 
 <!-- ENCRYPTION INPUT MODAL (New Wallet) -->
@@ -746,6 +1102,77 @@
     </div>
 {/if}
 
+<!-- EXPORT DANGER CONFIRMATION MODAL -->
+{#if showExportDangerModal}
+    <div
+        class="modal-overlay"
+        role="button"
+        tabindex="0"
+        on:click|self={closeExportDangerModal}
+        on:keydown={(e) => e.key === "Escape" && closeExportDangerModal()}
+    >
+        <div class="modal-staged modal-frame" style="max-width:480px;">
+            <h3 style="color:#ff5555; margin-top:0; text-align:center;">
+                HIGH SECURITY WARNING
+            </h3>
+            <div style="background:rgba(255,0,0,0.08); padding:1rem; border-radius:4px; margin-bottom:1rem;">
+                <p style="color:#ff5555; margin:0 0 0.5rem; font-size:0.8rem; text-align:center;">
+                    <strong>PRIVATE KEYS GRANT FULL CONTROL OVER YOUR FUNDS</strong>
+                </p>
+                <p style="color:#ffaa00; margin:0.25rem 0; font-size:0.72rem;">
+                    NEVER share private keys with anyone
+                </p>
+                <p style="color:#ffaa00; margin:0.25rem 0; font-size:0.72rem;">
+                    Keys will NOT be auto-copied to clipboard
+                </p>
+                <p style="color:#ffaa00; margin:0.25rem 0; font-size:0.72rem;">
+                    Keys will NOT be stored on disk without your explicit file save
+                </p>
+            </div>
+
+            <div class="input-group" style="margin-bottom:1rem;">
+                <label for="export-danger-phrase" style="font-size:0.75rem; color:#ff5555;">
+                    Type <strong>SHOW PRIVATE KEY</strong> to confirm you understand these risks:
+                </label>
+                <input
+                    id="export-danger-phrase"
+                    type="text"
+                    class="input-glass"
+                    style="border-color:rgba(255,85,85,0.5);"
+                    bind:value={exportDangerPhrase}
+                    placeholder="SHOW PRIVATE KEY"
+                />
+            </div>
+
+            {#if exportDangerPhrase === DANGER_CONFIRM}
+                <div style="text-align:center; margin-bottom:1rem;">
+                    <p style="color:#ffaa00; margin:0; font-size:0.8rem;">
+                        Please wait {exportDangerCountdown} second(s) before proceeding...
+                    </p>
+                </div>
+            {/if}
+
+            <div class="modal-actions">
+                <button
+                    class="cyber-btn danger"
+                    on:click={onDangerConfirmed}
+                    disabled={exportDangerCountdown > 0 || exportDangerPhrase !== DANGER_CONFIRM}
+                    style="min-height:50px; flex:1;"
+                >
+                    {exportDangerCountdown > 0 ? `WAIT (${exportDangerCountdown}s)` : 'EXPORT PRIVATE KEYS'}
+                </button>
+                <button
+                    class="cyber-btn ghost"
+                    on:click={closeExportDangerModal}
+                    style="min-height:50px; flex:1;"
+                >
+                    CANCEL
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <!-- EXPORT ENCRYPTION PASSWORD MODAL -->
 {#if showExportEncryptModal}
     <div class="modal-overlay">
@@ -761,27 +1188,25 @@
             </p>
 
             <div class="input-group" style="margin-bottom:1rem;">
-                <label for="exp-pass">PASSWORD (Optional)</label>
+                <label for="exp-pass">ENCRYPTION PASSWORD</label>
                 <input
                     id="exp-pass"
                     type="password"
                     class="input-glass"
                     bind:value={exportEncPass}
-                    placeholder="Leave empty for unencrypted"
+                    placeholder="Required, minimum 8 characters"
                 />
             </div>
-            {#if exportEncPass}
-                <div class="input-group" style="margin-bottom:1rem;">
-                    <label for="exp-pass-confirm">CONFIRM</label>
-                    <input
-                        id="exp-pass-confirm"
-                        type="password"
-                        class="input-glass"
-                        bind:value={exportEncPassConfirm}
-                        placeholder="Confirm Password"
-                    />
-                </div>
-            {/if}
+            <div class="input-group" style="margin-bottom:1rem;">
+                <label for="exp-pass-confirm">CONFIRM</label>
+                <input
+                    id="exp-pass-confirm"
+                    type="password"
+                    class="input-glass"
+                    bind:value={exportEncPassConfirm}
+                    placeholder="Confirm encryption password"
+                />
+            </div>
 
             <div class="modal-actions">
                 <button class="cyber-btn" on:click={finalizeExport}

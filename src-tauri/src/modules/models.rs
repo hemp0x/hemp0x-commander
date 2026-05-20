@@ -78,6 +78,15 @@ pub struct UtxoItem {
   pub solvable: Option<bool>,
   pub desc: Option<String>,
   pub safe: Option<bool>,
+  #[serde(default)]
+  pub label: Option<String>,
+  #[serde(default)]
+  #[serde(rename = "scriptPubKey")]
+  pub script_pub_key: Option<String>,
+  #[serde(default)]
+  pub asset: Option<String>,
+  #[serde(default)]
+  pub asset_amount: Option<f64>,
 }
 
 #[derive(Serialize, serde::Deserialize, Clone)]
@@ -132,7 +141,7 @@ pub struct DataFolderInfo {
   pub folder_exists: bool,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct RawTxInput {
   pub txid: String,
   pub vout: u64,
@@ -193,6 +202,31 @@ pub struct IssuePreview {
   pub warnings: Vec<String>,
   pub summary: String,
   pub validated: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ConsolidationPreview {
+  pub utxo_count: usize,
+  pub input_total: String,
+  pub fee_estimate: String,
+  pub output_amount: String,
+  pub destination: String,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub utxos: Vec<ConsolidationUtxoEntry>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ConsolidationUtxoEntry {
+  pub txid: String,
+  pub vout: u64,
+  pub amount: String,
+  pub address: Option<String>,
+  pub confirmations: u64,
+  pub spendable: bool,
+  pub safe: bool,
+  pub asset: Option<String>,
+  pub asset_amount: Option<f64>,
 }
 
 #[derive(Serialize)]

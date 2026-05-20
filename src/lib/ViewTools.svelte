@@ -12,6 +12,7 @@
   import ToolsNetwork from "./tools/ToolsNetwork.svelte";
   import ToolsJournal from "./tools/ToolsJournal.svelte";
   import ToolsHistory from "./tools/ToolsHistory.svelte";
+  import ToolsConsolidation from "./tools/ToolsConsolidation.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
 
   let activeSubTab = "CONSOLE";
@@ -446,7 +447,7 @@
     <!-- HEADER / TABS -->
     <header class="panel-header no-border">
       <div class="sub-tabs">
-        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "LOGS"] as tab}
+        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "CONSOLIDATE", "LOGS"] as tab}
           <button
             class="sub-tab-btn"
             class:active={activeSubTab === tab}
@@ -767,6 +768,10 @@
             />
           {:else if activeSubTab === "JOURNAL"}
             <ToolsJournal
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+            />
+          {:else if activeSubTab === "CONSOLIDATE"}
+            <ToolsConsolidation
               on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
             />
           {/if}

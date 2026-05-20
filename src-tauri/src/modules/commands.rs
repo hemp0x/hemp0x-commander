@@ -589,6 +589,21 @@ fn validate_positive_amount(amount: &str) -> Result<(), String> {
   parse_positive_amount(amount).map(|_| ())
 }
 
+fn validate_destination_address(destination: &str) -> Result<(), String> {
+  let destination = destination.trim();
+  if destination.is_empty() {
+    return Err("Destination address is required".to_string());
+  }
+  let validate_result = run_cli(&[String::from("validateaddress"), destination.to_string()])
+    .map_err(|e| format!("Node/wallet unavailable: {e}"))?;
+  let validation: serde_json::Value =
+    serde_json::from_str(&validate_result).map_err(|e| format!("Malformed validation response: {e}"))?;
+  if !validation["isvalid"].as_bool().unwrap_or(false) {
+    return Err("Invalid destination address format".to_string());
+  }
+  Ok(())
+}
+
 fn normalize_cli_txid(raw: String) -> Result<String, String> {
   let trimmed = raw.trim();
   if trimmed.is_empty() {
@@ -1319,6 +1334,298 @@ pub fn broadcast_advanced_transaction(
 
   Ok(txid)
 }
+
+#[tauri::command]
+pub fn preview_wallet_consolidation(
+  utxos: Vec<RawTxInput>,
+  destination: String,
+) -> Result<ConsolidationPreview, String> {
+  ensure_config()?;
+
+  if utxos.is_empty() {
+    return Err("At least one UTXO must be selected for consolidation".to_string());
+  }
+
+  let destination = destination.trim().to_string();
+  if destination.is_empty() {
+    return Err("Consolidation destination address is required".to_string());
+  }
+
+  validate_destination_address(&destination)?;
+
+  let raw = run_cli(&[
+    String::from("listunspent"),
+    String::from("0"),
+    String::from("9999999"),
+    String::from("[]"),
+    String::from("true"),
+  ])?;
+  let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+  let selected_keys: std::collections::HashSet<String> = utxos
+    .iter()
+    .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
+    .collect();
+  if selected_keys.len() != utxos.len() {
+    return Err("Duplicate UTXOs cannot be consolidated".to_string());
+  }
+
+  let mut selected_utxos: Vec<ConsolidationUtxoEntry> = Vec::new();
+  let mut input_total = 0.0_f64;
+  let mut warnings: Vec<String> = Vec::new();
+  let mut unsafe_count = 0u32;
+
+  for u in &all_utxos {
+    let txid = u["txid"].as_str().unwrap_or("");
+    let vout = u["vout"].as_u64().unwrap_or(0);
+    let key = format!("{}:{}", txid, vout);
+    if selected_keys.contains(&key) {
+      let amount = u["amount"].as_f64().unwrap_or(0.0);
+      let spendable = u["spendable"].as_bool().unwrap_or(true);
+      let safe = u["safe"].as_bool().unwrap_or(true);
+      let confirmations = u["confirmations"].as_u64().unwrap_or(0);
+      let address = u["address"].as_str().map(|s| s.to_string());
+      let asset = u["asset"].as_str().map(|s| s.to_string());
+      let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64());
+
+      if !spendable {
+        unsafe_count += 1;
+        warnings.push(format!("UTXO {}:{} is not spendable and should not be used for consolidation", txid, vout));
+      }
+
+      if !safe {
+        unsafe_count += 1;
+        warnings.push(format!("UTXO {}:{} is marked unsafe and may require additional confirmations", txid, vout));
+      }
+
+      if asset.is_some() && (asset.as_deref() != Some("HEMP") || asset_amount.is_some()) {
+        warnings.push(format!("UTXO {}:{} carries a non-HEMP asset. Including it in HEMP consolidation may result in asset loss.", txid, vout));
+      }
+
+      if confirmations < 1 {
+        warnings.push(format!("UTXO {}:{} has zero confirmations - consolidation may fail if replaced or conflicted", txid, vout));
+      }
+
+      input_total += amount;
+
+      selected_utxos.push(ConsolidationUtxoEntry {
+        txid: txid.to_string(),
+        vout,
+        amount: format!("{:.8}", amount),
+        address,
+        confirmations,
+        spendable,
+        safe,
+        asset,
+        asset_amount,
+      });
+    }
+  }
+
+  if selected_utxos.is_empty() {
+    return Err("None of the selected UTXOs matched the current wallet UTXO set".to_string());
+  }
+
+  let fee = ESTIMATED_CONSOLIDATION_FEE;
+
+  if input_total <= fee {
+    return Err(format!(
+      "Selected inputs total {} HEMP is insufficient to cover the estimated fee {} HEMP",
+      input_total, fee
+    ));
+  }
+
+  let output_amount = input_total - fee;
+
+  if output_amount <= 0.0 {
+    return Err(format!(
+      "Estimated output {} is not positive after fee. Select more UTXOs or a lower fee.",
+      output_amount
+    ));
+  }
+
+  if output_amount < DUST_THRESHOLD {
+    warnings.push(format!(
+      "Estimated output {} HEMP is below the dust threshold ({})",
+      output_amount, DUST_THRESHOLD
+    ));
+  }
+
+  let utxo_count = selected_utxos.len();
+  if utxo_count > 50 {
+    warnings.push(format!(
+      "Consolidating {} UTXOs may create a very large transaction with high fees",
+      utxo_count
+    ));
+  }
+
+  if unsafe_count > 0 {
+    warnings.push(format!(
+      "{} selected UTXOs are unsafe/unspendable and should be excluded for a reliable consolidation",
+      unsafe_count
+    ));
+  }
+
+  warnings.push(format!(
+    "This consolidates {} wallet UTXOs into one wallet address. This costs an estimated fee of {} HEMP and may affect privacy by linking UTXOs.",
+    utxo_count, fee
+  ));
+
+  let summary = format!(
+    "Consolidate {} UTXOs into {} ({}) - estimated output {} HEMP",
+    utxo_count,
+    &destination[..std::cmp::min(12, destination.len())],
+    if destination.len() > 12 { "..." } else { "" },
+    output_amount
+  );
+
+  Ok(ConsolidationPreview {
+    utxo_count,
+    input_total: format!("{:.8}", input_total),
+    fee_estimate: format!("{:.8}", fee),
+    output_amount: format!("{:.8}", output_amount),
+    destination: destination.clone(),
+    warnings,
+    summary,
+    utxos: selected_utxos,
+  })
+}
+
+#[tauri::command]
+pub fn broadcast_wallet_consolidation(
+  utxos: Vec<RawTxInput>,
+  destination: String,
+  fee: f64,
+) -> Result<String, String> {
+  ensure_config()?;
+
+  if utxos.is_empty() {
+    return Err("No UTXOs selected for consolidation".to_string());
+  }
+
+  let destination = destination.trim().to_string();
+  if destination.is_empty() {
+    return Err("Consolidation destination address is required".to_string());
+  }
+
+  if !fee.is_finite() || fee <= 0.0 {
+    return Err("Fee must be greater than zero".to_string());
+  }
+
+  validate_destination_address(&destination)?;
+
+  let inputs_json = serde_json::to_string(&utxos).map_err(|e| e.to_string())?;
+
+  let raw = run_cli(&[
+    String::from("listunspent"),
+    String::from("0"),
+    String::from("9999999"),
+    String::from("[]"),
+    String::from("true"),
+  ])?;
+  let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+  let selected_keys: std::collections::HashSet<String> = utxos
+    .iter()
+    .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
+    .collect();
+  if selected_keys.len() != utxos.len() {
+    return Err("Duplicate UTXOs cannot be consolidated".to_string());
+  }
+
+  let mut input_total = 0.0_f64;
+  let mut matched_count = 0usize;
+
+  for u in &all_utxos {
+    let txid = u["txid"].as_str().unwrap_or("");
+    let vout = u["vout"].as_u64().unwrap_or(0);
+    let key = format!("{}:{}", txid, vout);
+    if selected_keys.contains(&key) {
+      matched_count += 1;
+      let amount = u["amount"].as_f64().unwrap_or(0.0);
+      let spendable = u["spendable"].as_bool().unwrap_or(true);
+      let safe = u["safe"].as_bool().unwrap_or(true);
+      let asset = u["asset"].as_str().map(|s| s.to_string());
+
+      if !spendable {
+        return Err(format!(
+          "UTXO {}:{} is not spendable by the wallet. Exclude it from consolidation.",
+          txid, vout
+        ));
+      }
+
+      if !safe {
+        return Err(format!(
+          "UTXO {}:{} is marked unsafe. Exclude it from consolidation or wait for more confirmations.",
+          txid, vout
+        ));
+      }
+
+      if asset.is_some() && asset.as_deref() != Some("HEMP") {
+        return Err(format!(
+          "UTXO {}:{} carries a non-HEMP asset ({}). It cannot be included in HEMP consolidation.",
+          txid, vout,
+          asset.as_deref().unwrap_or("unknown")
+        ));
+      }
+
+      input_total += amount;
+    }
+  }
+
+  if matched_count != selected_keys.len() {
+    return Err(format!(
+      "{} selected UTXOs are no longer available. Refresh UTXOs and preview again.",
+      selected_keys.len().saturating_sub(matched_count)
+    ));
+  }
+
+  if input_total <= fee {
+    return Err(format!(
+      "Selected inputs total {} HEMP is insufficient to cover the fee {} HEMP",
+      input_total, fee
+    ));
+  }
+
+  let output_amount = input_total - fee;
+
+  if output_amount <= 0.0 {
+    return Err("Estimated output is not positive after fee. Select more UTXOs.".to_string());
+  }
+
+  let mut outputs = std::collections::HashMap::new();
+  outputs.insert(destination.clone(), format!("{:.8}", output_amount));
+
+  let outputs_json = serde_json::to_string(&outputs).map_err(|e| e.to_string())?;
+
+  let raw_hex = run_cli(&[
+    String::from("createrawtransaction"),
+    inputs_json,
+    outputs_json,
+  ])?;
+
+  let signed_res_raw = run_cli(&[
+    String::from("signrawtransaction"),
+    raw_hex,
+  ])?;
+  let signed_res: serde_json::Value = serde_json::from_str(&signed_res_raw).map_err(|e| e.to_string())?;
+
+  let complete = signed_res["complete"].as_bool().unwrap_or(false);
+  if !complete {
+    return Err("Failed to sign consolidation transaction completely.".to_string());
+  }
+  let signed_hex = signed_res["hex"].as_str().ok_or("No signed hex returned")?.to_string();
+
+  let txid = run_cli(&[
+    String::from("sendrawtransaction"),
+    signed_hex,
+  ])?;
+
+  normalize_cli_txid(txid)
+}
+
+const ESTIMATED_CONSOLIDATION_FEE: f64 = 0.01;
+const DUST_THRESHOLD: f64 = 0.0001;
 
 #[tauri::command]
 pub fn backup_wallet() -> Result<String, String> {

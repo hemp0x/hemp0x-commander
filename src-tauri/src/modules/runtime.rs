@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::modules::rpc::rpc_context;
 use crate::modules::utils::resolve_bin;
 
-const REQUIRED_CORE_NEXT_COMMIT: &str = "3aab5c068";
+const REQUIRED_CORE_NEXT_COMMIT: &str = "192c6b5ce";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.7.0.0";
 const DEFAULT_RPC_PORT: u16 = 42068;
 const DEFAULT_P2P_PORT: u16 = 42069;
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn parses_base_version_from_typical_output() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-3aab5c068";
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
         let result = parse_base_version(raw);
         assert_eq!(result, Some("4.7.0.0".to_string()));
     }
@@ -413,9 +413,9 @@ mod tests {
 
     #[test]
     fn parses_commit_hash_from_known_hash() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-3aab5c068";
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
         let result = parse_commit_hash(raw);
-        assert_eq!(result, Some("3aab5c068".to_string()));
+        assert_eq!(result, Some("192c6b5ce".to_string()));
     }
 
     #[test]

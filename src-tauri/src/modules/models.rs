@@ -249,3 +249,73 @@ pub struct TransactionHistoryResult {
   pub total: usize,
   pub has_more: bool,
 }
+
+#[derive(Serialize)]
+pub struct QualifierIssuePreview {
+  pub operation_type: String,
+  pub asset_name: String,
+  pub qualifier_name: String,
+  pub qty: String,
+  pub destination: Option<String>,
+  pub ipfs_hash: Option<String>,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub is_irreversible: bool,
+  pub validated: bool,
+}
+
+#[derive(Serialize)]
+pub struct RestrictedIssuePreview {
+  pub operation_type: String,
+  pub asset_name: String,
+  pub qty: String,
+  pub verifier: String,
+  pub destination: String,
+  pub units: u8,
+  pub reissuable: bool,
+  pub ipfs_hash: Option<String>,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub is_irreversible: bool,
+  pub validated: bool,
+}
+
+#[derive(Serialize)]
+pub struct TagOperationPreview {
+  pub operation_type: String,
+  pub asset_name: String,
+  pub tag_name: String,
+  pub address: String,
+  pub is_adding: bool,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub is_irreversible: bool,
+  pub validated: bool,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotRequestPreview {
+  pub asset_name: String,
+  pub block_height: i64,
+  pub warnings: Vec<String>,
+  pub summary: String,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotRequestEntry {
+  pub asset_name: String,
+  pub block_height: i64,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotOwnerEntry {
+  pub address: String,
+  pub amount_owned: serde_json::Value,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotData {
+  pub name: String,
+  pub height: i64,
+  pub owners: Vec<SnapshotOwnerEntry>,
+}

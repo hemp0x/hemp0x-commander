@@ -12,6 +12,7 @@
     import ModalReissue from "./modals/ModalReissue.svelte";
     import ModalBrowse from "./modals/ModalBrowse.svelte";
     import ModalAssetGovernance from "./modals/ModalAssetGovernance.svelte";
+    import ModalAssetAdvanced from "./modals/ModalAssetAdvanced.svelte";
     import Tooltip from "./ui/Tooltip.svelte";
     import eyeOpen from "../assets/eye-open.png";
     import eyeClosed from "../assets/eye-closed.png";
@@ -40,6 +41,7 @@
     let nftModalOpen = false;
     let govModalOpen = false;
     let selectedGovAsset = null;
+    let advancedModalOpen = false;
 
     // Browse Modal
     let browseModalOpen = false;
@@ -712,6 +714,14 @@
                 >
                     <span class="btn-icon">🔍</span> BROWSE
                 </button>
+                <button
+                    class="header-btn advanced-btn"
+                    on:click={() => (advancedModalOpen = true)}
+                    disabled={!nodeOnline}
+                    title="Advanced Asset Controls"
+                >
+                    <span class="btn-icon">⚙</span> ADVANCED
+                </button>
             </div>
             <div class="header-status">
                 <span class="pulse-dot" class:online={nodeOnline}></span>
@@ -958,6 +968,12 @@
         isOpen={govModalOpen}
         asset={selectedGovAsset}
         on:close={() => (govModalOpen = false)}
+    />
+
+    <ModalAssetAdvanced
+        isOpen={advancedModalOpen}
+        {nodeOnline}
+        on:close={() => (advancedModalOpen = false)}
     />
 
     <!-- ═══════════════ CONFIRM MODAL ═══════════════ -->

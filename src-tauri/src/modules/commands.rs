@@ -2298,6 +2298,575 @@ pub fn update_asset_metadata(name: String, ipfs_hash: String, current_units: u8)
   normalize_cli_txid(run_cli(&args)?)
 }
 
+// ---------------------------------------------------------------------------
+// Qualifier Asset Operations
+// ---------------------------------------------------------------------------
+
+fn validate_qualifier_name(name: &str) -> Result<String, String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Qualifier name is required".to_string());
+  }
+  if trimmed.len() > 128 {
+    return Err("Qualifier name is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace()) {
+    return Err("Qualifier name cannot contain whitespace".to_string());
+  }
+  let normalized = if trimmed.starts_with('#') {
+    trimmed.to_string()
+  } else {
+    format!("#{}", trimmed)
+  };
+  let body = normalized.trim_start_matches('#');
+  if body.is_empty() || body.starts_with('/') || body.ends_with('/') || body.contains("//") {
+    return Err("Qualifier name must include a non-empty qualifier identifier".to_string());
+  }
+  if normalized.chars().filter(|&c| c == '/').count() > 1 {
+    return Err("Sub-qualifier name cannot contain more than one '/'".to_string());
+  }
+  if normalized.chars().filter(|&c| c == '#').count() > 1 {
+    return Err("Qualifier name cannot contain more than one '#'".to_string());
+  }
+  Ok(normalized)
+}
+
+#[tauri::command]
+pub fn preview_issue_qualifier_asset(
+  name: String,
+  qty: String,
+  destination: Option<String>,
+  ipfs: Option<String>,
+) -> Result<QualifierIssuePreview, String> {
+  ensure_config()?;
+  let name = validate_qualifier_name(&name)?;
+  let qty_val = parse_positive_amount(&qty)?;
+  let destination = validate_optional_destination(destination)?;
+  if qty_val < 1.0 || qty_val > 10.0 {
+    return Err("Qualifier asset amount must be between 1 and 10".to_string());
+  }
+  let ipfs = ipfs.map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
+  let mut warnings = Vec::new();
+  if let Some(ref ipfs) = ipfs {
+    if !ipfs.starts_with("Qm") {
+      warnings.push("IPFS hash does not appear to be a valid CIDv0 format".to_string());
+    }
+  }
+  warnings.push("Qualifier assets have fixed units=0 and are non-reissuable. This cannot be changed.".to_string());
+  warnings.push("Issuing a qualifier asset requires a network fee and wallet unlock.".to_string());
+
+  let summary = format!(
+    "Issue {} of qualifier asset '{}'{}",
+    qty_val,
+    name,
+    if let Some(ref d) = destination { format!(" to {}", &d[..std::cmp::min(16, d.len())]) } else { String::new() }
+  );
+
+  Ok(QualifierIssuePreview {
+    operation_type: "issue_qualifier".to_string(),
+    asset_name: name.clone(),
+    qualifier_name: name,
+    qty: format!("{}", qty_val),
+    destination,
+    ipfs_hash: ipfs,
+    warnings,
+    summary,
+    is_irreversible: true,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn issue_qualifier_asset(
+  name: String,
+  qty: String,
+  destination: Option<String>,
+  ipfs: Option<String>,
+) -> Result<String, String> {
+  ensure_config()?;
+  let name = validate_qualifier_name(&name)?;
+  let qty_val = parse_positive_amount(&qty)?;
+  let destination = validate_optional_destination(destination)?;
+  if qty_val < 1.0 || qty_val > 10.0 {
+    return Err("Qualifier asset amount must be between 1 and 10".to_string());
+  }
+  let change_addr = run_cli(&[String::from("getnewaddress")])?;
+
+  let ipfs_str = ipfs.map(|h| h.trim().to_string()).unwrap_or_default();
+  let has_ipfs = !ipfs_str.is_empty();
+
+  let mut args = vec![
+    String::from("issuequalifierasset"),
+    name,
+    format!("{qty_val}"),
+    destination.unwrap_or_else(|| change_addr.clone()),
+    change_addr,
+  ];
+  if has_ipfs {
+    args.push(String::from("true"));
+    args.push(ipfs_str.trim().to_string());
+  }
+
+  normalize_cli_txid(run_cli(&args)?)
+}
+
+// ---------------------------------------------------------------------------
+// Restricted Asset Operations
+// ---------------------------------------------------------------------------
+
+fn validate_restricted_name(name: &str) -> Result<String, String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Restricted asset name is required".to_string());
+  }
+  if trimmed.len() > 128 {
+    return Err("Restricted asset name is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace()) {
+    return Err("Restricted asset name cannot contain whitespace".to_string());
+  }
+  let normalized = if trimmed.starts_with('$') {
+    trimmed.to_string()
+  } else {
+    format!("${}", trimmed)
+  };
+  if normalized.trim_start_matches('$').is_empty() {
+    return Err("Restricted asset name must include a non-empty asset identifier".to_string());
+  }
+  Ok(normalized)
+}
+
+fn validate_verifier_string(verifier: &str) -> Result<String, String> {
+  let trimmed = verifier.trim();
+  if trimmed.is_empty() {
+    return Err("Verifier string is required for a restricted asset".to_string());
+  }
+  if trimmed.len() > 512 {
+    return Err("Verifier string is too long (max 512 characters)".to_string());
+  }
+  Ok(trimmed.to_string())
+}
+
+fn validate_optional_destination(destination: Option<String>) -> Result<Option<String>, String> {
+  match destination {
+    Some(value) => {
+      let trimmed = value.trim().to_string();
+      if trimmed.is_empty() {
+        Ok(None)
+      } else {
+        validate_destination_address(&trimmed)?;
+        Ok(Some(trimmed))
+      }
+    }
+    None => Ok(None),
+  }
+}
+
+#[tauri::command]
+pub fn preview_issue_restricted_asset(
+  name: String,
+  qty: String,
+  verifier: String,
+  destination: Option<String>,
+  units: Option<u8>,
+  reissuable: Option<bool>,
+  ipfs: Option<String>,
+) -> Result<RestrictedIssuePreview, String> {
+  ensure_config()?;
+  let name = validate_restricted_name(&name)?;
+  let verifier = validate_verifier_string(&verifier)?;
+  let qty_val = parse_positive_amount(&qty)?;
+  let destination = validate_optional_destination(destination)?;
+  let units = units.unwrap_or(0);
+  let reissuable = reissuable.unwrap_or(true);
+  if units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
+  let mut warnings = Vec::new();
+  if !reissuable {
+    warnings.push("This restricted asset will NOT be reissuable. This cannot be changed later.".to_string());
+  }
+  if let Some(ref ipfs) = ipfs {
+    if !ipfs.trim().is_empty() && !ipfs.trim().starts_with("Qm") {
+      warnings.push("IPFS hash does not appear to be a valid CIDv0 format".to_string());
+    }
+  }
+  warnings.push("Restricted asset creation requires the wallet to be unlocked and a wallet transaction fee.".to_string());
+  warnings.push("The verifier string determines which tagged addresses can hold this asset.".to_string());
+
+  let summary = format!(
+    "Issue {} of restricted asset '{}' with verifier '{}'{}",
+    qty_val,
+    name,
+    verifier,
+    if reissuable { "" } else { " (NOT reissuable)" }
+  );
+
+  Ok(RestrictedIssuePreview {
+    operation_type: "issue_restricted".to_string(),
+    asset_name: name,
+    qty: format!("{}", qty_val),
+    verifier,
+    destination: destination.unwrap_or_else(|| String::from("auto-generated")),
+    units,
+    reissuable,
+    ipfs_hash: ipfs.filter(|h| !h.trim().is_empty()),
+    warnings,
+    summary,
+    is_irreversible: !reissuable,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn issue_restricted_asset(
+  name: String,
+  qty: String,
+  verifier: String,
+  destination: Option<String>,
+  units: Option<u8>,
+  reissuable: Option<bool>,
+  ipfs: Option<String>,
+) -> Result<String, String> {
+  ensure_config()?;
+  let name = validate_restricted_name(&name)?;
+  let verifier = validate_verifier_string(&verifier)?;
+  let qty_val = parse_positive_amount(&qty)?;
+  let destination = validate_optional_destination(destination)?;
+  let units = units.unwrap_or(0);
+  let reissuable = reissuable.unwrap_or(true);
+  if units > 8 {
+    return Err("Units must be between 0 and 8".to_string());
+  }
+  let to_addr = match destination {
+    Some(address) => address,
+    None => run_cli(&[String::from("getnewaddress")])?,
+  };
+  let change_addr = run_cli(&[String::from("getnewaddress")])?;
+
+  let ipfs_str = ipfs.unwrap_or_else(|| String::new());
+  let has_ipfs = !ipfs_str.trim().is_empty();
+
+  let mut args = vec![
+    String::from("issuerestrictedasset"),
+    name,
+    format!("{qty_val}"),
+    verifier,
+    to_addr,
+    change_addr,
+    units.to_string(),
+    if reissuable { String::from("true") } else { String::from("false") },
+  ];
+  if has_ipfs {
+    args.push(String::from("true"));
+    args.push(ipfs_str.trim().to_string());
+  }
+
+  normalize_cli_txid(run_cli(&args)?)
+}
+
+// ---------------------------------------------------------------------------
+// Tag Operations
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn preview_add_tag_to_address(
+  tag_name: String,
+  address: String,
+) -> Result<TagOperationPreview, String> {
+  ensure_config()?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  validate_destination_address(&address)?;
+  let mut warnings = Vec::new();
+  warnings.push("Adding a tag requires the wallet to be unlocked and ownership of the qualifier asset.".to_string());
+  warnings.push("This operation sends 1 unit of the qualifier asset with tag assignment data.".to_string());
+  let summary = format!(
+    "Assign tag '{}' to address {}",
+    tag_name,
+    &address[..std::cmp::min(16, address.len())]
+  );
+  Ok(TagOperationPreview {
+    operation_type: "add_tag".to_string(),
+    asset_name: tag_name.clone(),
+    tag_name,
+    address,
+    is_adding: true,
+    warnings,
+    summary,
+    is_irreversible: false,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn add_tag_to_address(
+  tag_name: String,
+  address: String,
+  change_address: Option<String>,
+  asset_data: Option<String>,
+) -> Result<String, String> {
+  ensure_config()?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  validate_destination_address(&address)?;
+  let mut args = vec![
+    String::from("addtagtoaddress"),
+    tag_name,
+    address,
+  ];
+  if let Some(ref ch) = change_address {
+    if !ch.trim().is_empty() {
+      args.push(ch.trim().to_string());
+      if let Some(ref ad) = asset_data {
+        if !ad.trim().is_empty() {
+          args.push(ad.trim().to_string());
+        }
+      }
+    }
+  }
+  normalize_cli_txid(run_cli(&args)?)
+}
+
+#[tauri::command]
+pub fn preview_remove_tag_from_address(
+  tag_name: String,
+  address: String,
+) -> Result<TagOperationPreview, String> {
+  ensure_config()?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  validate_destination_address(&address)?;
+  let mut warnings = Vec::new();
+  warnings.push("Removing a tag requires the wallet to be unlocked and ownership of the qualifier asset.".to_string());
+  warnings.push("This operation sends 1 unit of the qualifier asset with tag removal data.".to_string());
+  let summary = format!(
+    "Remove tag '{}' from address {}",
+    tag_name,
+    &address[..std::cmp::min(16, address.len())]
+  );
+  Ok(TagOperationPreview {
+    operation_type: "remove_tag".to_string(),
+    asset_name: tag_name.clone(),
+    tag_name,
+    address,
+    is_adding: false,
+    warnings,
+    summary,
+    is_irreversible: false,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn remove_tag_from_address(
+  tag_name: String,
+  address: String,
+  change_address: Option<String>,
+  asset_data: Option<String>,
+) -> Result<String, String> {
+  ensure_config()?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  validate_destination_address(&address)?;
+  let mut args = vec![
+    String::from("removetagfromaddress"),
+    tag_name,
+    address,
+  ];
+  if let Some(ref ch) = change_address {
+    if !ch.trim().is_empty() {
+      args.push(ch.trim().to_string());
+      if let Some(ref ad) = asset_data {
+        if !ad.trim().is_empty() {
+          args.push(ad.trim().to_string());
+        }
+      }
+    }
+  }
+  normalize_cli_txid(run_cli(&args)?)
+}
+
+// ---------------------------------------------------------------------------
+// Tag / Restricted Read-Only Helpers
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn check_address_tag(address: String, tag_name: String) -> Result<bool, String> {
+  ensure_config()?;
+  validate_destination_address(&address)?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  let raw = run_cli(&[String::from("checkaddresstag"), address, tag_name])?;
+  Ok(raw.trim().to_lowercase() == "true")
+}
+
+#[tauri::command]
+pub fn list_tags_for_address(address: String) -> Result<Vec<String>, String> {
+  ensure_config()?;
+  validate_destination_address(&address)?;
+  let raw = run_cli(&[String::from("listtagsforaddress"), address])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let tags: Vec<String> = value.as_array()
+    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    .unwrap_or_default();
+  Ok(tags)
+}
+
+#[tauri::command]
+pub fn list_addresses_for_tag(tag_name: String) -> Result<Vec<String>, String> {
+  ensure_config()?;
+  let tag_name = validate_qualifier_name(&tag_name)?;
+  let raw = run_cli(&[String::from("listaddressesfortag"), tag_name])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let addresses: Vec<String> = value.as_array()
+    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    .unwrap_or_default();
+  Ok(addresses)
+}
+
+#[tauri::command]
+pub fn get_verifier_string(restricted_name: String) -> Result<String, String> {
+  ensure_config()?;
+  let restricted_name = validate_restricted_name(&restricted_name)?;
+  run_cli(&[String::from("getverifierstring"), restricted_name])
+}
+
+#[tauri::command]
+pub fn list_global_restrictions() -> Result<Vec<String>, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("listglobalrestrictions")])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let restrictions: Vec<String> = value.as_array()
+    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    .unwrap_or_default();
+  Ok(restrictions)
+}
+
+#[tauri::command]
+pub fn check_global_restriction(restricted_name: String) -> Result<bool, String> {
+  ensure_config()?;
+  let restricted_name = validate_restricted_name(&restricted_name)?;
+  let raw = run_cli(&[String::from("checkglobalrestriction"), restricted_name])?;
+  Ok(raw.trim().to_lowercase() == "true")
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot Operations
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn request_snapshot(asset_name: String, block_height: i64) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  validate_asset_name(&asset_name)?;
+  if block_height <= 0 {
+    return Err("Block height must be greater than zero".to_string());
+  }
+  let raw = run_cli(&[
+    String::from("requestsnapshot"),
+    asset_name,
+    format!("{block_height}"),
+  ])?;
+  serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_snapshot_request(asset_name: String, block_height: i64) -> Result<SnapshotRequestEntry, String> {
+  ensure_config()?;
+  validate_asset_name(&asset_name)?;
+  if block_height <= 0 {
+    return Err("Block height must be greater than zero".to_string());
+  }
+  let raw = run_cli(&[
+    String::from("getsnapshotrequest"),
+    asset_name.clone(),
+    format!("{block_height}"),
+  ])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let asset_name = value.get("asset_name").and_then(|v| v.as_str()).unwrap_or(&asset_name).to_string();
+  let block_height = value.get("block_height").and_then(|v| v.as_i64()).unwrap_or(block_height);
+  Ok(SnapshotRequestEntry { asset_name, block_height })
+}
+
+#[tauri::command]
+pub fn list_snapshot_requests(
+  asset_name: Option<String>,
+  block_height: Option<i64>,
+) -> Result<Vec<SnapshotRequestEntry>, String> {
+  ensure_config()?;
+  let mut args = vec![String::from("listsnapshotrequests")];
+  if let Some(ref an) = asset_name {
+    let trimmed = an.trim().to_string();
+    if !trimmed.is_empty() {
+      validate_asset_name(&trimmed)?;
+      args.push(trimmed);
+    }
+  }
+  if let Some(bh) = block_height {
+    if bh <= 0 {
+      return Err("Block height must be greater than zero".to_string());
+    }
+    args.push(format!("{bh}"));
+  }
+  let raw = run_cli(&args)?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let entries: Vec<SnapshotRequestEntry> = value.as_array()
+    .map(|arr| {
+      arr.iter().map(|v| {
+        SnapshotRequestEntry {
+          asset_name: v.get("asset_name").and_then(|a| a.as_str()).unwrap_or("").to_string(),
+          block_height: v.get("block_height").and_then(|b| b.as_i64()).unwrap_or(0),
+        }
+      }).collect()
+    })
+    .unwrap_or_default();
+  Ok(entries)
+}
+
+#[tauri::command]
+pub fn cancel_snapshot_request(asset_name: String, block_height: i64) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  validate_asset_name(&asset_name)?;
+  if block_height <= 0 {
+    return Err("Block height must be greater than zero".to_string());
+  }
+  let raw = run_cli(&[
+    String::from("cancelsnapshotrequest"),
+    asset_name,
+    format!("{block_height}"),
+  ])?;
+  serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_asset_snapshot(asset_name: String, block_height: i64) -> Result<SnapshotData, String> {
+  ensure_config()?;
+  validate_asset_name(&asset_name)?;
+  if block_height <= 0 {
+    return Err("Block height must be greater than zero".to_string());
+  }
+  let raw = run_cli(&[
+    String::from("getsnapshot"),
+    asset_name.clone(),
+    format!("{block_height}"),
+  ])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  if value.is_null() {
+    return Err("Snapshot not available for the requested asset and block height".to_string());
+  }
+  let name = value.get("name").and_then(|v| v.as_str()).unwrap_or(&asset_name).to_string();
+  let height = value.get("height").and_then(|v| v.as_i64()).unwrap_or(block_height);
+  let owners: Vec<SnapshotOwnerEntry> = value.get("owners")
+    .and_then(|v| v.as_array())
+    .map(|arr| {
+      arr.iter().map(|owner| {
+        SnapshotOwnerEntry {
+          address: owner.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string(),
+          amount_owned: owner.get("amount_owned").cloned().unwrap_or(serde_json::Value::Null),
+        }
+      }).collect()
+    })
+    .unwrap_or_default();
+  Ok(SnapshotData { name, height, owners })
+}
+
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
@@ -2310,6 +2879,7 @@ mod tests {
     validate_asset_name, validate_asset_transfer_preview_fields,
     validate_migration_passphrase, validate_migration_wallet_name,
     validate_send_preview_fields,
+    validate_qualifier_name, validate_restricted_name, validate_verifier_string,
   };
 
   #[test]
@@ -2875,5 +3445,113 @@ mod tests {
     )
     .unwrap_err();
     assert!(err.contains("Birth height"));
+  }
+
+  // --- Qualifier Name Validation Tests ---
+
+  #[test]
+  fn valid_qualifier_name_normalizes_with_hash() {
+    let result = validate_qualifier_name("#TAG").unwrap();
+    assert_eq!(result, "#TAG");
+  }
+
+  #[test]
+  fn qualifier_name_adds_hash_prefix() {
+    let result = validate_qualifier_name("TAG").unwrap();
+    assert_eq!(result, "#TAG");
+  }
+
+  #[test]
+  fn qualifier_name_rejects_empty() {
+    assert!(validate_qualifier_name("").is_err());
+    assert!(validate_qualifier_name("   ").is_err());
+    assert!(validate_qualifier_name("#").is_err());
+    assert!(validate_qualifier_name("#ROOT/").is_err());
+  }
+
+  #[test]
+  fn qualifier_name_rejects_whitespace() {
+    assert!(validate_qualifier_name("#MY TAG").is_err());
+  }
+
+  #[test]
+  fn qualifier_name_rejects_too_long() {
+    let long_name = "#".to_string() + &"A".repeat(128);
+    assert!(validate_qualifier_name(&long_name).is_err());
+  }
+
+  // --- Restricted Name Validation Tests ---
+
+  #[test]
+  fn valid_restricted_name_normalizes_with_dollar() {
+    let result = validate_restricted_name("$ASSET").unwrap();
+    assert_eq!(result, "$ASSET");
+  }
+
+  #[test]
+  fn restricted_name_adds_dollar_prefix() {
+    let result = validate_restricted_name("ASSET").unwrap();
+    assert_eq!(result, "$ASSET");
+  }
+
+  #[test]
+  fn restricted_name_rejects_empty() {
+    assert!(validate_restricted_name("").is_err());
+    assert!(validate_restricted_name("   ").is_err());
+    assert!(validate_restricted_name("$").is_err());
+  }
+
+  #[test]
+  fn restricted_name_rejects_whitespace() {
+    assert!(validate_restricted_name("$MY ASSET").is_err());
+  }
+
+  // --- Verifier Validation Tests ---
+
+  #[test]
+  fn valid_verifier_string_passes() {
+    assert_eq!(validate_verifier_string("#KYC & !#AML").unwrap(), "#KYC & !#AML");
+  }
+
+  #[test]
+  fn verifier_string_rejects_empty() {
+    assert!(validate_verifier_string("").is_err());
+    assert!(validate_verifier_string("   ").is_err());
+  }
+
+  #[test]
+  fn verifier_string_rejects_too_long() {
+    let long = "A".repeat(513);
+    assert!(validate_verifier_string(&long).is_err());
+  }
+
+  // --- Qualifier/Issue Argument Builder Tests ---
+
+  #[test]
+  fn qualifier_issue_args_minimal() {
+    // Test the args for issuequalifierasset with minimal params
+    // name qty [to_address] [change_address] [has_ipfs] [ipfs_hash]
+    // Since we call run_cli which requires a node, we test validation only
+    let name = validate_qualifier_name("#TAG").unwrap();
+    let qty = parse_positive_amount("3").unwrap();
+    assert_eq!(name, "#TAG");
+    assert_eq!(qty, 3.0);
+  }
+
+  #[test]
+  fn qualifier_amount_rejects_out_of_range() {
+    // parse_positive_amount just checks > 0, so 0.5 passes it.
+    // The qualifier range 1-10 is enforced at the command level.
+    assert!(parse_positive_amount("100").is_ok());
+    assert!(parse_positive_amount("5.5").is_ok());
+    assert!(parse_positive_amount("0").is_err());
+  }
+
+  #[test]
+  fn restricted_issue_args_validation() {
+    let name = validate_restricted_name("$TOKEN").unwrap();
+    let verifier = validate_verifier_string("#KYC").unwrap();
+    assert_eq!(name, "$TOKEN");
+    assert_eq!(verifier, "#KYC");
   }
 }

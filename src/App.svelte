@@ -1529,9 +1529,9 @@
     left: 0;
     right: 0; /* Use right: 0 instead of width: 100vw to avoid scrollbar overflow */
     bottom: 0;
-    z-index: 9999; /* Ensure top of stack */
+    z-index: 1500;
     margin: 0.5rem; /* Tiny margin to show rounded corners against edge */
-    border-radius: 12px; /* RADIUS ADDED */
+    border-radius: 8px;
     border: none;
     background: rgba(0, 0, 0, 0.85); /* Semi-transparent for blur */
     backdrop-filter: blur(20px); /* GLASS EFFECT */
@@ -1809,6 +1809,7 @@
   }
   .wallet-metrics {
     display: flex;
+    flex-wrap: wrap;
     gap: 1rem;
     font-size: 0.65rem;
     color: var(--color-muted);
@@ -1928,28 +1929,13 @@
     opacity: 0.85;
   }
 
-  /* --- ANIMATION --- */
-  .fade-in {
-    animation: fadeIn 0.4s ease-out;
-  }
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-      transform: translateY(10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
   .coming-soon {
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100%;
     border: 1px dashed rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
+    border-radius: 8px;
     font-family: var(--font-mono);
     color: var(--color-muted);
   }
@@ -1968,7 +1954,7 @@
     inset: 0;
     background: rgba(0, 0, 0, 0.65);
     backdrop-filter: blur(6px);
-    z-index: 100;
+    z-index: 20000;
     border: none;
     padding: 0;
     cursor: pointer;
@@ -1984,7 +1970,7 @@
     border-radius: 8px;
     padding: 1.25rem 1.75rem;
     box-shadow: 0 0 30px rgba(0, 255, 65, 0.1);
-    z-index: 101;
+    z-index: 20001;
   }
   .modal-title {
     margin: 0 0 0.5rem 0;
@@ -2010,7 +1996,7 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
     color: #fff;
     padding: 0.6rem 0.75rem;
-    border-radius: 10px;
+    border-radius: 8px;
     outline: none;
   }
   .modal-input:focus {
@@ -2057,9 +2043,9 @@
     align-items: center;
     justify-content: center;
     z-index: 2000;
-    animation: fadeIn 0.3s ease-out;
+    animation: welcomeFadeIn 0.3s ease-out;
   }
-  @keyframes fadeIn {
+  @keyframes welcomeFadeIn {
     from {
       opacity: 0;
     }

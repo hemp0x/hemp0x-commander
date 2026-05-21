@@ -133,6 +133,8 @@
         activeSession.output = activeSession.output
             ? `${activeSession.output}\n${text}`
             : text;
+        // Ensure Svelte notices the session output change for textarea re-render
+        sessions = [...sessions];
         await tick();
         if (consoleRef) {
             consoleRef.scrollTop = consoleRef.scrollHeight;

@@ -149,6 +149,8 @@ pub fn run() {
       // Consolidation Commands
       commands::preview_wallet_consolidation,
       commands::broadcast_wallet_consolidation,
+      commands::plan_wallet_consolidation,
+      commands::get_policy_diagnostics,
 
       // Additional Commands
       commands::backup_wallet,

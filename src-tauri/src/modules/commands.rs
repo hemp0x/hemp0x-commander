@@ -1518,6 +1518,22 @@ pub fn broadcast_advanced_transaction(
     return Err("Duplicate inputs detected. Each UTXO can only be used once.".to_string());
   }
 
+  let max_safe_inputs_for_two_outputs = max_policy_inputs(2, STANDARD_MAX_TX_BYTES);
+  if inputs.len() > max_safe_inputs_for_two_outputs {
+    return Err(format!(
+      "Selected {} UTXOs exceeds the standard relay policy limit of {} inputs for a two-output transaction. Reduce your selection or consolidate first.",
+      inputs.len(), max_safe_inputs_for_two_outputs
+    ));
+  }
+
+  let est_tx_bytes = estimate_legacy_tx_bytes(inputs.len(), 2);
+  if est_tx_bytes > STANDARD_MAX_TX_BYTES {
+    return Err(format!(
+      "Estimated transaction size {} bytes exceeds standard relay limit of {} bytes. Consolidate or reduce inputs.",
+      est_tx_bytes, STANDARD_MAX_TX_BYTES
+    ));
+  }
+
   let output_total = parse_output_sum(&outputs)?;
   for output_address in outputs.keys() {
     validate_destination_address(output_address)?;
@@ -1732,7 +1748,18 @@ pub fn preview_wallet_consolidation(
     ));
   }
 
-  let fee = ESTIMATED_CONSOLIDATION_FEE;
+  let utxo_count = selected_utxos.len();
+  let max_safe_inputs = max_policy_inputs(1, STANDARD_MAX_TX_BYTES);
+
+  if utxo_count > max_safe_inputs {
+    return Err(format!(
+      "Selected {} UTXOs exceeds the standard relay policy limit of {} inputs for a one-output transaction. Reduce your selection.",
+      utxo_count, max_safe_inputs
+    ));
+  }
+
+  let tx_bytes = estimate_legacy_tx_bytes(utxo_count, 1);
+  let fee = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
 
   if input_total <= fee {
     return Err(format!(
@@ -1745,23 +1772,22 @@ pub fn preview_wallet_consolidation(
 
   if output_amount <= 0.0 {
     return Err(format!(
-      "Estimated output {} is not positive after fee. Select more UTXOs or a lower fee.",
-      output_amount
+      "Estimated output {} is not positive after fee ({} byte tx). Select more UTXOs.",
+      output_amount, tx_bytes
     ));
   }
 
-  if output_amount < DUST_THRESHOLD {
+  if output_amount < sat_to_hemp(DUST_THRESHOLD_SAT) {
     warnings.push(format!(
       "Estimated output {} HEMP is below the dust threshold ({})",
-      output_amount, DUST_THRESHOLD
+      output_amount, sat_to_hemp(DUST_THRESHOLD_SAT)
     ));
   }
 
-  let utxo_count = selected_utxos.len();
-  if utxo_count > 50 {
-    warnings.push(format!(
-      "Consolidating {} UTXOs may create a very large transaction with high fees",
-      utxo_count
+  if tx_bytes > STANDARD_MAX_TX_BYTES {
+    return Err(format!(
+      "Estimated transaction size {} bytes exceeds standard relay policy limit of {} bytes. Reduce selected UTXOs.",
+      tx_bytes, STANDARD_MAX_TX_BYTES
     ));
   }
 
@@ -1773,8 +1799,8 @@ pub fn preview_wallet_consolidation(
   }
 
   warnings.push(format!(
-    "This consolidates {} wallet UTXOs into one wallet address. This costs an estimated fee of {} HEMP and may affect privacy by linking UTXOs.",
-    utxo_count, fee
+    "This consolidates {} wallet UTXOs into one wallet address (estimated {} bytes). Estimated fee: {} HEMP ({} sat/byte). This may affect privacy by linking UTXOs.",
+    utxo_count, tx_bytes, format_hemp_amount(fee), DEFAULT_FEE_RATE_SAT_PER_BYTE
   ));
 
   let summary = format!(
@@ -1814,12 +1840,32 @@ pub fn broadcast_wallet_consolidation(
     return Err("Consolidation destination address is required".to_string());
   }
 
-  if !fee.is_finite() || (fee - ESTIMATED_CONSOLIDATION_FEE).abs() > f64::EPSILON {
-    return Err("Consolidation fee changed after preview. Refresh UTXOs and preview again.".to_string());
-  }
-  let fee = ESTIMATED_CONSOLIDATION_FEE;
-
   validate_destination_address(&destination)?;
+
+  let input_count = utxos.len();
+  let max_safe_inputs = max_policy_inputs(1, STANDARD_MAX_TX_BYTES);
+  if input_count > max_safe_inputs {
+    return Err(format!(
+      "Selected {} UTXOs exceeds the standard relay policy limit of {} inputs. Reduce your selection.",
+      input_count, max_safe_inputs
+    ));
+  }
+
+  let tx_bytes = estimate_legacy_tx_bytes(input_count, 1);
+  if tx_bytes > STANDARD_MAX_TX_BYTES {
+    return Err(format!(
+      "Estimated transaction size {} bytes exceeds standard relay limit of {} bytes.",
+      tx_bytes, STANDARD_MAX_TX_BYTES
+    ));
+  }
+
+  let computed_fee = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+  if !fee.is_finite() || hemp_to_sat(fee) != hemp_to_sat(computed_fee) {
+    return Err(format!(
+      "Consolidation fee changed after preview (expected {}, got {}). Refresh UTXOs and preview again.",
+      format_hemp_amount(computed_fee), format_hemp_amount(fee)
+    ));
+  }
 
   let inputs_json = serde_json::to_string(&utxos).map_err(|e| e.to_string())?;
 
@@ -1868,6 +1914,15 @@ pub fn broadcast_wallet_consolidation(
         ));
       }
 
+      let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+      if asset_amount > 0.0 {
+        return Err(format!(
+          "UTXO {}:{} carries asset data and cannot be included in HEMP consolidation.",
+          txid, vout
+        ));
+      }
+
       if asset.is_some() && asset.as_deref() != Some("HEMP") {
         return Err(format!(
           "UTXO {}:{} carries a non-HEMP asset ({}). It cannot be included in HEMP consolidation.",
@@ -1900,6 +1955,14 @@ pub fn broadcast_wallet_consolidation(
     return Err("Estimated output is not positive after fee. Select more UTXOs.".to_string());
   }
 
+  if output_amount < sat_to_hemp(DUST_THRESHOLD_SAT) {
+    return Err(format!(
+      "Estimated output {} HEMP is below the dust threshold ({} HEMP). Select more UTXOs.",
+      format_hemp_amount(output_amount),
+      format_hemp_amount(sat_to_hemp(DUST_THRESHOLD_SAT))
+    ));
+  }
+
   let mut outputs = std::collections::HashMap::new();
   outputs.insert(destination.clone(), format!("{:.8}", output_amount));
 
@@ -1919,6 +1982,9 @@ pub fn broadcast_wallet_consolidation(
 
   let complete = signed_res["complete"].as_bool().unwrap_or(false);
   if !complete {
+    if let Some(errors) = signed_res.get("errors") {
+      return Err(format!("Failed to sign consolidation transaction completely: {errors}"));
+    }
     return Err("Failed to sign consolidation transaction completely.".to_string());
   }
   let signed_hex = signed_res["hex"].as_str().ok_or("No signed hex returned")?.to_string();
@@ -1931,8 +1997,211 @@ pub fn broadcast_wallet_consolidation(
   normalize_cli_txid(txid)
 }
 
-const ESTIMATED_CONSOLIDATION_FEE: f64 = 0.01;
-const DUST_THRESHOLD: f64 = 0.0001;
+const STANDARD_MAX_TX_BYTES: u64 = 100_000;
+const DEFAULT_TARGET_TX_BYTES: u64 = 90_000;
+const LEGACY_P2PKH_INPUT_BYTES: u64 = 148;
+const LEGACY_P2PKH_OUTPUT_BYTES: u64 = 34;
+const LEGACY_TX_OVERHEAD_BYTES: u64 = 10;
+const DEFAULT_FEE_RATE_SAT_PER_BYTE: u64 = 1000;
+const DUST_THRESHOLD_SAT: u64 = 546;
+const SATS_PER_HEMP: f64 = 100_000_000.0;
+
+fn estimate_legacy_tx_bytes(input_count: usize, output_count: usize) -> u64 {
+    LEGACY_TX_OVERHEAD_BYTES
+        + (input_count as u64) * LEGACY_P2PKH_INPUT_BYTES
+        + (output_count as u64) * LEGACY_P2PKH_OUTPUT_BYTES
+}
+
+fn max_policy_inputs(output_count: usize, target_max_tx_bytes: u64) -> usize {
+    let overhead = LEGACY_TX_OVERHEAD_BYTES + (output_count as u64) * LEGACY_P2PKH_OUTPUT_BYTES;
+    if target_max_tx_bytes <= overhead {
+        return 0;
+    }
+    ((target_max_tx_bytes - overhead) / LEGACY_P2PKH_INPUT_BYTES) as usize
+}
+
+fn estimate_fee_from_bytes(tx_bytes: u64, fee_rate_sat_per_byte: u64) -> f64 {
+    (tx_bytes as f64 * fee_rate_sat_per_byte as f64) / SATS_PER_HEMP
+}
+
+fn format_hemp_amount(hemp: f64) -> String {
+    format!("{:.8}", hemp)
+}
+
+fn sat_to_hemp(sat: u64) -> f64 {
+    sat as f64 / SATS_PER_HEMP
+}
+
+fn hemp_to_sat(hemp: f64) -> u64 {
+    (hemp * SATS_PER_HEMP).round() as u64
+}
+
+#[tauri::command]
+pub fn get_policy_diagnostics() -> Result<PolicyDiagnostics, String> {
+    ensure_config()?;
+    let raw = run_cli(&[
+        String::from("listunspent"),
+        String::from("0"),
+        String::from("9999999"),
+        String::from("[]"),
+        String::from("true"),
+    ])?;
+    let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    let safe_count = all_utxos
+        .iter()
+        .filter(|u| {
+            let spendable = u["spendable"].as_bool().unwrap_or(true);
+            let safe = u["safe"].as_bool().unwrap_or(true);
+            let asset = u["asset"].as_str();
+            let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            spendable && safe && (asset.is_none() || asset == Some("HEMP")) && asset_amount == 0.0
+        })
+        .count();
+
+    let max_inputs_one_output = max_policy_inputs(1, DEFAULT_TARGET_TX_BYTES);
+    let max_inputs_two_outputs = max_policy_inputs(2, STANDARD_MAX_TX_BYTES);
+    let selected_estimate_bytes = estimate_legacy_tx_bytes(std::cmp::min(safe_count, max_inputs_one_output), 1);
+    let selected_estimate_fee = estimate_fee_from_bytes(selected_estimate_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+
+    Ok(PolicyDiagnostics {
+        current_safe_utxo_count: safe_count,
+        max_safe_inputs_for_one_output: max_inputs_one_output,
+        max_safe_inputs_for_two_outputs: max_inputs_two_outputs,
+        estimated_selected_tx_bytes: selected_estimate_bytes,
+        estimated_selected_fee: format_hemp_amount(selected_estimate_fee),
+    })
+}
+
+#[tauri::command]
+pub fn plan_wallet_consolidation(
+    destination: Option<String>,
+    target_final_utxo_count: Option<usize>,
+    max_rounds: Option<usize>,
+    target_max_tx_bytes: Option<u64>,
+) -> Result<ConsolidationPlan, String> {
+    ensure_config()?;
+
+    if let Some(destination) = destination.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        validate_destination_address(destination)?;
+    }
+
+    let target_final_utxo_count = target_final_utxo_count.unwrap_or(80);
+    let max_rounds = std::cmp::max(1, max_rounds.unwrap_or(6));
+    let target_max_tx_bytes = target_max_tx_bytes.unwrap_or(DEFAULT_TARGET_TX_BYTES);
+
+    let raw = run_cli(&[
+        String::from("listunspent"),
+        String::from("0"),
+        String::from("9999999"),
+        String::from("[]"),
+        String::from("true"),
+    ])?;
+    let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    let mut safe_utxos: Vec<(String, u64, f64)> = Vec::new();
+    for u in &all_utxos {
+        let txid = u["txid"].as_str().unwrap_or("").to_string();
+        let vout = u["vout"].as_u64().unwrap_or(0);
+        let amount = u["amount"].as_f64().unwrap_or(0.0);
+        let spendable = u["spendable"].as_bool().unwrap_or(true);
+        let safe = u["safe"].as_bool().unwrap_or(true);
+        let asset = u["asset"].as_str();
+        let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+        if spendable && safe && (asset.is_none() || asset == Some("HEMP")) && asset_amount == 0.0 && amount > 0.0 {
+            safe_utxos.push((txid, vout, amount));
+        }
+    }
+
+    let initial_utxo_count = safe_utxos.len();
+    if initial_utxo_count < 2 {
+        return Err(format!(
+            "Need at least 2 safe HEMP UTXOs for consolidation (found {})",
+            initial_utxo_count
+        ));
+    }
+
+    safe_utxos.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    let max_inputs_per_round = max_policy_inputs(1, target_max_tx_bytes);
+    if max_inputs_per_round < 2 {
+        return Err(format!(
+            "Target max tx bytes {} is too low to fit even 2 inputs",
+            target_max_tx_bytes
+        ));
+    }
+
+    let mut rounds: Vec<ConsolidationRoundPlan> = Vec::new();
+    let mut working: Vec<(f64, String)> = safe_utxos
+        .iter()
+        .map(|(txid, vout, amount)| (*amount, format!("{}:{}", txid, vout)))
+        .collect();
+    let mut total_estimated_fee = 0.0_f64;
+
+    for round in 0..max_rounds {
+        working.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        if working.len() <= target_final_utxo_count && !(round == 0 && working.len() > 1) {
+            break;
+        }
+
+        let required_reduction = if working.len() > target_final_utxo_count {
+            working.len() - target_final_utxo_count
+        } else {
+            1
+        };
+        let input_count = std::cmp::min(
+            max_inputs_per_round,
+            std::cmp::max(2, required_reduction + 1),
+        );
+        let input_count = std::cmp::min(input_count, working.len());
+
+        if input_count < 2 {
+            break;
+        }
+
+        let selected = &working[..input_count];
+        let input_total: f64 = selected.iter().map(|(amt, _)| amt).sum();
+        let tx_bytes = estimate_legacy_tx_bytes(input_count, 1);
+        let fee_estimate = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+        let projected_output = input_total - fee_estimate;
+
+        if projected_output <= sat_to_hemp(DUST_THRESHOLD_SAT) {
+            break;
+        }
+
+        let selected_outpoints: Vec<String> = selected.iter().map(|(_, op)| op.clone()).collect();
+
+        let round_plan = ConsolidationRoundPlan {
+            round_number: (round + 1) as u32,
+            input_count,
+            input_total: format_hemp_amount(input_total),
+            estimated_bytes: tx_bytes,
+            fee_estimate: format_hemp_amount(fee_estimate),
+            projected_output: format_hemp_amount(projected_output),
+            selected_outpoints,
+        };
+
+        total_estimated_fee += fee_estimate;
+        rounds.push(round_plan);
+
+        let drain_end = input_count;
+        working.drain(..drain_end);
+        working.push((projected_output, format!("sim-round-{}:0", round + 1)));
+    }
+
+    let projected_final_utxo_count = working.len();
+
+    Ok(ConsolidationPlan {
+        initial_utxo_count,
+        projected_final_utxo_count,
+        max_inputs_per_round,
+        target_max_tx_bytes,
+        total_estimated_fee: format_hemp_amount(total_estimated_fee),
+        rounds,
+    })
+}
 
 #[tauri::command]
 pub fn backup_wallet() -> Result<String, String> {
@@ -3121,6 +3390,8 @@ mod tests {
     validate_migration_passphrase, validate_migration_wallet_name,
     validate_send_preview_fields,
     validate_qualifier_name, validate_restricted_name, validate_verifier_string,
+    estimate_legacy_tx_bytes, max_policy_inputs, estimate_fee_from_bytes,
+    format_hemp_amount, sat_to_hemp,
   };
 
   #[test]
@@ -3899,5 +4170,110 @@ mod tests {
     assert!(validate_asset_name("DIVIDENDS").is_ok());
     assert!(validate_distribution_amount("500").is_ok());
     assert!(validate_reward_snapshot_height(100000).is_ok());
+  }
+
+  // --- Policy Helper Tests ---
+
+  #[test]
+  fn estimate_one_input_one_output_bytes() {
+    let bytes = estimate_legacy_tx_bytes(1, 1);
+    assert_eq!(bytes, 10 + 148 + 34);
+  }
+
+  #[test]
+  fn estimate_ten_inputs_one_output_bytes() {
+    let bytes = estimate_legacy_tx_bytes(10, 1);
+    assert_eq!(bytes, 10 + 10 * 148 + 34);
+  }
+
+  #[test]
+  fn max_policy_inputs_one_output_100k() {
+    let max = max_policy_inputs(1, 100_000);
+    assert_eq!(max, 675);
+  }
+
+  #[test]
+  fn max_policy_inputs_two_output_100k() {
+    let max = max_policy_inputs(2, 100_000);
+    assert_eq!(max, 675);
+  }
+
+  #[test]
+  fn max_policy_inputs_one_output_90k_default() {
+    let max = max_policy_inputs(1, 90_000);
+    assert_eq!(max, 607);
+  }
+
+  #[test]
+  fn max_policy_inputs_zero_when_budget_too_small() {
+    let max = max_policy_inputs(1000, 10);
+    assert_eq!(max, 0);
+  }
+
+  #[test]
+  fn max_policy_inputs_upper_bound() {
+    let max = max_policy_inputs(1, 100_000);
+    assert!(max <= 675);
+  }
+
+  #[test]
+  fn estimate_fee_from_bytes_one_input() {
+    let bytes = estimate_legacy_tx_bytes(1, 1);
+    let fee = estimate_fee_from_bytes(bytes, 1000);
+    assert!(fee > 0.0);
+    let expected = (bytes as f64 * 1000.0) / 100_000_000.0;
+    assert!((fee - expected).abs() < 1e-12);
+  }
+
+  #[test]
+  fn estimate_fee_from_bytes_consistency() {
+    let bytes = estimate_legacy_tx_bytes(100, 1);
+    let fee = estimate_fee_from_bytes(bytes, 1000);
+    assert!(fee > 0.0);
+    assert!(fee < 1.0);
+  }
+
+  #[test]
+  fn format_hemp_amount_precision() {
+    assert_eq!(format_hemp_amount(1.5), "1.50000000");
+    assert_eq!(format_hemp_amount(0.00000546), "0.00000546");
+    assert_eq!(format_hemp_amount(0.0), "0.00000000");
+  }
+
+  #[test]
+  fn sat_to_hemp_conversion() {
+    assert_eq!(sat_to_hemp(100_000_000), 1.0);
+    assert_eq!(sat_to_hemp(546), 0.00000546);
+    assert_eq!(sat_to_hemp(1), 0.00000001);
+  }
+
+  #[test]
+  fn max_policy_inputs_rejects_oversized_selection() {
+    let safe_max = max_policy_inputs(1, 100_000);
+    let oversized = safe_max + 1;
+    let bytes = estimate_legacy_tx_bytes(oversized, 1);
+    assert!(bytes > 100_000);
+  }
+
+  #[test]
+  fn max_policy_inputs_with_target_90k_is_safe() {
+    let safe_max = max_policy_inputs(1, 90_000);
+    let bytes = estimate_legacy_tx_bytes(safe_max, 1);
+    assert!(bytes < 100_000);
+    assert!(bytes <= 90_000);
+  }
+
+  #[test]
+  fn size_based_fee_consistency_single_vs_multi_input() {
+    let fee_1 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(1, 1), 1000);
+    let fee_10 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(10, 1), 1000);
+    assert!(fee_10 > fee_1);
+    assert!((fee_10 / fee_1 - 1.0) > 0.1);
+  }
+
+  #[test]
+  fn planner_rejects_empty_utxo_set_conceptually() {
+    assert!(max_policy_inputs(1, 90_000) >= 2);
+    assert!(max_policy_inputs(1, 100) == 0);
   }
 }

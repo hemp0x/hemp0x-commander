@@ -25,6 +25,23 @@
     let previewing = false;
     let broadcasting = false;
     let status = "";
+    let policyDiag = null;
+    let showPlanModal = false;
+    let planData = null;
+    let planning = false;
+    let estimatedSelectedBytes = 0;
+    let estimatedSelectedFee = "0.00000000";
+
+    $: safeUtxoCount = (() => {
+        let count = 0;
+        for (const u of utxos) {
+            if (!isUnsafe(u)) count++;
+        }
+        return count;
+    })();
+
+    $: maxSafeInputs = policyDiag?.max_safe_inputs_for_one_output || 607;
+    $: exceedsOneRoundMax = safeUtxoCount > maxSafeInputs;
 
     $: filteredUtxos = (() => {
         return utxos.filter((u) => {
@@ -63,12 +80,16 @@
 
     function calculateTotal() {
         let sum = 0;
+        let count = 0;
         for (const u of filteredUtxos) {
             if (selectedIds.has(`${u.txid}:${u.vout}`)) {
                 sum += u.amount;
+                count++;
             }
         }
         totalSelected = sum;
+        estimatedSelectedBytes = 10 + count * 148 + 1 * 34;
+        estimatedSelectedFee = ((estimatedSelectedBytes * 1000) / 100000000).toFixed(8);
     }
 
     function toggleUtxo(id) {
@@ -94,6 +115,52 @@
         }
         selectedIds = selectedIds;
         calculateTotal();
+    }
+
+    function selectAllSafe() {
+        clearSelected();
+        for (const u of filteredUtxos) {
+            if (!isUnsafe(u)) {
+                selectedIds.add(`${u.txid}:${u.vout}`);
+            }
+        }
+        selectedIds = selectedIds;
+        calculateTotal();
+    }
+
+    function selectSafeMax() {
+        clearSelected();
+        const safe = filteredUtxos
+            .filter((u) => !isUnsafe(u))
+            .sort((a, b) => a.amount - b.amount);
+        const maxInputs = policyDiag?.max_safe_inputs_for_one_output || 607;
+        for (let i = 0; i < Math.min(safe.length, maxInputs); i++) {
+            selectedIds.add(`${safe[i].txid}:${safe[i].vout}`);
+        }
+        selectedIds = selectedIds;
+        calculateTotal();
+    }
+
+    async function handlePlanBatches() {
+        if (!tauriReady || planning) return;
+        planning = true;
+        planData = null;
+        status = "Building consolidation plan...";
+        try {
+            planData = await core.invoke("plan_wallet_consolidation", {
+                destination: destination.trim() || null,
+                targetFinalUtxoCount: null,
+                maxRounds: null,
+                targetMaxTxBytes: null,
+            });
+            status = "";
+            showPlanModal = true;
+        } catch (err) {
+            status = "Plan failed: " + err;
+            planData = null;
+        } finally {
+            planning = false;
+        }
     }
 
     function clearSelected() {
@@ -125,6 +192,7 @@
         try {
             utxos = await core.invoke("list_utxos");
             utxos.sort((a, b) => b.amount - a.amount);
+            policyDiag = await core.invoke("get_policy_diagnostics");
         } catch (err) {
             showToast("Failed to list UTXOs: " + err, "error");
         }
@@ -343,7 +411,8 @@
             />
         </div>
         <div class="filter-group actions-right">
-            <button class="cyber-btn ghost" on:click={selectAll}>SELECT ALL</button>
+            <button class="cyber-btn ghost" on:click={selectAllSafe}>SEL ALL SAFE</button>
+            <button class="cyber-btn ghost" on:click={selectSafeMax}>SEL SAFE MAX</button>
             <button class="cyber-btn ghost" on:click={clearSelected}>CLEAR</button>
             <button class="cyber-btn" on:click={() => fetchUtxos(false)} disabled={loading}>
                 {loading ? "LOADING..." : "REFRESH"}
@@ -357,12 +426,28 @@
             <span class="stat-value mono">{filteredUtxos.length}</span>
         </span>
         <span class="stat-item">
+            <span class="stat-label">SAFE:</span>
+            <span class="stat-value mono">{safeUtxoCount}</span>
+        </span>
+        <span class="stat-item">
+            <span class="stat-label">MAX/ROUND:</span>
+            <span class="stat-value mono neon">{maxSafeInputs}</span>
+        </span>
+        <span class="stat-item">
             <span class="stat-label">SELECTED:</span>
             <span class="stat-value mono neon">{selectedCount}</span>
         </span>
         <span class="stat-item">
             <span class="stat-label">TOTAL:</span>
             <span class="stat-value mono neon">{formatAmount(totalSelected)} HEMP</span>
+        </span>
+        <span class="stat-item">
+            <span class="stat-label">EST TX:</span>
+            <span class="stat-value mono">{estimatedSelectedBytes}B</span>
+        </span>
+        <span class="stat-item">
+            <span class="stat-label">EST FEE:</span>
+            <span class="stat-value mono">{estimatedSelectedFee}</span>
         </span>
         {#if unsafeCount() > 0}
             <span class="stat-item warn">
@@ -371,6 +456,12 @@
             </span>
         {/if}
     </div>
+
+    {#if exceedsOneRoundMax}
+        <div class="warning-banner">
+            <span>&#9888; Safe UTXO count ({safeUtxoCount}) exceeds one-round max ({maxSafeInputs}). Multi-round consolidation recommended.</span>
+        </div>
+    {/if}
 
     <div class="utxo-list">
         {#if loading}
@@ -444,6 +535,13 @@
             on:click={handlePreview}
         >
             {broadcasting ? "BROADCASTING..." : previewing ? "PREVIEWING..." : "PREVIEW CONSOLIDATION"}
+        </button>
+        <button
+            class="cyber-btn"
+            disabled={safeUtxoCount < 2 || planning}
+            on:click={handlePlanBatches}
+        >
+            {planning ? "PLANNING..." : "PLAN BATCHES"}
         </button>
         {#if status}
             <span class="status-text mono">{status}</span>
@@ -522,6 +620,77 @@
                 </button>
                 <button class="btn-confirm" on:click={executeConsolidation} disabled={broadcasting}>
                     {broadcasting ? "[ BROADCASTING... ]" : "[ CONFIRM CONSOLIDATION ]"}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if showPlanModal}
+    <div
+        class="modal-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cons-plan-title"
+        tabindex="0"
+        on:click={() => (showPlanModal = false)}
+        on:keydown={(e) => e.key === "Escape" && (showPlanModal = false)}
+    >
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+        <div class="modal-box plan-modal" role="document" on:click|stopPropagation>
+            <div class="modal-header">
+                <span class="header-icon">&#9776;</span>
+                <h2 id="cons-plan-title">CONSOLIDATION PLAN</h2>
+            </div>
+
+            <div class="modal-body">
+                {#if planData}
+                    <div class="tx-detail">
+                        <span class="label">INITIAL UTXOS:</span>
+                        <span class="value">{planData.initial_utxo_count}</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">PROJECTED FINAL:</span>
+                        <span class="value neon">{planData.projected_final_utxo_count}</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">MAX INPUTS/ROUND:</span>
+                        <span class="value">{planData.max_inputs_per_round}</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">TARGET TX BYTES:</span>
+                        <span class="value">{planData.target_max_tx_bytes}</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">TOTAL EST FEE:</span>
+                        <span class="value neon">{planData.total_estimated_fee} HEMP</span>
+                    </div>
+
+                    {#if planData.rounds && planData.rounds.length > 0}
+                        <div class="plan-rounds-section">
+                            <span class="section-header">ROUNDS ({planData.rounds.length})</span>
+                            {#each planData.rounds as round}
+                                <div class="plan-round">
+                                    <span class="round-label">#{round.round_number}</span>
+                                    <div class="round-details">
+                                        <span class="round-stat">{round.input_count} inputs</span>
+                                        <span class="round-stat">{round.input_total} HEMP</span>
+                                        <span class="round-stat">{round.estimated_bytes}B</span>
+                                        <span class="round-stat">{round.fee_estimate} HEMP fee</span>
+                                        <span class="round-stat-out">{round.projected_output} HEMP out</span>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    {:else}
+                        <div class="empty-state" style="padding:1rem;">No rounds planned. UTXO count is already at target or insufficient inputs.</div>
+                    {/if}
+                {/if}
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn-cancel" on:click={() => (showPlanModal = false)}>
+                    [ CLOSE ]
                 </button>
             </div>
         </div>
@@ -1072,5 +1241,76 @@
     .btn-confirm:disabled {
         opacity: 0.4;
         cursor: not-allowed;
+    }
+
+    .warning-banner {
+        background: rgba(255, 170, 0, 0.12);
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        border-radius: 4px;
+        padding: 0.4rem 0.6rem;
+        font-size: 0.65rem;
+        color: #ffaa00;
+        flex-shrink: 0;
+        font-family: var(--font-mono);
+        letter-spacing: 0.3px;
+    }
+
+    .plan-modal {
+        width: 620px;
+        max-width: 90vw;
+    }
+
+    .plan-rounds-section {
+        margin-top: 0.8rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 0.8rem;
+    }
+
+    .section-header {
+        display: block;
+        color: var(--color-primary);
+        font-size: 0.7rem;
+        font-weight: bold;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-bottom: 0.5rem;
+    }
+
+    .plan-round {
+        background: rgba(0, 255, 65, 0.04);
+        border-left: 3px solid var(--color-primary);
+        border-radius: 0 4px 4px 0;
+        padding: 0.4rem 0.6rem;
+        margin-bottom: 0.4rem;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+
+    .round-label {
+        color: var(--color-primary);
+        font-weight: bold;
+        font-size: 0.75rem;
+        font-family: var(--font-mono);
+        min-width: 30px;
+    }
+
+    .round-details {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 0.8rem;
+    }
+
+    .round-stat {
+        color: #ccc;
+        font-size: 0.65rem;
+        font-family: var(--font-mono);
+    }
+
+    .round-stat-out {
+        color: var(--color-primary);
+        font-size: 0.65rem;
+        font-family: var(--font-mono);
+        font-weight: bold;
     }
 </style>

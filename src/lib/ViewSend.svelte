@@ -48,6 +48,10 @@
     let estimatedFee = 0.01; // Increased default fee to satisfy min relay fee
     let previewing = false; // In-flight guard for advanced preview/journal entry
     let broadcasting = false; // In-flight guard for advanced broadcast
+    let estimatedSelectedTxBytes = 0;
+    let policyDiag = null;
+
+    $: maxSafeInputsForSend = policyDiag?.max_safe_inputs_for_two_outputs || 675;
 
     // --- CONFIRMATION MODAL ---
     let showConfirmModal = false;
@@ -182,6 +186,17 @@
             }
             if (selectedUtxos.size === 0) {
                 status = "Select at least one UTXO.";
+                return;
+            }
+
+            const maxForTwoOutputs = maxSafeInputsForSend;
+            if (selectedUtxos.size > maxForTwoOutputs) {
+                status = `Selected ${selectedUtxos.size} UTXOs exceeds policy limit of ${maxForTwoOutputs} for a two-output transaction. Reduce selection or consolidate first.`;
+                return;
+            }
+
+            if (estimatedSelectedTxBytes > 100000) {
+                status = `Estimated tx size ${estimatedSelectedTxBytes}B exceeds 100,000 byte relay limit. Reduce selected UTXOs.`;
                 return;
             }
 
@@ -600,10 +615,13 @@
         if (!tauriReady) return;
         try {
             const data = await core.invoke("list_utxos");
-            // Relaxed filter: Show everything that isn't explicitly false, handle missing keys
             utxos = data.sort((a, b) => b.amount - a.amount);
-            // Prune selected UTXOs that no longer exist in refreshed set
             pruneSelection(utxos);
+            try {
+                policyDiag = await core.invoke("get_policy_diagnostics");
+            } catch (e) {
+                policyDiag = null;
+            }
         } catch (e) {
             console.error("Failed to list UTXOs", e);
             status = "Error fetching UTXOs";
@@ -653,12 +671,28 @@
 
     function calculateSelectedTotal() {
         let sum = 0;
+        let count = 0;
         for (const u of utxos) {
             if (selectedUtxos.has(`${u.txid}:${u.vout}`)) {
                 sum += u.amount;
+                count++;
             }
         }
         totalSelected = sum;
+        estimatedSelectedTxBytes = 10 + count * 148 + 2 * 34;
+    }
+
+    function selectSafeMax() {
+        selectedUtxos = new Set();
+        const safe = utxos
+            .filter((u) => !isUnsafe(u))
+            .sort((a, b) => b.amount - a.amount);
+        const maxInputs = maxSafeInputsForSend;
+        for (let i = 0; i < Math.min(safe.length, maxInputs); i++) {
+            selectedUtxos.add(`${safe[i].txid}:${safe[i].vout}`);
+        }
+        selectedUtxos = selectedUtxos;
+        calculateSelectedTotal();
     }
 
     async function executeAdvancedSend() {
@@ -837,6 +871,15 @@
                     >
                         [ SELECT UTXOS ({selectedUtxos.size}) ]
                     </button>
+                    {#if estimatedSelectedTxBytes > 0}
+                        <div class="utxo-estimate">
+                            Selected: {estimatedSelectedTxBytes}B |
+                            Max safe: {maxSafeInputsForSend} inputs
+                            {#if policyDiag?.current_safe_utxo_count > maxSafeInputsForSend}
+                                <span class="frag-warn"> | Wallet fragmented — consider consolidation</span>
+                            {/if}
+                        </div>
+                    {/if}
                 </div>
             {/if}
 
@@ -1024,9 +1067,10 @@
             <div class="modal-header">
                 <h2>SELECT COINS</h2>
                 <div class="utxo-stats">
-                    <span>SELECTED: {formatAmount(totalSelected)}</span>
-                    <span>COUNT: {selectedUtxos.size}</span>
-                </div>
+                <span>SELECTED: {formatAmount(totalSelected)}</span>
+                <span>COUNT: {selectedUtxos.size}</span>
+                <span>EST: {estimatedSelectedTxBytes}B</span>
+            </div>
             </div>
 
             <div class="utxo-list">
@@ -1091,6 +1135,10 @@
             </div>
 
             <div class="modal-footer">
+                <button
+                    class="btn-confirm"
+                    on:click={selectSafeMax}>[ SELECT SAFE MAX ]</button
+                >
                 <button
                     class="btn-confirm"
                     on:click={() => (showUtxoModal = false)}>[ DONE ]</button
@@ -2070,6 +2118,18 @@
     .utxo-select-btn:hover {
         border-color: var(--color-primary);
         color: #fff;
+    }
+
+    .utxo-estimate {
+        font-size: 0.6rem;
+        color: #666;
+        font-family: var(--font-mono);
+        margin-top: 0.2rem;
+    }
+
+    .frag-warn {
+        color: #ffaa00;
+        font-weight: bold;
     }
 
     /* UTXO MODAL STYLES */

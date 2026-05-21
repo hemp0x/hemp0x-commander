@@ -321,6 +321,36 @@ pub struct SnapshotData {
 }
 
 #[derive(Serialize)]
+pub struct ConsolidationRoundPlan {
+  pub round_number: u32,
+  pub input_count: usize,
+  pub input_total: String,
+  pub estimated_bytes: u64,
+  pub fee_estimate: String,
+  pub projected_output: String,
+  pub selected_outpoints: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ConsolidationPlan {
+  pub initial_utxo_count: usize,
+  pub projected_final_utxo_count: usize,
+  pub max_inputs_per_round: usize,
+  pub target_max_tx_bytes: u64,
+  pub total_estimated_fee: String,
+  pub rounds: Vec<ConsolidationRoundPlan>,
+}
+
+#[derive(Serialize)]
+pub struct PolicyDiagnostics {
+  pub current_safe_utxo_count: usize,
+  pub max_safe_inputs_for_one_output: usize,
+  pub max_safe_inputs_for_two_outputs: usize,
+  pub estimated_selected_tx_bytes: u64,
+  pub estimated_selected_fee: String,
+}
+
+#[derive(Serialize)]
 pub struct RewardDistributionPreview {
   pub operation_type: String,
   pub asset_name: String,

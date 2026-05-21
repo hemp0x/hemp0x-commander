@@ -98,6 +98,15 @@ pub fn run() {
       commands::distribute_reward,
       commands::get_distribute_reward_status,
 
+      // Messaging Commands
+      commands::get_messaging_info,
+      commands::view_asset_messages,
+      commands::view_message_channels,
+      commands::subscribe_to_channel,
+      commands::unsubscribe_from_channel,
+      commands::preview_send_announcement,
+      commands::send_announcement,
+
       // Commands from modules::process
       process::start_node,
       process::stop_node,

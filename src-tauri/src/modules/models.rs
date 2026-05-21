@@ -366,3 +366,41 @@ pub struct RewardDistributionPreview {
   pub is_irreversible: bool,
   pub validated: bool,
 }
+
+#[derive(Serialize)]
+pub struct AssetMessageEntry {
+  pub asset_name: String,
+  pub message: String,
+  pub time: String,
+  pub block_height: i64,
+  pub status: String,
+  pub expire_time: Option<String>,
+  pub expire_utc_time: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct MessagingInfo {
+  pub enabled: bool,
+  pub messaging_active: bool,
+  pub restricted_active: bool,
+  pub activation_block: i64,
+  pub databases_available: bool,
+  pub caches_available: bool,
+  pub message_count: i64,
+  pub channel_count: i64,
+  pub dirty_cache_size_bytes: i64,
+  pub wallet_available: bool,
+  pub warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct AssetAnnouncementPreview {
+  pub channel_name: String,
+  pub ipfs_hash: String,
+  pub expire_time: Option<i64>,
+  pub has_ownership: bool,
+  pub is_irreversible: bool,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub validated: bool,
+}

@@ -160,6 +160,7 @@ const ALLOWED_METHODS: &[&str] = &[
     "getblockcount",
     "getinfo",
     "getmempoolinfo",
+    "getmessaginginfo",
     "getmininginfo",
     "getnetworkinfo",
     "getpeerinfo",
@@ -168,6 +169,8 @@ const ALLOWED_METHODS: &[&str] = &[
     "listtransactions",
     "listunspent",
     "estimatesmartfee",
+    "viewallmessages",
+    "viewallmessagechannels",
 ];
 
 #[tauri::command]
@@ -370,6 +373,9 @@ mod tests {
         assert!(ALLOWED_METHODS.contains(&"listtransactions"));
         assert!(ALLOWED_METHODS.contains(&"listunspent"));
         assert!(ALLOWED_METHODS.contains(&"estimatesmartfee"));
+        assert!(ALLOWED_METHODS.contains(&"getmessaginginfo"));
+        assert!(ALLOWED_METHODS.contains(&"viewallmessages"));
+        assert!(ALLOWED_METHODS.contains(&"viewallmessagechannels"));
     }
 
     #[test]
@@ -386,6 +392,10 @@ mod tests {
         assert!(!ALLOWED_METHODS.contains(&"walletpassphrase"));
         assert!(!ALLOWED_METHODS.contains(&"encryptwallet"));
         assert!(!ALLOWED_METHODS.contains(&"dumpwallet"));
+        assert!(!ALLOWED_METHODS.contains(&"sendmessage"));
+        assert!(!ALLOWED_METHODS.contains(&"subscribetochannel"));
+        assert!(!ALLOWED_METHODS.contains(&"unsubscribefromchannel"));
+        assert!(!ALLOWED_METHODS.contains(&"clearmessages"));
     }
 
     #[test]

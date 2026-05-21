@@ -3404,6 +3404,220 @@ pub fn get_distribute_reward_status(
 }
 
 // ---------------------------------------------------------------------------
+// On-Chain Messaging Operations
+// ---------------------------------------------------------------------------
+
+fn validate_channel_name(name: &str) -> Result<String, String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Channel name is required".to_string());
+  }
+  if trimmed.len() > 128 {
+    return Err("Channel name is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace()) {
+    return Err("Channel name cannot contain whitespace".to_string());
+  }
+  Ok(trimmed.to_string())
+}
+
+fn message_authority_asset_name(channel_name: &str) -> String {
+  if channel_name.ends_with('!') || channel_name.contains('~') {
+    channel_name.to_string()
+  } else {
+    format!("{channel_name}!")
+  }
+}
+
+fn validate_ipfs_hash(hash: &str) -> Result<String, String> {
+  let trimmed = hash.trim();
+  if trimmed.is_empty() {
+    return Err("IPFS hash is required for message content".to_string());
+  }
+  if trimmed.len() > 64 {
+    return Err("IPFS hash is too long".to_string());
+  }
+  Ok(trimmed.to_string())
+}
+
+fn validate_message_expire_time(expire_time: Option<i64>) -> Result<Option<i64>, String> {
+  if let Some(expire_time) = expire_time {
+    if expire_time <= 0 {
+      return Err("Expire time must be a positive UTC timestamp".to_string());
+    }
+    Ok(Some(expire_time))
+  } else {
+    Ok(None)
+  }
+}
+
+fn wallet_owns_asset(asset_name: &str) -> bool {
+  match run_cli(&[
+    String::from("listmyassets"),
+    asset_name.to_string(),
+    String::from("true"),
+  ]) {
+    Ok(raw) => {
+      if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+        asset_balance_from_listmyassets(&value, asset_name).unwrap_or(0.0) > 0.0
+      } else {
+        false
+      }
+    }
+    Err(_) => false,
+  }
+}
+
+fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
+  let expire_time = value.get("Expire Time").and_then(|v| v.as_str()).map(|s| s.to_string());
+  let expire_utc_time = value.get("Expire UTC Time").and_then(|v| v.as_i64());
+  AssetMessageEntry {
+    asset_name: value.get("Asset Name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    message: value.get("Message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    time: value.get("Time").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    block_height: value.get("Block Height").and_then(|v| v.as_i64()).unwrap_or(0),
+    status: value.get("Status").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_string(),
+    expire_time,
+    expire_utc_time,
+  }
+}
+
+fn parse_channel_name_list(value: &serde_json::Value) -> Vec<String> {
+  value.as_array()
+    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    .unwrap_or_default()
+}
+
+fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
+  let warnings: Vec<String> = value.get("warnings")
+    .and_then(|w| w.as_array())
+    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    .unwrap_or_default();
+
+  MessagingInfo {
+    enabled: value.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+    messaging_active: value.get("messaging_active").and_then(|v| v.as_bool()).unwrap_or(false),
+    restricted_active: value.get("restricted_active").and_then(|v| v.as_bool()).unwrap_or(false),
+    activation_block: value.get("activation_block").and_then(|v| v.as_i64()).unwrap_or(0),
+    databases_available: value.get("databases_available").and_then(|v| v.as_bool()).unwrap_or(false),
+    caches_available: value.get("caches_available").and_then(|v| v.as_bool()).unwrap_or(false),
+    message_count: value.get("message_count").and_then(|v| v.as_i64()).unwrap_or(0),
+    channel_count: value.get("channel_count").and_then(|v| v.as_i64()).unwrap_or(0),
+    dirty_cache_size_bytes: value.get("dirty_cache_size_bytes").and_then(|v| v.as_i64()).unwrap_or(0),
+    wallet_available: value.get("wallet_available").and_then(|v| v.as_bool()).unwrap_or(false),
+    warnings,
+  }
+}
+
+#[tauri::command]
+pub fn get_messaging_info() -> Result<MessagingInfo, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("getmessaginginfo")])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  Ok(parse_messaging_info(&value))
+}
+
+#[tauri::command]
+pub fn view_asset_messages() -> Result<Vec<AssetMessageEntry>, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("viewallmessages")])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let messages: Vec<AssetMessageEntry> = value.as_array()
+    .map(|arr| arr.iter().map(parse_message_entry).collect())
+    .unwrap_or_default();
+  Ok(messages)
+}
+
+#[tauri::command]
+pub fn view_message_channels() -> Result<Vec<String>, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("viewallmessagechannels")])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  Ok(parse_channel_name_list(&value))
+}
+
+#[tauri::command]
+pub fn subscribe_to_channel(channel_name: String) -> Result<String, String> {
+  ensure_config()?;
+  validate_channel_name(&channel_name)?;
+  run_cli(&[String::from("subscribetochannel"), channel_name])
+}
+
+#[tauri::command]
+pub fn unsubscribe_from_channel(channel_name: String) -> Result<String, String> {
+  ensure_config()?;
+  validate_channel_name(&channel_name)?;
+  run_cli(&[String::from("unsubscribefromchannel"), channel_name])
+}
+
+#[tauri::command]
+pub fn preview_send_announcement(
+  channel_name: String,
+  ipfs_hash: String,
+  expire_time: Option<i64>,
+) -> Result<AssetAnnouncementPreview, String> {
+  ensure_config()?;
+  let channel_name = validate_channel_name(&channel_name)?;
+  let ipfs_hash = validate_ipfs_hash(&ipfs_hash)?;
+  let expire_time = validate_message_expire_time(expire_time)?;
+  let authority_asset = message_authority_asset_name(&channel_name);
+
+  let has_ownership = wallet_owns_asset(&authority_asset);
+
+  let mut warnings = Vec::new();
+  if !has_ownership {
+    warnings.push("You do not appear to hold the channel asset. Sending a message requires owning the channel asset and that wallet unlock may be required.".to_string());
+  }
+  warnings.push("Sending a message is an on-chain broadcast that creates a transaction. This is irreversible and requires wallet unlock.".to_string());
+
+  let summary = format!(
+    "Send announcement on '{}' with IPFS hash {}",
+    channel_name, ipfs_hash
+  );
+
+  Ok(AssetAnnouncementPreview {
+    channel_name,
+    ipfs_hash,
+    expire_time,
+    has_ownership,
+    is_irreversible: true,
+    warnings,
+    summary,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn send_announcement(
+  channel_name: String,
+  ipfs_hash: String,
+  expire_time: Option<i64>,
+) -> Result<String, String> {
+  ensure_config()?;
+  let channel_name = validate_channel_name(&channel_name)?;
+  let ipfs_hash = validate_ipfs_hash(&ipfs_hash)?;
+  let expire_time = validate_message_expire_time(expire_time)?;
+  let authority_asset = message_authority_asset_name(&channel_name);
+
+  if !wallet_owns_asset(&authority_asset) {
+    return Err(format!(
+      "Wallet does not currently own the channel authority asset ({authority_asset}). Refresh and preview again."
+    ));
+  }
+
+  let mut args = vec![
+    String::from("sendmessage"),
+    channel_name,
+    ipfs_hash,
+  ];
+  if let Some(expire) = expire_time {
+    args.push(format!("{expire}"));
+  }
+
+  normalize_cli_txid(run_cli(&args)?)
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -3421,6 +3635,9 @@ mod tests {
     estimate_legacy_tx_bytes, max_policy_inputs, estimate_fee_from_bytes,
     format_hemp_amount, sat_to_hemp, validate_fee_rate_sat_per_byte,
     hemp_to_sat,
+    validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
+    message_authority_asset_name,
+    parse_message_entry, parse_channel_name_list, parse_messaging_info,
   };
 
   #[test]
@@ -4369,5 +4586,181 @@ mod tests {
     let fee_1 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1);
     let fee_1000 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1000);
     assert!(fee_1000 > fee_1);
+  }
+
+  // --- Channel Name Validation Tests ---
+
+  #[test]
+  fn valid_channel_name_passes() {
+    assert!(validate_channel_name("MESSAGING!").is_ok());
+    assert!(validate_channel_name("MESSAGING~CHAN").is_ok());
+    assert!(validate_channel_name("ASSET").is_ok());
+  }
+
+  #[test]
+  fn empty_channel_name_fails() {
+    assert!(validate_channel_name("").is_err());
+    assert!(validate_channel_name("   ").is_err());
+  }
+
+  #[test]
+  fn channel_name_with_whitespace_fails() {
+    assert!(validate_channel_name("MY CHAN").is_err());
+  }
+
+  #[test]
+  fn overly_long_channel_name_fails() {
+    let long_name = "A".repeat(129);
+    assert!(validate_channel_name(&long_name).is_err());
+  }
+
+  #[test]
+  fn message_authority_asset_adds_owner_for_root_asset() {
+    assert_eq!(message_authority_asset_name("TOKEN"), "TOKEN!");
+    assert_eq!(message_authority_asset_name("TOKEN!"), "TOKEN!");
+    assert_eq!(message_authority_asset_name("TOKEN~NEWS"), "TOKEN~NEWS");
+  }
+
+  // --- IPFS Hash Validation Tests ---
+
+  #[test]
+  fn valid_ipfs_hash_passes() {
+    assert!(validate_ipfs_hash("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26").is_ok());
+    assert!(validate_ipfs_hash("bafkreid").is_ok());
+  }
+
+  #[test]
+  fn empty_ipfs_hash_fails() {
+    assert!(validate_ipfs_hash("").is_err());
+    assert!(validate_ipfs_hash("   ").is_err());
+  }
+
+  #[test]
+  fn overly_long_ipfs_hash_fails() {
+    let long_hash = "Q".repeat(65);
+    assert!(validate_ipfs_hash(&long_hash).is_err());
+  }
+
+  #[test]
+  fn message_expire_time_must_be_positive_when_present() {
+    assert_eq!(validate_message_expire_time(None).unwrap(), None);
+    assert_eq!(validate_message_expire_time(Some(1737500000)).unwrap(), Some(1737500000));
+    assert!(validate_message_expire_time(Some(0)).is_err());
+    assert!(validate_message_expire_time(Some(-1)).is_err());
+  }
+
+  // --- Message Entry Parsing Tests ---
+
+  #[test]
+  fn parses_message_entry_from_valid_json() {
+    let json = serde_json::json!({
+      "Asset Name": "MESSAGING!",
+      "Message": "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26",
+      "Time": "2025-01-15 10:30:00",
+      "Block Height": 12345,
+      "Status": "UNREAD",
+      "Expire Time": "2026-01-15 10:30:00"
+    });
+    let entry = parse_message_entry(&json);
+    assert_eq!(entry.asset_name, "MESSAGING!");
+    assert_eq!(entry.message, "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26");
+    assert_eq!(entry.time, "2025-01-15 10:30:00");
+    assert_eq!(entry.block_height, 12345);
+    assert_eq!(entry.status, "UNREAD");
+    assert_eq!(entry.expire_time, Some("2026-01-15 10:30:00".to_string()));
+  }
+
+  #[test]
+  fn parses_message_entry_missing_fields_default() {
+    let json = serde_json::json!({});
+    let entry = parse_message_entry(&json);
+    assert_eq!(entry.asset_name, "");
+    assert_eq!(entry.message, "");
+    assert_eq!(entry.status, "UNKNOWN");
+  }
+
+  #[test]
+  fn parses_message_entry_with_expire_utc_time() {
+    let json = serde_json::json!({
+      "Asset Name": "CHANNEL",
+      "Message": "QmHash",
+      "Time": "2025-01-15 10:30:00",
+      "Block Height": 100,
+      "Status": "READ",
+      "Expire UTC Time": 1737500000
+    });
+    let entry = parse_message_entry(&json);
+    assert_eq!(entry.expire_utc_time, Some(1737500000));
+    assert_eq!(entry.expire_time, None);
+  }
+
+  // --- Channel Name List Parsing Tests ---
+
+  #[test]
+  fn parses_channel_name_list_from_json_array() {
+    let json = serde_json::json!(["MESSAGING!", "MESSAGING~ONE", "TOKEN!"]);
+    let list = parse_channel_name_list(&json);
+    assert_eq!(list, vec!["MESSAGING!", "MESSAGING~ONE", "TOKEN!"]);
+  }
+
+  #[test]
+  fn parses_empty_channel_list() {
+    let json = serde_json::json!([]);
+    let list = parse_channel_name_list(&json);
+    assert_eq!(list.len(), 0);
+  }
+
+  #[test]
+  fn parses_null_channel_list_as_empty() {
+    let json = serde_json::json!(null);
+    let list = parse_channel_name_list(&json);
+    assert_eq!(list.len(), 0);
+  }
+
+  // --- Messaging Info Parsing Tests ---
+
+  #[test]
+  fn parses_messaging_info_enabled() {
+    let json = serde_json::json!({
+      "enabled": true,
+      "messaging_active": true,
+      "restricted_active": true,
+      "activation_block": 432,
+      "databases_available": true,
+      "caches_available": true,
+      "message_count": 5,
+      "channel_count": 3,
+      "dirty_cache_size_bytes": 1024,
+      "wallet_available": true,
+      "warnings": []
+    });
+    let info = parse_messaging_info(&json);
+    assert!(info.enabled);
+    assert!(info.messaging_active);
+    assert_eq!(info.activation_block, 432);
+    assert_eq!(info.message_count, 5);
+    assert_eq!(info.channel_count, 3);
+    assert!(info.warnings.is_empty());
+  }
+
+  #[test]
+  fn parses_messaging_info_disabled() {
+    let json = serde_json::json!({
+      "enabled": false,
+      "messaging_active": false,
+      "restricted_active": false,
+      "activation_block": 0,
+      "databases_available": false,
+      "caches_available": false,
+      "message_count": 0,
+      "channel_count": 0,
+      "dirty_cache_size_bytes": 0,
+      "wallet_available": false,
+      "warnings": ["Messaging is disabled via -disablemessaging"]
+    });
+    let info = parse_messaging_info(&json);
+    assert!(!info.enabled);
+    assert_eq!(info.warnings.len(), 1);
+    assert_eq!(info.warnings[0], "Messaging is disabled via -disablemessaging");
   }
 }

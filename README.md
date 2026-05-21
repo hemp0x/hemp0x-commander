@@ -14,7 +14,7 @@
   <br />
 
   [![Website](https://img.shields.io/badge/WEBSITE-hemp0x.com-000000?style=for-the-badge&logo=globe&logoColor=00ff00&labelColor=000000)](https://hemp0x.com)
-  [![Download](https://img.shields.io/badge/DOWNLOAD-v1.3.0-000000?style=for-the-badge&logo=windows&logoColor=00ff00&labelColor=000000)](https://github.com/beyondcr/hemp0x-commander/releases)
+  [![Download](https://img.shields.io/badge/DOWNLOAD-v2.0.0-000000?style=for-the-badge&logo=windows&logoColor=00ff00&labelColor=000000)](https://github.com/beyondcr/hemp0x-commander/releases)
   [![Discord](https://img.shields.io/badge/DISCORD-JOIN_US-000000?style=for-the-badge&logo=discord&logoColor=00ff00&labelColor=000000)](https://discord.gg/FMEKJUwcsu)
   [![Build Guides](https://img.shields.io/badge/DOCS-BUILD_GUIDES-000000?style=for-the-badge&logo=rust&logoColor=00ff00&labelColor=000000)](docs/BUILDING.md)
 </div>
@@ -31,7 +31,7 @@
 
 > [!WARNING]
 > ### ⚠️ STATE: ACTIVE DEVELOPMENT
-> **This software is currently in Beta (v1.3). While functional, it is evolving.**
+> **This software is currently in Beta (v2.0). While functional, it is evolving.**
 >
 > *   🐛 **Expect bugs.**
 > *   🎨 **Expect UI changes.**
@@ -59,7 +59,7 @@
 <br/><br/>
 
 ### Asset Management
-<img src="screenshots/assets.png?v=1.3" width="100%" alt="Asset Creation" />
+<img src="screenshots/assets.png?v=2.0" width="100%" alt="Asset Creation" />
 <br/><br/>
 
 ### Tools & System

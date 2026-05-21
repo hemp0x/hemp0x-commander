@@ -1,6 +1,6 @@
 [package]
 name = "hemp0x-commander"
-version = "1.3.0"
+version = "2.0.0"
 description = "A Tauri App"
 authors = ["Hemp0x Core Team"]
 license = ""

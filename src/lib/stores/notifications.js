@@ -22,6 +22,7 @@ function normalizeNotification(item) {
             typeof item.timestamp === "number" ? item.timestamp : Date.now(),
         read: Boolean(item.read),
         action: item.action && typeof item.action === "object" ? item.action : null,
+        persist: item.persist !== false,
     };
 }
 
@@ -49,9 +50,10 @@ function persist(items) {
     try {
         const storage = getStorage();
         if (!storage) return;
+        const persistedItems = items.filter((item) => item.persist !== false);
         storage.setItem(
             STORAGE_KEY,
-            JSON.stringify(items.slice(0, MAX_ITEMS)),
+            JSON.stringify(persistedItems.slice(0, MAX_ITEMS)),
         );
     } catch {
         // storage full or unavailable
@@ -69,11 +71,6 @@ function severityFromToastType(type) {
     if (type === "success") return "success";
     if (type === "warning") return "warning";
     return "info";
-}
-
-function categoryFromLabel(label) {
-    if (!label) return "system";
-    return label;
 }
 
 function createNotificationStore() {
@@ -111,6 +108,8 @@ function createNotificationStore() {
                 timestamp: now,
                 read: false,
                 action: notification.action || null,
+                persist:
+                    notification.persist ?? notification.severity !== "error",
             };
 
             const next = [entry, ...items].slice(0, MAX_ITEMS);

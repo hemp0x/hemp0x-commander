@@ -1,22 +1,12 @@
 <script>
     import { fade, fly } from "svelte/transition";
-    import {
-        notifications,
-        unreadCount,
-        addToastNotification,
-    } from "../stores/notifications.js";
-
-    export let bridgeToast = null;
+    import { onDestroy } from "svelte";
+    import { notifications, unreadCount } from "../stores/notifications.js";
 
     let panelOpen = false;
     let clearConfirm = false;
     let actionMessage = "";
     let actionMessageTimer;
-
-    $: if (bridgeToast) {
-        addToastNotification(bridgeToast.msg, bridgeToast.type);
-        bridgeToast = null;
-    }
 
     function togglePanel() {
         panelOpen = !panelOpen;
@@ -106,6 +96,10 @@
             actionMessage = "";
         }, 1800);
     }
+
+    onDestroy(() => {
+        clearTimeout(actionMessageTimer);
+    });
 </script>
 
 <svelte:window on:keydown={handleKeydown} />

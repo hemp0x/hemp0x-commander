@@ -338,7 +338,7 @@
         max-height: 480px;
         background: rgba(8, 12, 10, 0.97);
         border: 1px solid rgba(0, 255, 65, 0.2);
-        border-radius: 12px;
+        border-radius: 8px;
         box-shadow:
             0 20px 50px rgba(0, 0, 0, 0.8),
             0 0 20px rgba(0, 255, 65, 0.08);

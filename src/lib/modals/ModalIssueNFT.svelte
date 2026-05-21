@@ -101,7 +101,7 @@
     .glass-modal {
         background: rgba(10, 15, 12, 0.95);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 16px;
+        border-radius: 8px;
         box-shadow:
             0 0 80px rgba(0, 0, 0, 0.8),
             0 0 40px rgba(0, 255, 65, 0.1);
@@ -181,7 +181,7 @@
         padding: 0.7rem 1rem;
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid transparent;
-        border-radius: 10px;
+        border-radius: 8px;
         color: #888;
         font-size: 0.85rem;
         font-family: var(--font-mono);
@@ -192,7 +192,7 @@
         color: #fff;
         padding: 0.7rem 1rem;
         font-size: 0.85rem;
-        border-radius: 10px;
+        border-radius: 8px;
         outline: none;
         width: 100%;
         transition: all 0.2s;
@@ -225,7 +225,7 @@
         font-size: 0.75rem;
         font-weight: 700;
         letter-spacing: 2px;
-        border-radius: 10px;
+        border-radius: 8px;
         cursor: pointer;
         transition: all 0.2s;
         overflow: hidden;
@@ -234,8 +234,8 @@
         background: var(--color-primary);
         color: #000;
         box-shadow:
-            0 0 30px var(--color-primary),
-            0 0 60px rgba(0, 255, 65, 0.3);
+            0 0 20px var(--color-primary),
+            0 0 30px rgba(0, 255, 65, 0.3);
         transform: translateY(-1px);
     }
     .neon-btn:disabled {

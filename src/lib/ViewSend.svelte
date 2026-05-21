@@ -1454,7 +1454,7 @@
                         overflow-y: auto;
                         background: rgba(10, 25, 18, 0.98); 
                         border: 1px solid var(--color-primary); 
-                        border-radius: 12px; 
+                        border-radius: 8px;
                         box-shadow: 0 -4px 30px rgba(0,0,0,0.8);
                         z-index: 50;
                         padding: 1rem;
@@ -1955,12 +1955,12 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 200;
+        z-index: 99999;
         padding: 1rem;
         padding-bottom: 15vh; /* Shifts modal up from center */
-        animation: fadeIn 0.2s ease-out;
+        animation: abFadeIn 0.2s ease-out;
     }
-    @keyframes fadeIn {
+    @keyframes abFadeIn {
         from {
             opacity: 0;
         }
@@ -1971,7 +1971,7 @@
     .ab-modal {
         background: rgba(10, 15, 12, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 12px;
+        border-radius: 8px;
         width: 100%;
         max-width: 550px;
         max-height: 70vh;

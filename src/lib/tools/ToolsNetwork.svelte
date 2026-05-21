@@ -603,19 +603,27 @@
         display: flex;
         justify-content: center;
         align-items: center;
-        animation: fadeIn 0.2s ease-out;
+        animation: toolsNetworkFadeIn 0.2s ease-out;
     }
     .modal-staged {
         background: rgba(10, 15, 12, 0.95);
         border: 1px solid var(--color-primary);
         box-shadow: 0 0 40px rgba(0, 255, 65, 0.15);
-        border-radius: 12px;
+        border-radius: 8px;
         width: 400px;
         max-width: 90vw;
         display: flex;
         flex-direction: column;
         overflow: hidden;
         animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes toolsNetworkFadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
     }
     .modal-header {
         background: rgba(0, 255, 65, 0.05);

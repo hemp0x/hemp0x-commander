@@ -249,7 +249,7 @@
     .gateway-confirm {
         background: rgba(10, 15, 12, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 1rem;
         width: 90%;
         max-width: 380px;

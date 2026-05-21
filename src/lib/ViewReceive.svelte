@@ -296,7 +296,7 @@
         inset: 0.5rem; /* Floating margin */
         z-index: 9999;
         margin: 0;
-        border-radius: 12px;
+        border-radius: 8px;
         background: rgba(8, 12, 10, 0.95);
         backdrop-filter: blur(20px);
         border: 1px solid rgba(0, 255, 65, 0.3);

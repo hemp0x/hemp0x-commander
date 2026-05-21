@@ -105,7 +105,7 @@
         border-color: var(--color-primary) transparent transparent transparent;
     }
 
-    @keyframes fadeIn {
+    @keyframes tooltipFadeIn {
         from {
             opacity: 0;
             transform: translateX(-50%) translateY(4px);

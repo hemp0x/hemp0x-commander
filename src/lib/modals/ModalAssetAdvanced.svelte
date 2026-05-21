@@ -861,7 +861,7 @@
         max-height: 90vh;
         border: 1px solid rgba(0, 255, 65, 0.2);
         box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
-        border-radius: 16px;
+        border-radius: 8px;
         overflow: hidden;
         display: flex;
         flex-direction: column;

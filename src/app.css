@@ -222,7 +222,7 @@ button:active {
   /* Default wide */
   background: rgba(8, 8, 8, 0.96);
   border: 1px solid rgba(0, 255, 65, 0.25);
-  border-radius: 12px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;

@@ -608,7 +608,7 @@
         position: relative;
         background: rgba(10, 15, 12, 0.95);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 16px;
+        border-radius: 8px;
         box-shadow:
             0 0 80px rgba(0, 0, 0, 0.8),
             0 0 40px rgba(0, 255, 65, 0.1);
@@ -753,7 +753,7 @@
         flex: 1;
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 0.6rem;
         color: #aaa;
         font-size: 0.65rem;
@@ -954,12 +954,12 @@
         align-items: center;
         justify-content: center;
         z-index: 10;
-        border-radius: 16px;
+        border-radius: 8px;
     }
     .compose-panel {
         background: rgba(10, 15, 12, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 1rem;
         width: 90%;
         max-width: 400px;

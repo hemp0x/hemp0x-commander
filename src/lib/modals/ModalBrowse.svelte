@@ -44,7 +44,7 @@
     .glass-modal {
         background: rgba(10, 15, 12, 0.95);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 16px;
+        border-radius: 8px;
         box-shadow:
             0 0 80px rgba(0, 0, 0, 0.8),
             0 0 40px rgba(0, 255, 65, 0.1);

@@ -1020,11 +1020,11 @@
             rgba(5, 10, 8, 0.98) 100%
         );
         border: 1px solid rgba(0, 255, 65, 0.15);
-        border-radius: 16px;
+        border-radius: 8px;
         overflow: hidden;
         box-shadow:
-            0 0 60px rgba(0, 0, 0, 0.5),
-            inset 0 0 80px rgba(0, 255, 65, 0.02);
+            0 0 40px rgba(0, 0, 0, 0.5),
+            inset 0 0 30px rgba(0, 255, 65, 0.02);
     }
 
     /* ═══════════════ HEADER / NAV ═══════════════ */
@@ -1165,7 +1165,7 @@
         position: relative;
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 1.2rem;
         cursor: grab;
         transition: all 0.25s;

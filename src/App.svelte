@@ -2042,7 +2042,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 2000;
+    z-index: 30000;
     animation: welcomeFadeIn 0.3s ease-out;
   }
   @keyframes welcomeFadeIn {

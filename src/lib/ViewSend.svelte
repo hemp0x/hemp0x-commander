@@ -17,6 +17,7 @@
         walletInfo as walletStore,
         systemStatus,
     } from "../stores.js";
+    import { addNotification } from "./stores/notifications.js";
 
     // Reactive proxies to maintain API compatibility
     $: tauriReady = $systemStatus.tauriReady;
@@ -305,6 +306,13 @@
                 });
             }
             status = `Sent! ID: ${txid.substr(0, 16)}...`;
+            addNotification({
+                type: "transaction",
+                severity: "success",
+                title: "Transaction Broadcasted",
+                body: `Sent ${amount} ${asset} to ${address.substring(0, 16)}...`,
+                action: { label: "Copy TXID", txid },
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {
@@ -324,6 +332,12 @@
             refreshWalletStatus();
         } catch (err) {
             status = `Error: ${err}`;
+            addNotification({
+                type: "transaction",
+                severity: "error",
+                title: "Transaction Failed",
+                body: String(err),
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {
@@ -830,6 +844,13 @@
             });
 
             status = `Sent! ID: ${txid.substr(0, 16)}...`;
+            addNotification({
+                type: "transaction",
+                severity: "success",
+                title: "Advanced Transaction Broadcasted",
+                body: `Sent ${amount} HEMP (advanced) to ${address.substring(0, 16)}...`,
+                action: { label: "Copy TXID", txid },
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {
@@ -853,6 +874,12 @@
         } catch (err) {
             console.error(err);
             status = `Error: ${err}`;
+            addNotification({
+                type: "transaction",
+                severity: "error",
+                title: "Advanced Transaction Failed",
+                body: String(err),
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {

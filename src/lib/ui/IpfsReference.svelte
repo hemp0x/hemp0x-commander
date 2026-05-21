@@ -3,6 +3,7 @@
     import { core } from "@tauri-apps/api";
     import Tooltip from "./Tooltip.svelte";
     import "../../components.css";
+    import { addNotification } from "../stores/notifications.js";
 
     const dispatch = createEventDispatcher();
 
@@ -80,6 +81,12 @@
             showOpenConfirm = true;
         } catch (err) {
             gatewayError = String(err);
+            addNotification({
+                type: "ipfs",
+                severity: "error",
+                title: "IPFS Gateway Error",
+                body: String(err),
+            });
         }
     }
 

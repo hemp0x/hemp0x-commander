@@ -18,6 +18,7 @@
   import ViewReceive from "./lib/ViewReceive.svelte";
   import ViewAssets from "./lib/ViewAssets.svelte";
   import ViewTools from "./lib/ViewTools.svelte";
+  import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import { APP_VERSION } from "./lib/constants.js";
 
   // --- STATE ---
@@ -621,6 +622,7 @@
     </nav>
 
     <div class="window-controls">
+      <NotificationCenter />
       <div class="status-stack">
         <div class="traffic-lights">
           <!-- Status Traffic Lights -->

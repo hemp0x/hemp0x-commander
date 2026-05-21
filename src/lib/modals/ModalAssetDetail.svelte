@@ -7,6 +7,7 @@
     import Tooltip from "../ui/Tooltip.svelte";
     import IpfsReference from "../ui/IpfsReference.svelte";
     import ModalAlert from "./ModalAlert.svelte";
+    import { addNotification } from "../stores/notifications.js";
 
     const dispatch = createEventDispatcher();
 
@@ -189,8 +190,21 @@
             composePreview = null;
             composeIpfsHash = "";
             composeExpireTime = "";
+            addNotification({
+                type: "message",
+                severity: "success",
+                title: "Announcement Sent",
+                body: `Message sent on channel ${asset.name}`,
+                action: { label: "Copy TXID", txid },
+            });
         } catch (err) {
             composeError = String(err);
+            addNotification({
+                type: "message",
+                severity: "error",
+                title: "Announcement Failed",
+                body: String(err),
+            });
         } finally {
             composeBroadcasting = false;
         }

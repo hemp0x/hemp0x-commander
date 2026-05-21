@@ -14,6 +14,7 @@
   import ToolsHistory from "./tools/ToolsHistory.svelte";
   import ToolsConsolidation from "./tools/ToolsConsolidation.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
+  import { addToastNotification } from "./stores/notifications.js";
 
   let activeSubTab = "CONSOLE";
   let networkMode = "mainnet";
@@ -27,6 +28,7 @@
     clearTimeout(toastTimer);
     toastMsg = msg;
     toastType = type;
+    addToastNotification(msg, type);
     toastTimer = setTimeout(() => {
       toastMsg = "";
     }, 3000);

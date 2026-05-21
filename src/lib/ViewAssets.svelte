@@ -81,6 +81,7 @@
     // Allow parent to pass initial state
 
     import { nodeStatus } from "../stores.js";
+    import { addNotification } from "./stores/notifications.js";
     $: isNodeOnline = $nodeStatus.online;
 
     let nodeOnline = false;
@@ -594,6 +595,13 @@
                 issueType = "root";
             }
             confirmOpen = false;
+            addNotification({
+                type: "asset",
+                severity: "success",
+                title: "Asset Transaction Broadcasted",
+                body: status,
+                action: { label: "Copy TXID", txid },
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {
@@ -611,6 +619,12 @@
             refreshAssets();
         } catch (err) {
             status = "Error: " + err;
+            addNotification({
+                type: "asset",
+                severity: "error",
+                title: "Asset Transaction Failed",
+                body: String(err),
+            });
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {

@@ -57,6 +57,7 @@
   // Runtime notification state tracking (prevents duplicate notifications)
   let coreNextReadyNotified = false;
   let coreNextMismatchNotified = false;
+  let lastDaemonStartSuccessAt = 0;
 
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
@@ -115,6 +116,7 @@
           lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
           addRuntimeNotification("Daemon readiness failed", lastError, "error");
         } else {
+          lastDaemonStartSuccessAt = Date.now();
           addRuntimeNotification("Bundled daemon ready", "", "success");
         }
       } catch (e) {
@@ -304,13 +306,17 @@
       lastKnownDashboard = data;
       dashboardFailCount = 0;
 
-      const wasOffline = nodeInfo.state !== "RUNNING";
+      const wasNotRunning = nodeInfo.state !== "RUNNING";
       nodeInfo = data.node;
       walletInfo = data.wallet;
       recentTx = data.tx;
       lastError = "";
 
-      if (wasOffline && data.node.state === "RUNNING") {
+      if (
+        wasNotRunning &&
+        data.node.state === "RUNNING" &&
+        Date.now() - lastDaemonStartSuccessAt > 5000
+      ) {
         addRuntimeNotification("Daemon running", "Node is connected and responding.", "success");
       }
 
@@ -442,7 +448,15 @@
     addRuntimeNotification("Daemon start requested", "", "info");
     try {
       await core.invoke("start_node");
-      addRuntimeNotification("Daemon started", "", "success");
+      const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 25000 });
+      daemonRuntime.update((d) => ({ ...d, readiness }));
+      if (!readiness.ready) {
+        lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
+        addRuntimeNotification("Daemon readiness failed", lastError, "error");
+      } else {
+        lastDaemonStartSuccessAt = Date.now();
+        addRuntimeNotification("Daemon started", "", "success");
+      }
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to start node");
@@ -580,6 +594,7 @@
                 lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
                 addRuntimeNotification("Daemon readiness failed", lastError, "error");
               } else {
+                lastDaemonStartSuccessAt = Date.now();
                 addRuntimeNotification("Daemon started (auto)", "", "success");
               }
               conflictResolved = true;

@@ -317,6 +317,11 @@
         } catch (err) {
             status = "Preview failed: " + err;
             previewData = null;
+            addToolNotification(
+                "Consolidation preview failed",
+                String(err).substring(0, 200),
+                "error",
+            );
         } finally {
             previewing = false;
         }

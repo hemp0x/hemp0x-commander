@@ -346,7 +346,7 @@ pub fn extract_binaries(target_dir: String) -> Result<String, String> {
     return Err("Target directory does not exist".to_string());
   }
 
-  let bins = ["hemp0xd", "hemp0x-cli"];
+  let bins = ["hemp0xd", "hemp0x-cli", "hemp0x-tx"];
   let mut extracted = Vec::new();
 
   for bin in bins {

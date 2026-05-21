@@ -16,6 +16,9 @@ src-tauri/hemp0xd
 src-tauri/hemp0xd-*
 src-tauri/hemp0x-cli
 src-tauri/hemp0x-cli-*
+src-tauri/hemp0x-tx
+src-tauri/hemp0x-tx-*
+src-tauri/binaries/
 
 # OS Specific
 .DS_Store

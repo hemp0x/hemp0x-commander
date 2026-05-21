@@ -31,6 +31,33 @@
     let planning = false;
     let estimatedSelectedBytes = 0;
     let estimatedSelectedFee = "0.00000000";
+    let feeRateSatPerByte = 1000;
+    let previewFeeRateSatPerByte = 1000;
+
+    function activeFeeRate() {
+        const parsed = Number(feeRateSatPerByte);
+        if (!Number.isFinite(parsed)) return 1000;
+        return Math.max(1, Math.min(10000, Math.trunc(parsed)));
+    }
+
+    function normalizeFeeRate() {
+        feeRateSatPerByte = activeFeeRate();
+        calculateTotal();
+    }
+
+    function setFeeRate(rate) {
+        feeRateSatPerByte = rate;
+        calculateTotal();
+    }
+
+    $: effectiveFeeRateSatPerByte = activeFeeRate();
+    $: feeRateSatPerByteLabel = `${effectiveFeeRateSatPerByte} sat/B`;
+    $: {
+        effectiveFeeRateSatPerByte;
+        filteredUtxos;
+        selectedIds;
+        calculateTotal();
+    }
 
     $: safeUtxoCount = (() => {
         let count = 0;
@@ -89,7 +116,7 @@
         }
         totalSelected = sum;
         estimatedSelectedBytes = 10 + count * 148 + 1 * 34;
-        estimatedSelectedFee = ((estimatedSelectedBytes * 1000) / 100000000).toFixed(8);
+        estimatedSelectedFee = ((estimatedSelectedBytes * effectiveFeeRateSatPerByte) / 100000000).toFixed(8);
     }
 
     function toggleUtxo(id) {
@@ -152,6 +179,7 @@
                 targetFinalUtxoCount: null,
                 maxRounds: null,
                 targetMaxTxBytes: null,
+                feeRateSatPerByte: effectiveFeeRateSatPerByte,
             });
             status = "";
             showPlanModal = true;
@@ -167,13 +195,14 @@
         selectedIds = new Set();
         selectedIds = selectedIds;
         totalSelected = 0;
+        calculateTotal();
     }
 
     function isUnsafe(u) {
         if (u.spendable === false) return true;
         if (u.safe === false) return true;
         if (u.asset && u.asset !== "HEMP") return true;
-        if (u.asset_amount && u.asset_amount > 0 && u.asset !== "HEMP") return true;
+        if (u.asset_amount && u.asset_amount > 0) return true;
         return false;
     }
 
@@ -192,7 +221,9 @@
         try {
             utxos = await core.invoke("list_utxos");
             utxos.sort((a, b) => b.amount - a.amount);
-            policyDiag = await core.invoke("get_policy_diagnostics");
+            policyDiag = await core.invoke("get_policy_diagnostics", {
+                feeRateSatPerByte: effectiveFeeRateSatPerByte,
+            });
         } catch (err) {
             showToast("Failed to list UTXOs: " + err, "error");
         }
@@ -242,7 +273,9 @@
             previewData = await core.invoke("preview_wallet_consolidation", {
                 utxos: inputs,
                 destination: destination.trim(),
+                feeRateSatPerByte: effectiveFeeRateSatPerByte,
             });
+            previewFeeRateSatPerByte = effectiveFeeRateSatPerByte;
             status = "";
 
             try {
@@ -257,6 +290,7 @@
                             input_total: previewData.input_total,
                             output_amount: previewData.output_amount,
                             fee_estimate: previewData.fee_estimate,
+                            fee_rate_sat_per_byte: previewFeeRateSatPerByte,
                             destination: previewData.destination,
                             warnings: previewData.warnings,
                             selected_utxos: (previewData.utxos || []).map((u) => ({
@@ -302,6 +336,7 @@
                 utxos: inputs,
                 destination: destination.trim(),
                 fee,
+                feeRateSatPerByte: previewFeeRateSatPerByte,
             });
 
             status = "Consolidated! TXID: " + txid.substring(0, 16) + "...";
@@ -417,6 +452,43 @@
             <button class="cyber-btn" on:click={() => fetchUtxos(false)} disabled={loading}>
                 {loading ? "LOADING..." : "REFRESH"}
             </button>
+        </div>
+    </div>
+
+    <div class="fee-rate-row">
+        <div class="filter-group">
+            <label for="cons-fee-rate">FEE RATE (sat/byte)</label>
+            <div class="fee-rate-control">
+                <button
+                    class="cyber-btn ghost preset"
+                    class:active={effectiveFeeRateSatPerByte === 10}
+                    on:click={() => setFeeRate(10)}
+                >10</button
+                >
+                <button
+                    class="cyber-btn ghost preset"
+                    class:active={effectiveFeeRateSatPerByte === 100}
+                    on:click={() => setFeeRate(100)}
+                >100</button
+                >
+                <button
+                    class="cyber-btn ghost preset"
+                    class:active={effectiveFeeRateSatPerByte === 1000}
+                    on:click={() => setFeeRate(1000)}
+                >1000</button
+                >
+                <input
+                    id="cons-fee-rate"
+                    type="number"
+                    class="input-glass fee-rate-input"
+                    bind:value={feeRateSatPerByte}
+                    min="1"
+                    max="10000"
+                    step="1"
+                    on:change={normalizeFeeRate}
+                />
+                <span class="fee-rate-label mono">{feeRateSatPerByteLabel}</span>
+            </div>
         </div>
     </div>
 
@@ -541,7 +613,7 @@
             disabled={safeUtxoCount < 2 || planning}
             on:click={handlePlanBatches}
         >
-            {planning ? "PLANNING..." : "PLAN BATCHES"}
+            {planning ? "PLANNING..." : "PLAN BATCHES (PREVIEW ONLY)"}
         </button>
         {#if status}
             <span class="status-text mono">{status}</span>
@@ -645,6 +717,11 @@
 
             <div class="modal-body">
                 {#if planData}
+                    <div class="warning-box highlight" style="margin-top: 0; margin-bottom: 0.8rem; background: rgba(255, 221, 0, 0.08); border-color: rgba(255, 221, 0, 0.25);">
+                        <span class="warning-text" style="color: #ffdd00;">
+                            This is a preview plan only. Rounds must be executed manually through the Preview &amp; Broadcast flow.
+                        </span>
+                    </div>
                     <div class="tx-detail">
                         <span class="label">INITIAL UTXOS:</span>
                         <span class="value">{planData.initial_utxo_count}</span>
@@ -827,6 +904,40 @@
         flex-direction: row;
         gap: 0.5rem;
         align-self: flex-end;
+    }
+
+    .fee-rate-row {
+        display: flex;
+        flex-shrink: 0;
+        padding: 0.2rem 0;
+    }
+
+    .fee-rate-control {
+        display: flex;
+        gap: 0.3rem;
+        align-items: center;
+    }
+
+    .fee-rate-input {
+        width: 70px;
+        text-align: center;
+        padding: 0.3rem 0.4rem;
+    }
+
+    .fee-rate-label {
+        font-size: 0.65rem;
+        color: #ccc;
+    }
+
+    .preset {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.6rem;
+    }
+
+    .preset.active {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.1);
     }
 
     .utxo-stats-row {

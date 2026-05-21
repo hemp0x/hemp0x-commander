@@ -618,7 +618,9 @@
             utxos = data.sort((a, b) => b.amount - a.amount);
             pruneSelection(utxos);
             try {
-                policyDiag = await core.invoke("get_policy_diagnostics");
+                policyDiag = await core.invoke("get_policy_diagnostics", {
+                    feeRateSatPerByte: null,
+                });
             } catch (e) {
                 policyDiag = null;
             }

@@ -1655,8 +1655,10 @@ pub fn broadcast_advanced_transaction(
 pub fn preview_wallet_consolidation(
   utxos: Vec<RawTxInput>,
   destination: String,
+  fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<ConsolidationPreview, String> {
   ensure_config()?;
+  let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
 
   if utxos.is_empty() {
     return Err("At least one UTXO must be selected for consolidation".to_string());
@@ -1759,7 +1761,7 @@ pub fn preview_wallet_consolidation(
   }
 
   let tx_bytes = estimate_legacy_tx_bytes(utxo_count, 1);
-  let fee = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+  let fee = estimate_fee_from_bytes(tx_bytes, fee_rate);
 
   if input_total <= fee {
     return Err(format!(
@@ -1800,7 +1802,7 @@ pub fn preview_wallet_consolidation(
 
   warnings.push(format!(
     "This consolidates {} wallet UTXOs into one wallet address (estimated {} bytes). Estimated fee: {} HEMP ({} sat/byte). This may affect privacy by linking UTXOs.",
-    utxo_count, tx_bytes, format_hemp_amount(fee), DEFAULT_FEE_RATE_SAT_PER_BYTE
+    utxo_count, tx_bytes, format_hemp_amount(fee), fee_rate
   ));
 
   let summary = format!(
@@ -1828,8 +1830,10 @@ pub fn broadcast_wallet_consolidation(
   utxos: Vec<RawTxInput>,
   destination: String,
   fee: f64,
+  fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<String, String> {
   ensure_config()?;
+  let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
 
   if utxos.is_empty() {
     return Err("No UTXOs selected for consolidation".to_string());
@@ -1859,7 +1863,7 @@ pub fn broadcast_wallet_consolidation(
     ));
   }
 
-  let computed_fee = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+  let computed_fee = estimate_fee_from_bytes(tx_bytes, fee_rate);
   if !fee.is_finite() || hemp_to_sat(fee) != hemp_to_sat(computed_fee) {
     return Err(format!(
       "Consolidation fee changed after preview (expected {}, got {}). Refresh UTXOs and preview again.",
@@ -2005,6 +2009,24 @@ const LEGACY_TX_OVERHEAD_BYTES: u64 = 10;
 const DEFAULT_FEE_RATE_SAT_PER_BYTE: u64 = 1000;
 const DUST_THRESHOLD_SAT: u64 = 546;
 const SATS_PER_HEMP: f64 = 100_000_000.0;
+const FEE_RATE_MIN_SAT_PER_BYTE: u64 = 1;
+const FEE_RATE_MAX_SAT_PER_BYTE: u64 = 10_000;
+
+fn validate_fee_rate_sat_per_byte(rate: u64) -> Result<u64, String> {
+    if rate < FEE_RATE_MIN_SAT_PER_BYTE {
+        return Err(format!(
+            "Fee rate {} sat/byte is below the minimum allowed ({})",
+            rate, FEE_RATE_MIN_SAT_PER_BYTE
+        ));
+    }
+    if rate > FEE_RATE_MAX_SAT_PER_BYTE {
+        return Err(format!(
+            "Fee rate {} sat/byte exceeds the sanity cap ({})",
+            rate, FEE_RATE_MAX_SAT_PER_BYTE
+        ));
+    }
+    Ok(rate)
+}
 
 fn estimate_legacy_tx_bytes(input_count: usize, output_count: usize) -> u64 {
     LEGACY_TX_OVERHEAD_BYTES
@@ -2037,8 +2059,11 @@ fn hemp_to_sat(hemp: f64) -> u64 {
 }
 
 #[tauri::command]
-pub fn get_policy_diagnostics() -> Result<PolicyDiagnostics, String> {
+pub fn get_policy_diagnostics(
+    fee_rate_sat_per_byte: Option<u64>,
+) -> Result<PolicyDiagnostics, String> {
     ensure_config()?;
+    let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
     let raw = run_cli(&[
         String::from("listunspent"),
         String::from("0"),
@@ -2062,7 +2087,7 @@ pub fn get_policy_diagnostics() -> Result<PolicyDiagnostics, String> {
     let max_inputs_one_output = max_policy_inputs(1, DEFAULT_TARGET_TX_BYTES);
     let max_inputs_two_outputs = max_policy_inputs(2, STANDARD_MAX_TX_BYTES);
     let selected_estimate_bytes = estimate_legacy_tx_bytes(std::cmp::min(safe_count, max_inputs_one_output), 1);
-    let selected_estimate_fee = estimate_fee_from_bytes(selected_estimate_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+    let selected_estimate_fee = estimate_fee_from_bytes(selected_estimate_bytes, fee_rate);
 
     Ok(PolicyDiagnostics {
         current_safe_utxo_count: safe_count,
@@ -2070,6 +2095,7 @@ pub fn get_policy_diagnostics() -> Result<PolicyDiagnostics, String> {
         max_safe_inputs_for_two_outputs: max_inputs_two_outputs,
         estimated_selected_tx_bytes: selected_estimate_bytes,
         estimated_selected_fee: format_hemp_amount(selected_estimate_fee),
+        fee_rate_sat_per_byte: fee_rate,
     })
 }
 
@@ -2079,8 +2105,10 @@ pub fn plan_wallet_consolidation(
     target_final_utxo_count: Option<usize>,
     max_rounds: Option<usize>,
     target_max_tx_bytes: Option<u64>,
+    fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<ConsolidationPlan, String> {
     ensure_config()?;
+    let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
 
     if let Some(destination) = destination.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         validate_destination_address(destination)?;
@@ -2164,7 +2192,7 @@ pub fn plan_wallet_consolidation(
         let selected = &working[..input_count];
         let input_total: f64 = selected.iter().map(|(amt, _)| amt).sum();
         let tx_bytes = estimate_legacy_tx_bytes(input_count, 1);
-        let fee_estimate = estimate_fee_from_bytes(tx_bytes, DEFAULT_FEE_RATE_SAT_PER_BYTE);
+        let fee_estimate = estimate_fee_from_bytes(tx_bytes, fee_rate);
         let projected_output = input_total - fee_estimate;
 
         if projected_output <= sat_to_hemp(DUST_THRESHOLD_SAT) {
@@ -3391,7 +3419,8 @@ mod tests {
     validate_send_preview_fields,
     validate_qualifier_name, validate_restricted_name, validate_verifier_string,
     estimate_legacy_tx_bytes, max_policy_inputs, estimate_fee_from_bytes,
-    format_hemp_amount, sat_to_hemp,
+    format_hemp_amount, sat_to_hemp, validate_fee_rate_sat_per_byte,
+    hemp_to_sat,
   };
 
   #[test]
@@ -4275,5 +4304,70 @@ mod tests {
   fn planner_rejects_empty_utxo_set_conceptually() {
     assert!(max_policy_inputs(1, 90_000) >= 2);
     assert!(max_policy_inputs(1, 100) == 0);
+  }
+
+  // --- Fee Rate Validation Tests ---
+
+  #[test]
+  fn valid_fee_rates_pass_validation() {
+    assert!(validate_fee_rate_sat_per_byte(1).is_ok());
+    assert!(validate_fee_rate_sat_per_byte(1000).is_ok());
+    assert!(validate_fee_rate_sat_per_byte(10000).is_ok());
+    assert!(validate_fee_rate_sat_per_byte(500).is_ok());
+  }
+
+  #[test]
+  fn fee_rate_zero_is_invalid() {
+    assert!(validate_fee_rate_sat_per_byte(0).is_err());
+  }
+
+  #[test]
+  fn fee_rate_above_max_is_invalid() {
+    assert!(validate_fee_rate_sat_per_byte(10_001).is_err());
+    assert!(validate_fee_rate_sat_per_byte(100_000).is_err());
+  }
+
+  #[test]
+  fn fee_estimate_changes_with_fee_rate() {
+    let bytes = estimate_legacy_tx_bytes(100, 1);
+    let fee_100 = estimate_fee_from_bytes(bytes, 100);
+    let fee_1000 = estimate_fee_from_bytes(bytes, 1000);
+    assert!(fee_1000 > fee_100);
+    assert!((fee_1000 / fee_100 - 10.0).abs() < 1e-12);
+  }
+
+  #[test]
+  fn fee_estimate_scales_linearly() {
+    let bytes = 10_000u64;
+    let fee_1 = estimate_fee_from_bytes(bytes, 1);
+    let fee_100 = estimate_fee_from_bytes(bytes, 100);
+    assert!((fee_100 / fee_1 - 100.0).abs() < 1e-12);
+  }
+
+  #[test]
+  fn preview_broadcast_fee_comparison_matches_satoshi_rounded() {
+    let tx_bytes = estimate_legacy_tx_bytes(10, 1);
+    let fee = estimate_fee_from_bytes(tx_bytes, 1000);
+    let sat_a = hemp_to_sat(fee);
+    let sat_b = hemp_to_sat(estimate_fee_from_bytes(tx_bytes, 1000));
+    assert_eq!(sat_a, sat_b);
+  }
+
+  #[test]
+  fn preview_broadcast_fee_comparison_detects_mismatch() {
+    let tx_bytes = estimate_legacy_tx_bytes(10, 1);
+    let fee_1000 = estimate_fee_from_bytes(tx_bytes, 1000);
+    let fee_500 = estimate_fee_from_bytes(tx_bytes, 500);
+    assert!(hemp_to_sat(fee_1000) != hemp_to_sat(fee_500));
+  }
+
+  #[test]
+  fn max_policy_inputs_unchanged_by_fee_rate() {
+    let max_1 = max_policy_inputs(1, 100_000);
+    let max_2 = max_policy_inputs(1, 100_000);
+    assert_eq!(max_1, max_2);
+    let fee_1 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1);
+    let fee_1000 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1000);
+    assert!(fee_1000 > fee_1);
   }
 }

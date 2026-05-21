@@ -348,6 +348,7 @@ pub struct PolicyDiagnostics {
   pub max_safe_inputs_for_two_outputs: usize,
   pub estimated_selected_tx_bytes: u64,
   pub estimated_selected_fee: String,
+  pub fee_rate_sat_per_byte: u64,
 }
 
 #[derive(Serialize)]

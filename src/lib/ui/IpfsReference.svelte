@@ -289,7 +289,7 @@
     .action-btn {
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 0.4rem 0.8rem;
         color: #aaa;
         font-size: 0.6rem;

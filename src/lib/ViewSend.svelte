@@ -50,8 +50,15 @@
     let broadcasting = false; // In-flight guard for advanced broadcast
     let estimatedSelectedTxBytes = 0;
     let policyDiag = null;
+    let relayFeeSatPerByte = null;
+    let relayFeeUnavailable = false;
+    let estimatingFee = false;
+    let feeEstimateError = "";
 
     $: maxSafeInputsForSend = policyDiag?.max_safe_inputs_for_two_outputs || 675;
+    $: feeSatPerByte = estimatedSelectedTxBytes > 0
+        ? (parseFloat(estimatedFee) || 0) * 100_000_000 / estimatedSelectedTxBytes
+        : 0;
 
     // --- CONFIRMATION MODAL ---
     let showConfirmModal = false;
@@ -211,6 +218,9 @@
             }
             if (fee < 0.00001) {
                 warnings.push("Fee is below typical relay minimum (0.00001 HEMP).");
+            }
+            if (relayFeeSatPerByte != null && feeSatPerByte > 0 && feeSatPerByte < relayFeeSatPerByte) {
+                warnings.push(`Fee rate ${feeSatPerByte.toFixed(1)} sat/byte is below min relay (${relayFeeSatPerByte.toFixed(1)} sat/byte).`);
             }
             if (sendAmount > 0 && fee > sendAmount * 0.2) {
                 warnings.push("Fee exceeds 20% of send amount.");
@@ -624,9 +634,88 @@
             } catch (e) {
                 policyDiag = null;
             }
+            loadRelayFeeContext();
         } catch (e) {
             console.error("Failed to list UTXOs", e);
             status = "Error fetching UTXOs";
+        }
+    }
+
+    async function loadRelayFeeContext() {
+        relayFeeSatPerByte = null;
+        relayFeeUnavailable = false;
+        try {
+            const mempoolInfo = await core.invoke("rpc_call", {
+                method: "getmempoolinfo",
+                params: [],
+            });
+            if (mempoolInfo.success && mempoolInfo.data) {
+                const relayFeeHempPerKb =
+                    mempoolInfo.data.mempoolminfee ||
+                    mempoolInfo.data.minrelaytxfee;
+                if (relayFeeHempPerKb != null && Number.isFinite(Number(relayFeeHempPerKb))) {
+                    relayFeeSatPerByte = relayFeeHempPerKb * 100_000;
+                    return;
+                }
+            }
+        } catch {
+            // fall through to getnetworkinfo
+        }
+        try {
+            const netInfo = await core.invoke("rpc_call", {
+                method: "getnetworkinfo",
+                params: [],
+            });
+            if (netInfo.success && netInfo.data?.relayfee != null && Number.isFinite(Number(netInfo.data.relayfee))) {
+                relayFeeSatPerByte = netInfo.data.relayfee * 100_000;
+                return;
+            }
+        } catch {
+            // unavailable
+        }
+        relayFeeUnavailable = true;
+    }
+
+    async function estimateSmartFee() {
+        if (!isAdvanced || selectedUtxos.size === 0) {
+            feeEstimateError = "Select UTXOs first.";
+            return;
+        }
+        if (estimatedSelectedTxBytes <= 0) {
+            feeEstimateError = "No transaction size estimate available.";
+            return;
+        }
+        estimatingFee = true;
+        feeEstimateError = "";
+        try {
+            const result = await core.invoke("rpc_call", {
+                method: "estimatesmartfee",
+                params: [6],
+            });
+            if (!result.success || !result.data || result.data.feerate == null) {
+                feeEstimateError = "Fee estimation unavailable — set fee manually.";
+                return;
+            }
+            const feerate = parseFloat(result.data.feerate);
+            if (isNaN(feerate) || feerate <= 0) {
+                feeEstimateError = "Fee estimation unavailable — set fee manually.";
+                return;
+            }
+            let suggestedFee = feerate * estimatedSelectedTxBytes / 1000;
+            const minRelayFee = relayFeeSatPerByte != null
+                ? (relayFeeSatPerByte / 100_000) * estimatedSelectedTxBytes / 1000
+                : 0.00001;
+            if (suggestedFee < minRelayFee) {
+                suggestedFee = minRelayFee;
+            }
+            if (suggestedFee > 1.0) {
+                suggestedFee = 1.0;
+            }
+            estimatedFee = suggestedFee.toFixed(8);
+        } catch {
+            feeEstimateError = "Fee estimation unavailable — set fee manually.";
+        } finally {
+            estimatingFee = false;
         }
     }
 
@@ -881,6 +970,44 @@
                                 <span class="frag-warn"> | Wallet fragmented — consider consolidation</span>
                             {/if}
                         </div>
+                    {/if}
+                </div>
+
+                <div class="field-row fee-control fade-in">
+                    <div class="fee-control-row">
+                        <div class="field-col fee-input-col">
+                            <label for="fee-input">Manual fee (HEMP)</label>
+                            <div class="input-wrapper brackets">
+                                <input
+                                    type="text"
+                                    bind:value={estimatedFee}
+                                    id="fee-input"
+                                    class="input-glass"
+                                />
+                            </div>
+                        </div>
+                        <div class="field-col fee-action-col">
+                            <button
+                                class="btn-estimate"
+                                disabled={estimatingFee || selectedUtxos.size === 0}
+                                on:click={estimateSmartFee}
+                            >
+                                {estimatingFee ? "[ ... ]" : "[ ESTIMATE ]"}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="fee-rate-info mono">
+                        {#if estimatedSelectedTxBytes > 0 && feeSatPerByte > 0}
+                            <span>{feeSatPerByte.toFixed(1)} sat/byte</span>
+                        {/if}
+                        {#if relayFeeSatPerByte != null}
+                            <span class="relay-context"> | Min relay: {relayFeeSatPerByte.toFixed(1)} sat/byte</span>
+                        {:else if relayFeeUnavailable}
+                            <span class="relay-context muted"> | Min relay: unavailable</span>
+                        {/if}
+                    </div>
+                    {#if feeEstimateError}
+                        <div class="fee-estimate-error">{feeEstimateError}</div>
                     {/if}
                 </div>
             {/if}
@@ -2106,6 +2233,62 @@
         padding: 0.2rem 0.5rem; /* SLIM PADDING */
         border-radius: 4px;
         border-left: 2px solid var(--color-primary);
+    }
+
+    .fee-control {
+        margin-bottom: 0.5rem;
+        background: rgba(0, 255, 65, 0.03);
+        padding: 0.5rem;
+        border-radius: 4px;
+        border-left: 2px solid rgba(0, 255, 65, 0.6);
+    }
+    .fee-control-row {
+        display: flex;
+        gap: 0.6rem;
+        align-items: flex-end;
+    }
+    .fee-input-col {
+        flex: 1;
+    }
+    .fee-action-col {
+        flex-shrink: 0;
+    }
+    .btn-estimate {
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid var(--color-primary);
+        color: var(--color-primary);
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        padding: 0.5rem 0.8rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+    }
+    .btn-estimate:hover:not(:disabled) {
+        background: var(--color-primary);
+        color: #000;
+        box-shadow: 0 0 12px rgba(0, 255, 65, 0.3);
+    }
+    .btn-estimate:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+    .fee-rate-info {
+        font-size: 0.6rem;
+        color: #999;
+        margin-top: 0.3rem;
+    }
+    .relay-context {
+        color: #666;
+    }
+    .relay-context.muted {
+        color: #444;
+    }
+    .fee-estimate-error {
+        font-size: 0.65rem;
+        color: #ffaa00;
+        margin-top: 0.2rem;
+        font-family: var(--font-mono);
     }
     .utxo-select-btn {
         background: rgba(0, 0, 0, 0.5);

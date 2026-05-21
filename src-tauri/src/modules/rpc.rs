@@ -167,6 +167,7 @@ const ALLOWED_METHODS: &[&str] = &[
     "listassets",
     "listtransactions",
     "listunspent",
+    "estimatesmartfee",
 ];
 
 #[tauri::command]
@@ -368,6 +369,7 @@ mod tests {
         assert!(ALLOWED_METHODS.contains(&"getwalletinfo"));
         assert!(ALLOWED_METHODS.contains(&"listtransactions"));
         assert!(ALLOWED_METHODS.contains(&"listunspent"));
+        assert!(ALLOWED_METHODS.contains(&"estimatesmartfee"));
     }
 
     #[test]
@@ -376,6 +378,8 @@ mod tests {
         assert!(!ALLOWED_METHODS.contains(&"sendmany"));
         assert!(!ALLOWED_METHODS.contains(&"sendasset"));
         assert!(!ALLOWED_METHODS.contains(&"fundrawtransaction"));
+        assert!(!ALLOWED_METHODS.contains(&"settxfee"));
+        assert!(!ALLOWED_METHODS.contains(&"walletcreatefundedpsbt"));
         assert!(!ALLOWED_METHODS.contains(&"signrawtransaction"));
         assert!(!ALLOWED_METHODS.contains(&"issue"));
         assert!(!ALLOWED_METHODS.contains(&"transfer"));

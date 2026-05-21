@@ -33,8 +33,7 @@
   --font-mono: 'Consolas', 'Fira Code', monospace;
 
   /* --- SPACING --- */
-  --radius-lg: 20px;
-  /* More rounded/modern */
+  --radius-lg: 8px;
   --radius-sm: 8px;
   --space-md: 1rem;
 }
@@ -59,19 +58,6 @@ body {
   height: 100vh;
   width: 100vw;
   user-select: none;
-  /* App feel */
-}
-
-/* Smart Scaling for Small Windows */
-@media (max-height: 800px) {
-  body {
-    font-size: 12px; /* Scale down UI */
-  }
-}
-@media (max-height: 600px) {
-  body {
-    font-size: 11px; /* Mini mode */
-  }
 }
 
 /* --- UTILITIES --- */
@@ -174,15 +160,13 @@ button:active {
 /* Stronger glass treatment for non-dashboard panels to match HUD feel */
 .glass-panel.panel-strong {
   background: rgba(6, 14, 10, 0.9);
-  border: 1px solid rgba(0, 255, 65, 0.25);
-  box-shadow:
-    0 24px 50px rgba(0, 0, 0, 0.7),
-    inset 0 0 18px rgba(0, 0, 0, 0.6);
-  border-radius: 22px;
+  border: 1px solid rgba(0, 255, 65, 0.18);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
 }
 
 .glass-panel.panel-strong::before {
-  opacity: 0.85;
+  opacity: 0.4;
 }
 
 /* --- CYBER-HUD GLOBAL SYSTEM (V3) --- */
@@ -204,18 +188,18 @@ button:active {
 
 @keyframes border-breathe {
   0% {
-    border-color: rgba(0, 255, 65, 0.15);
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    border-color: rgba(0, 255, 65, 0.12);
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
   }
 
   50% {
-    border-color: rgba(0, 255, 65, 0.35);
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.05), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    border-color: rgba(0, 255, 65, 0.22);
+    box-shadow: 0 0 16px rgba(0, 255, 65, 0.03);
   }
 
   100% {
-    border-color: rgba(0, 255, 65, 0.15);
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    border-color: rgba(0, 255, 65, 0.12);
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.5);
   }
 }
 

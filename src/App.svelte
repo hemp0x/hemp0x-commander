@@ -59,6 +59,22 @@
   let coreNextMismatchNotified = false;
   let lastDaemonStartSuccessAt = 0;
 
+  $: daemonState = $daemonRuntime;
+  $: bundledDaemon = daemonState.daemon || {};
+  $: coreNextKnown =
+    Boolean(bundledDaemon.exists) ||
+    Boolean(bundledDaemon.base_version) ||
+    Boolean(bundledDaemon.commit_hash);
+  $: coreNextOk = bundledDaemon.exact_core_next_match === true;
+  $: coreNextVersion = bundledDaemon.base_version
+    ? `v${bundledDaemon.base_version}${bundledDaemon.commit_hash ? `-${bundledDaemon.commit_hash}` : ""}`
+    : "--";
+  $: syncLabel = nodeInfo.synced
+    ? "SYNCED"
+    : nodeInfo.state === "RUNNING"
+      ? "SYNCING"
+      : "--";
+
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
   let globalConsoleHistory = [];
@@ -723,6 +739,41 @@
     </div>
   </header>
 
+  <!-- TRUST SIGNAL STRIP -->
+  <div class="trust-strip">
+    <div
+      class="ts-item"
+      class:ts-ok={coreNextOk}
+      class:ts-bad={coreNextKnown && !coreNextOk}
+    >
+      <span class="ts-label">Core Next</span>
+      <span class="ts-val">{coreNextOk ? "MATCH" : coreNextVersion}</span>
+    </div>
+    <div
+      class="ts-item"
+      class:ts-ok={nodeInfo.state === "RUNNING"}
+      class:ts-bad={nodeInfo.state !== "RUNNING" && nodeInfo.state !== "--"}
+    >
+      <span class="ts-label">Daemon</span>
+      <span class="ts-val">{nodeInfo.state}</span>
+    </div>
+    <div
+      class="ts-item"
+      class:ts-ok={walletInfo.status !== "UNENCRYPTED" &&
+        walletInfo.status !== "LOCKED" &&
+        walletInfo.status !== "--"}
+      class:ts-warn={walletInfo.status === "LOCKED"}
+      class:ts-bad={walletInfo.status === "UNENCRYPTED"}
+    >
+      <span class="ts-label">Wallet</span>
+      <span class="ts-val">{walletInfo.status}</span>
+    </div>
+    <div class="ts-item">
+      <span class="ts-label">Network</span>
+      <span class="ts-val">LOCAL ONLY</span>
+    </div>
+  </div>
+
   <!-- CONTENT AREA -->
   <div class="content" class:no-padding={activeTab === "TOOLS"}>
     <!-- DASHBOARD VIEW -->
@@ -750,7 +801,18 @@
             <div class="panel-content">
               <div class="stat-grid-compact">
                 <div class="stat-pair">
-                  <span class="label">BLOCK HEIGHT</span>
+                  <span class="label">SYNC</span>
+                  <span
+                    class="mono stat-state"
+                    class:state-ok={nodeInfo.synced}
+                    class:state-warn={!nodeInfo.synced &&
+                      nodeInfo.state === "RUNNING"}
+                  >
+                    {syncLabel}
+                  </span>
+                </div>
+                <div class="stat-pair">
+                  <span class="label">BLOCK</span>
                   <span class="mono">{nodeInfo.blocks}</span>
                 </div>
                 <div class="stat-pair">
@@ -787,20 +849,28 @@
                 class="status-chip"
                 class:status-red={walletInfo.status === "UNENCRYPTED"}
                 class:status-green={walletInfo.status !== "UNENCRYPTED" &&
-                  walletInfo.status !== "--"}
+                  walletInfo.status !== "--" && walletInfo.status !== "LOCKED"}
+                class:status-warn={walletInfo.status === "LOCKED"}
               >
                 {walletInfo.status}
               </div>
             </header>
 
             <div class="panel-content wallet-content compact-wallet">
-              <!-- Added compact-wallet class -->
               <div class="balance-hero-small">
                 <div class="val neon-glow" class:blurred={hideBalance}>
                   {hideBalance ? "******" : walletInfo.balance}
                   <span class="unit">HEMP</span>
                 </div>
                 <div class="sub">AVAILABLE BALANCE</div>
+              </div>
+              <div class="wallet-metrics" class:blurred={hideBalance}>
+                {#if walletInfo.pending !== '--'}
+                  <span class="metric">PENDING: {walletInfo.pending} HEMP</span>
+                {/if}
+                {#if walletInfo.staked !== '--' && parseFloat(walletInfo.staked) > 0}
+                  <span class="metric">IMMATURE: {walletInfo.staked} HEMP</span>
+                {/if}
               </div>
             </div>
 
@@ -1175,50 +1245,60 @@
 
   /* --- HEADER --- */
   .top-bar {
-    height: 72px;
+    height: 60px;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05); /* Slightly brighter separator */
-    background: rgba(0, 0, 0, 0.6);
+    padding: 0 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(12px);
     z-index: 50;
     -webkit-app-region: no-drag;
+    flex-shrink: 0;
   }
 
   .brand {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
+    flex-shrink: 0;
+    min-width: 0;
   }
   .logo {
-    height: 42px;
-    width: 42px;
-    border-radius: 12px;
-    box-shadow: 0 0 25px rgba(0, 255, 65, 0.25); /* Stronger logo glow */
-    filter: brightness(1.1);
+    height: 36px;
+    width: 36px;
+    border-radius: 8px;
+    box-shadow: 0 0 16px rgba(0, 255, 65, 0.2);
+  }
+  .brand-info {
+    min-width: 0;
+    overflow: hidden;
   }
   .app-title {
     margin: 0;
-    font-size: 1.05rem;
-    letter-spacing: 2px;
+    font-size: 1rem;
+    letter-spacing: 1.5px;
     color: #fff;
-    text-shadow: 0 0 15px rgba(0, 255, 65, 0.3); /* Title glow */
+    text-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .version {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: var(--color-muted);
     opacity: 0.7;
     text-shadow: none;
   }
   .app-status {
     color: var(--color-primary-dim);
-    letter-spacing: 1px;
-    margin-top: 4px;
-    text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
-    white-space: nowrap; /* Prevent wrap */
+    font-size: 0.65rem;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+    text-shadow: 0 0 4px rgba(0, 255, 65, 0.2);
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -1226,75 +1306,114 @@
   /* Status Traffic Light Dots */
   .status-dot {
     display: inline-block;
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     margin-left: 4px;
-    opacity: 0.4; /* Dim when inactive */
+    opacity: 0.35;
     transition: all 0.3s ease;
     cursor: help;
   }
-  /* Neon colors matching app theme */
   .status-dot.green {
-    background: #00ff41; /* App primary green */
+    background: #00ff41;
   }
   .status-dot.yellow {
-    background: #ffdd00; /* Vibrant neon yellow */
+    background: #ffdd00;
   }
   .status-dot.red {
-    background: #ff4444; /* Like STOPPED indicator */
+    background: #ff4444;
   }
-  /* Active glow effect */
   .status-dot.active {
     opacity: 1;
-    animation: statusPulse 2s ease-in-out infinite;
   }
   .status-dot.green.active {
-    box-shadow:
-      0 0 6px #00ff41,
-      0 0 12px #00ff41,
-      0 0 18px rgba(0, 255, 65, 0.5);
+    box-shadow: 0 0 4px #00ff41, 0 0 8px rgba(0, 255, 65, 0.5);
   }
   .status-dot.yellow.active {
-    box-shadow:
-      0 0 6px #ffdd00,
-      0 0 12px #ffdd00,
-      0 0 18px rgba(255, 221, 0, 0.5);
+    box-shadow: 0 0 4px #ffdd00, 0 0 8px rgba(255, 221, 0, 0.5);
   }
   .status-dot.red.active {
-    box-shadow:
-      0 0 6px #ff4444,
-      0 0 12px #ff4444,
-      0 0 18px rgba(255, 68, 68, 0.5);
-  }
-  @keyframes statusPulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.75;
-    }
+    box-shadow: 0 0 4px #ff4444, 0 0 8px rgba(255, 68, 68, 0.5);
   }
 
   .main-nav {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.25rem;
     height: 100%;
     align-items: flex-end;
     position: relative;
     z-index: 60;
     pointer-events: auto;
     -webkit-app-region: no-drag;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .main-nav::-webkit-scrollbar {
+    height: 0;
   }
   .tab-btn {
     pointer-events: auto;
     -webkit-app-region: no-drag;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .window-controls {
     display: flex;
+    align-items: center;
     gap: 8px;
+    flex-shrink: 0;
+  }
+
+  /* --- TRUST SIGNAL STRIP --- */
+  .trust-strip {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    background: rgba(0, 0, 0, 0.4);
+    flex-shrink: 0;
+    z-index: 40;
+    overflow-x: auto;
+  }
+  .trust-strip::-webkit-scrollbar {
+    height: 0;
+  }
+  .ts-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.75rem;
+    border-right: 1px solid rgba(255, 255, 255, 0.04);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .ts-label {
+    font-size: 0.55rem;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .ts-val {
+    font-size: 0.6rem;
+    font-family: var(--font-mono);
+    color: #888;
+    letter-spacing: 0.5px;
+  }
+  .ts-ok .ts-val {
+    color: var(--color-primary-dim);
+  }
+  .ts-warn .ts-val {
+    color: #ffaa00;
+  }
+  .ts-bad .ts-val {
+    color: #ff5555;
+  }
+  .stat-state.state-ok {
+    color: var(--color-primary);
+  }
+  .stat-state.state-warn {
+    color: #ffaa00;
   }
 
   /* --- CONTENT CONTAINER --- */
@@ -1312,37 +1431,18 @@
 
   /* --- COMMON PANEL STYLE --- */
   .glass-panel {
-    background: rgba(10, 14, 12, 0.7); /* DARKER */
-    backdrop-filter: blur(15px); /* HEAVIER BLUR */
-    border: 1px solid rgba(0, 255, 65, 0.15); /* NEON BORDER */
-    border-top: 1px solid rgba(0, 255, 65, 0.3); /* HIGHLIGHT */
-    border-bottom: 1px solid rgba(0, 0, 0, 0.8);
-    border-radius: 16px;
-    box-shadow:
-      0 20px 50px rgba(0, 0, 0, 0.7),
-      0 0 20px rgba(0, 255, 65, 0.05); /* GLOW */
+    background: rgba(10, 14, 12, 0.75);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 255, 65, 0.12);
+    border-top: 1px solid rgba(0, 255, 65, 0.2);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.5);
+    border-radius: 8px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
     padding: 1.1rem;
     display: flex;
     flex-direction: column;
     position: relative;
     overflow: hidden;
-  }
-
-  /* Glass Reflection Shine */
-  .glass-panel::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      rgba(255, 255, 255, 0.6),
-      /* Brighter shine */ transparent
-    );
-    opacity: 0.7;
   }
 
   .panel-title {
@@ -1462,15 +1562,13 @@
 
   /* --- CYBER PANELS (The Hybrid) --- */
   .cyber-panel {
-    /* Base Glass Panel traits inherited from global .glass-panel if redundant, 
-       but we make them distinct here to match the HUD vibe */
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding: 0; /* Header/Footer/Content split */
-    border: 1px solid rgba(0, 255, 65, 0.2);
+    padding: 0;
+    border: 1px solid rgba(0, 255, 65, 0.15);
     background: rgba(8, 12, 10, 0.85);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
   }
 
   .wallet-card {
@@ -1500,28 +1598,20 @@
   }
   .led.running {
     background: #00ff41;
-    box-shadow:
-      0 0 8px #00ff41,
-      0 0 16px rgba(0, 255, 65, 0.4);
+    box-shadow: 0 0 6px rgba(0, 255, 65, 0.5);
     animation: pulse-green 2s ease-in-out infinite;
   }
   .led.stopped {
     background: #ff3333;
-    box-shadow:
-      0 0 6px #ff3333,
-      0 0 12px rgba(255, 51, 51, 0.3);
+    box-shadow: 0 0 4px rgba(255, 51, 51, 0.3);
   }
   @keyframes pulse-green {
     0%,
     100% {
-      box-shadow:
-        0 0 8px #00ff41,
-        0 0 16px rgba(0, 255, 65, 0.4);
+      box-shadow: 0 0 6px rgba(0, 255, 65, 0.5);
     }
     50% {
-      box-shadow:
-        0 0 12px #00ff41,
-        0 0 24px rgba(0, 255, 65, 0.6);
+      box-shadow: 0 0 10px rgba(0, 255, 65, 0.7);
     }
   }
 
@@ -1530,10 +1620,10 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.8rem 1.2rem;
-    background: rgba(0, 0, 0, 0.4);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05); /* Removed flex-shrink: 0, it is default in flex items but can be explicit for safety */
-    flex-shrink: 0; /* SAFEMODE: HEADER ALWAYS VISIBLE */
+    padding: 0.6rem 1rem;
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    flex-shrink: 0;
   }
   .hud-title {
     color: var(--color-muted);
@@ -1547,41 +1637,23 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    position: relative; /* Anchor for absolute text */
+    gap: 0;
+    flex-shrink: 0;
+    position: relative;
   }
   .traffic-lights {
     display: flex;
-    gap: 8px;
+    gap: 6px;
   }
 
   .network-warning-text {
-    position: absolute;
-    top: 100%; /* Push directly below the lights */
-    right: 50%; /* Center relative to stack */
-    transform: translateX(50%); /* Correct centering */
-    margin-top: 6px; /* Lowered slightly */
-    color: #ff3333;
     font-size: 0.5rem;
-    font-weight: normal;
-    letter-spacing: 1px;
+    color: #ff3333;
+    letter-spacing: 0.5px;
     text-transform: uppercase;
-    text-shadow: 0 0 5px rgba(255, 50, 50, 0.6);
-    animation: pulse-red 2s infinite;
+    text-shadow: 0 0 4px rgba(255, 50, 50, 0.4);
     white-space: nowrap;
-    pointer-events: none; /* Let clicks pass through */
-  }
-
-  @keyframes pulse-red {
-    0% {
-      opacity: 0.7;
-    }
-    50% {
-      opacity: 1;
-      text-shadow: 0 0 8px rgba(255, 0, 0, 0.8);
-    }
-    100% {
-      opacity: 0.7;
-    }
+    margin-top: 2px;
   }
 
   .network-badge {
@@ -1732,17 +1804,21 @@
   .balance-hero-small .sub {
     font-size: 0.65rem;
     color: var(--color-muted);
-    color: var(--color-muted);
     letter-spacing: 2px;
-    margin-top: 0.2rem; /* TIGHT MARGIN */
+    margin-top: 0.2rem;
   }
   .wallet-metrics {
     display: flex;
     gap: 1rem;
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: var(--color-muted);
-    margin-top: 1rem;
+    margin-top: 0.75rem;
     opacity: 0.7;
+    justify-content: center;
+  }
+  .wallet-metrics .metric {
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
   }
 
   /* --- ACTIVITY LIST --- */
@@ -1818,14 +1894,11 @@
     background: rgba(0, 255, 65, 0.1);
     box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
   }
-
-  /* --- BUTTONS --- */
-  .btn-xs {
-    padding: 0.3rem 0.8rem;
-    font-size: 0.7rem;
-  }
-  .btn-xs.ghost {
-    border-color: rgba(255, 255, 255, 0.2);
+  .status-chip.status-warn {
+    color: #ffaa00;
+    border-color: rgba(255, 170, 0, 0.5);
+    background: rgba(255, 170, 0, 0.1);
+    box-shadow: 0 0 10px rgba(255, 170, 0, 0.15);
   }
 
   .amount.pos {
@@ -1906,13 +1979,11 @@
     left: 50%;
     transform: translate(-50%, -50%);
     width: min(420px, 90vw);
-    background: rgba(8, 12, 10, 0.98); /* DARKER & OPAQUE */
-    border: 1px solid rgba(0, 255, 65, 0.4); /* NEON BORDER */
-    border-radius: 16px;
-    padding: 1.25rem 1.75rem; /* Slightly more padding */
-    box-shadow:
-      0 0 50px rgba(0, 255, 65, 0.15),
-      /* OUTER GLOW */ 0 30px 80px rgba(0, 0, 0, 0.9); /* DEPTH SHADOW */
+    background: rgba(8, 12, 10, 0.98);
+    border: 1px solid rgba(0, 255, 65, 0.3);
+    border-radius: 8px;
+    padding: 1.25rem 1.75rem;
+    box-shadow: 0 0 30px rgba(0, 255, 65, 0.1);
     z-index: 101;
   }
   .modal-title {
@@ -1997,16 +2068,10 @@
     }
   }
   .welcome-modal {
-    background: linear-gradient(
-      145deg,
-      rgba(10, 10, 10, 0.97) 0%,
-      rgba(5, 5, 5, 0.99) 100%
-    );
-    border: 1px solid rgba(0, 255, 65, 0.25);
-    border-radius: 12px;
-    box-shadow:
-      0 0 40px rgba(0, 255, 65, 0.15),
-      0 0 80px rgba(0, 0, 0, 0.8);
+    background: rgba(8, 8, 8, 0.98);
+    border: 1px solid rgba(0, 255, 65, 0.2);
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
     max-width: 480px;
     width: 90%;
     animation: slideUp 0.3s ease-out;
@@ -2091,7 +2156,7 @@
     accent-color: var(--color-primary);
   }
   .welcome-btn {
-    background: linear-gradient(135deg, var(--color-primary) 0%, #00cc33 100%);
+    background: var(--color-primary);
     border: none;
     color: #000;
     font-family: var(--font-mono);
@@ -2102,11 +2167,10 @@
     cursor: pointer;
     letter-spacing: 1px;
     transition: all 0.2s;
-    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+    box-shadow: 0 0 16px rgba(0, 255, 65, 0.2);
   }
   .welcome-btn:hover {
-    transform: scale(1.02);
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.5);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.35);
   }
 
   /* --- ABOUT PAGE --- */
@@ -2132,8 +2196,8 @@
   .about-logo {
     width: 100px;
     height: 100px;
-    border-radius: 16px;
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.2);
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
     object-fit: contain;
   }
   .about-title-block {
@@ -2252,16 +2316,36 @@
     text-decoration: underline;
   }
   /* --- HEADER RESPONSIVENESS --- */
-  .status-stack {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-shrink: 0; /* KEY FIX: Never crush lights */
+
+  @media (max-width: 900px) {
+    .top-bar {
+      padding: 0 0.75rem;
+    }
+    .app-title {
+      font-size: 0.85rem;
+      letter-spacing: 1px;
+    }
+    .app-status {
+      display: none;
+    }
+    .tab-btn {
+      padding: 0.85rem 0.6rem;
+      font-size: 0.7rem;
+    }
+    .content {
+      padding: 0.6rem 0.75rem 0.75rem 0.75rem;
+    }
+    .ts-item {
+      padding: 0.2rem 0.5rem;
+    }
   }
 
   @media (max-width: 800px) {
+    .top-bar {
+      height: 52px;
+    }
     .app-title {
-      font-size: 0.9rem;
+      font-size: 0.8rem;
     }
     .version {
       display: none;
@@ -2271,7 +2355,22 @@
       flex-direction: column;
       justify-content: center;
     }
-    /* Responsive Activity Grid */
+    .tab-btn {
+      padding: 0 0.5rem;
+      font-size: 0.65rem;
+    }
+    .main-nav {
+      gap: 0;
+    }
+    .ts-item {
+      padding: 0.15rem 0.4rem;
+    }
+    .ts-label {
+      font-size: 0.5rem;
+    }
+    .ts-val {
+      font-size: 0.55rem;
+    }
     .header-row,
     .data-row {
       grid-template-columns: 90px 80px 120px 60px 1fr;
@@ -2290,26 +2389,37 @@
   }
 
   @media (max-width: 600px) {
+    .top-bar {
+      height: 48px;
+      padding: 0 0.5rem;
+    }
+    .logo {
+      height: 28px;
+      width: 28px;
+    }
+    .brand-info {
+      gap: 0;
+    }
+    .tab-btn {
+      padding: 0 0.4rem;
+      font-size: 0.6rem;
+      letter-spacing: 0;
+    }
     .header-row,
     .data-row {
       grid-template-columns: 70px 70px 100px 50px 1fr;
       font-size: 0.7rem;
       padding: 0.4rem 0.6rem;
     }
-    .tab-btn {
-      padding: 0.5rem 0.6rem;
-      font-size: 0.7rem;
-    }
-    .logo {
-      height: 32px;
-      width: 32px;
-    }
   }
 
   @media (max-height: 700px) {
     .top-bar {
-      height: 60px;
+      height: 52px;
       padding: 0 1rem;
+    }
+    .trust-strip {
+      display: none;
     }
     .row-top {
       min-height: 100px;

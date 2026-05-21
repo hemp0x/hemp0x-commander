@@ -29,6 +29,9 @@ This script:
 - Extracts `hemp0xd`, `hemp0x-cli`, `hemp0x-tx` for both Linux and Windows
 - Places them into `src-tauri/binaries/` with target-triple suffixes
 
+The Core Next release archives are expected to have a flat top-level layout with
+the binaries at the archive root.
+
 Staged binary files are gitignored. They are not intended to be committed to the repository.
 
 ## 2. Build

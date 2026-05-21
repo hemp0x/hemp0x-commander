@@ -98,7 +98,8 @@ for bin in "${BINARIES[@]}"; do
     echo "  + $linux_dst"
     staged_count=$((staged_count + 1))
   else
-    echo "  - Linux binary not found in archive: $bin"
+    echo "ERROR: Linux binary not found in archive: $bin"
+    exit 1
   fi
 
   # Windows
@@ -109,7 +110,8 @@ for bin in "${BINARIES[@]}"; do
     echo "  + $win_dst"
     staged_count=$((staged_count + 1))
   else
-    echo "  - Windows binary not found in archive: ${bin}.exe"
+    echo "ERROR: Windows binary not found in archive: ${bin}.exe"
+    exit 1
   fi
 done
 

@@ -196,6 +196,7 @@
     cliVersion: "--",
     daemonFound: false,
     cliFound: false,
+    txFound: false,
   };
   let updateCheckStatus = "Ready to check for updates";
   let isCheckingUpdate = false;
@@ -252,9 +253,11 @@
       const binaries = await core.invoke("get_binary_status");
       updateInfo.daemonFound = !!binaries.daemon_exists;
       updateInfo.cliFound = !!binaries.cli_exists;
+      updateInfo.txFound = !!binaries.tx_exists;
     } catch {
       updateInfo.daemonFound = false;
       updateInfo.cliFound = false;
+      updateInfo.txFound = false;
     }
 
     updateInfo.daemonVersion = updateInfo.daemonFound
@@ -691,6 +694,15 @@
                       class:found={updateInfo.cliFound}
                     >
                       {updateInfo.cliFound ? "✓ FOUND" : "✗ MISSING"}
+                    </span>
+                  </div>
+                  <div class="binary-row">
+                    <span class="binary-name mono">hemp0x-tx</span>
+                    <span
+                      class="binary-status-badge"
+                      class:found={updateInfo.txFound}
+                    >
+                      {updateInfo.txFound ? "✓ FOUND" : "✗ MISSING"}
                     </span>
                   </div>
                 </div>

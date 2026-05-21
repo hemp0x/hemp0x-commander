@@ -49,6 +49,7 @@ pub struct ConfigPaths {
 pub struct BinaryStatus {
   pub daemon_exists: bool,
   pub cli_exists: bool,
+  pub tx_exists: bool,
 }
 
 #[derive(Serialize)]

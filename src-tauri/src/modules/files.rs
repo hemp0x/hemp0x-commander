@@ -379,9 +379,11 @@ pub fn extract_binaries(target_dir: String) -> Result<String, String> {
 pub fn get_binary_status() -> Result<BinaryStatus, String> {
   let daemon_path = PathBuf::from(resolve_bin("hemp0xd"));
   let cli_path = PathBuf::from(resolve_bin("hemp0x-cli"));
+  let tx_path = PathBuf::from(resolve_bin("hemp0x-tx"));
   Ok(BinaryStatus {
     daemon_exists: daemon_path.exists(),
     cli_exists: cli_path.exists(),
+    tx_exists: tx_path.exists(),
   })
 }
 
@@ -486,4 +488,3 @@ pub fn extract_snapshot(archive_path: String) -> Result<String, String> {
   );
   Ok(msg)
 }
-

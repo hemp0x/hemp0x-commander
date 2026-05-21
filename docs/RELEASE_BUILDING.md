@@ -40,12 +40,16 @@ Staged binary files are gitignored. They are not intended to be committed to the
 
 ```bash
 npm install
-npm run tauri build
+npm run tauri build -- -b appimage
 ```
 
-Output: `src-tauri/target/release/bundle/appimage/Hemp0x_Commander_2.0.0_x86_64.AppImage`
+The `-b appimage` flag builds only the AppImage bundle (skipping deb/rpm).
+
+Output: `src-tauri/target/release/bundle/appimage/Hemp0x Commander_2.0.0_amd64.AppImage`
 
 The AppImage bundles the Core Next binaries as Tauri `externalBin` resources. At runtime, Commander resolves them relative to the AppImage extraction path.
+
+**Known issue**: On newer Linux distributions (glibc >= 2.39), the linuxdeploy bundling step may fail during the library `strip` phase due to `.relr.dyn` section support in system libraries that the bundled linuxdeploy `strip` doesn't recognize. Workaround: manually run linuxdeploy with a newer version, or build inside a Docker container with an older glibc.
 
 ### Windows Portable EXE
 
@@ -53,10 +57,19 @@ On Windows, with the binaries staged:
 
 ```powershell
 npm install
-npm run tauri build
+npm run tauri build -- --no-bundle
 ```
 
-Outputs are in `src-tauri/target/release/bundle/`.
+The `--no-bundle` flag skips installer generation (no NSIS/MSI), producing only the raw portable EXE and sidecar binaries at `src-tauri/target/release/`.
+
+For distribution, zip the following files together:
+- `hemp0x-commander.exe`
+- `hemp0xd-x86_64-pc-windows-msvc.exe`
+- `hemp0x-cli-x86_64-pc-windows-msvc.exe`
+- `hemp0x-tx-x86_64-pc-windows-msvc.exe`
+
+Do not publish NSIS/MSI installer artifacts for Commander 2.0.0 unless the release
+scope changes.
 
 ## 3. Runtime Binary Resolution
 

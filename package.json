@@ -11,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "stage:core-next": "./scripts/stage_core_next.sh"
+    "stage:core-next": "./scripts/stage_core_next.sh",
+    "build:appimage": "npm run stage:core-next && npm run tauri build -- -b appimage",
+    "build:portable": "npm run stage:core-next && npm run tauri build -- --no-bundle"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.4",

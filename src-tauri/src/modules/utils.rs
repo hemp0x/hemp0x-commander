@@ -9,9 +9,16 @@ pub fn bin_name(name: &str) -> String {
   }
 }
 
+fn target_triple() -> &'static str {
+  if cfg!(target_os = "windows") {
+    "x86_64-pc-windows-msvc"
+  } else {
+    "x86_64-unknown-linux-gnu"
+  }
+}
+
 pub fn add_bin_candidates(candidates: &mut Vec<PathBuf>, base: PathBuf, name: &str, depth: usize) {
-  let target_triple = "x86_64-unknown-linux-gnu"; // Hardcoded for this specific linux context, or use cfg! logic ideally
-  let suffixed_name = format!("{}-{}", name, target_triple);
+  let suffixed_name = format!("{}-{}", name, target_triple());
   
   let mut current = Some(base);
   for _ in 0..=depth {
@@ -33,8 +40,7 @@ pub fn add_bin_candidates(candidates: &mut Vec<PathBuf>, base: PathBuf, name: &s
 }
 
 pub fn resolve_bin(name: &str) -> String {
-  let target_triple = "x86_64-unknown-linux-gnu";
-  let suffixed_name = format!("{}-{}", name, target_triple);
+  let suffixed_name = format!("{}-{}", name, target_triple());
 
   if let Ok(exe) = std::env::current_exe() {
     if let Some(dir) = exe.parent() {

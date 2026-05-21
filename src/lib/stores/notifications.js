@@ -181,6 +181,44 @@ export function addToastNotification(msg, type) {
     notifications.addToast(msg, type);
 }
 
+function compactBody(body, maxLength = 200) {
+    const text = String(body || "");
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength - 3)}...`;
+}
+
+export function addRuntimeNotification(title, body, severity = "info", action = null) {
+    notifications.add({
+        type: "runtime",
+        severity,
+        title,
+        body: compactBody(body),
+        action,
+        persist: severity !== "error",
+    });
+}
+
+export function addTransactionNotification(title, body, severity, txid) {
+    notifications.add({
+        type: "transaction",
+        severity,
+        title,
+        body: compactBody(body),
+        action: txid ? { label: "Copy TXID", txid } : null,
+    });
+}
+
+export function addToolNotification(title, body, severity = "info", action = null, persist = undefined) {
+    notifications.add({
+        type: "tool",
+        severity,
+        title,
+        body: compactBody(body),
+        action,
+        persist: persist ?? severity !== "error",
+    });
+}
+
 export const unreadCount = derived(notifications, ($n) =>
     $n.filter((n) => !n.read).length,
 );

@@ -4,12 +4,13 @@
     import { core } from "@tauri-apps/api";
     import { save } from "@tauri-apps/plugin-dialog";
     import { systemStatus } from "../../stores.js";
+    import { addToolNotification } from "../stores/notifications.js";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
 
-    function showToast(msg, type = "info") {
-        dispatch("toast", { msg, type });
+    function showToast(msg, type = "info", notify = true) {
+        dispatch("toast", { msg, type, notify });
     }
 
     let entries = [];
@@ -74,10 +75,18 @@
     async function deleteEntry(id) {
         if (!tauriReady) return;
         try {
+            const entry = entries.find((e) => e.id === id);
             await core.invoke("delete_tx_journal_entry", { id });
             entries = entries.filter((e) => e.id !== id);
             deleteConfirmId = null;
-            showToast("Entry deleted", "success");
+            showToast("Entry deleted", "success", false);
+            if (entry) {
+                addToolNotification(
+                    "Journal entry deleted",
+                    entry.summary ? entry.summary.substring(0, 100) : "",
+                    "info",
+                );
+            }
         } catch (err) {
             showToast("Delete failed: " + err, "error");
         }

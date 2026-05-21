@@ -24,11 +24,11 @@
   let toastType = "info"; // info, error, success
   let toastTimer;
 
-  function showToast(msg, type = "info") {
+  function showToast(msg, type = "info", notify = true) {
     clearTimeout(toastTimer);
     toastMsg = msg;
     toastType = type;
-    addToastNotification(msg, type);
+    if (notify) addToastNotification(msg, type);
     toastTimer = setTimeout(() => {
       toastMsg = "";
     }, 3000);
@@ -480,7 +480,7 @@
               bind:consoleHistory
               bind:isProcessing
               bind:processingMessage
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "WALLET"}
             <ToolsWallet
@@ -488,7 +488,7 @@
               bind:processingMessage
               {openModal}
               {closeModal}
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "CONFIG"}
             <div
@@ -762,19 +762,19 @@
           {:else if activeSubTab === "NETWORK"}
             <ToolsNetwork
               {activeSubTab}
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "HISTORY"}
             <ToolsHistory
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "JOURNAL"}
             <ToolsJournal
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "CONSOLIDATE"}
             <ToolsConsolidation
-              on:toast={(e) => showToast(e.detail.msg, e.detail.type)}
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {/if}
         </div>

@@ -5,6 +5,7 @@
     import "../../components.css";
     import ModalAlert from "./ModalAlert.svelte";
     import ModalConfirm from "./ModalConfirm.svelte";
+    import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
 
     export let isOpen = false;
     export let nodeOnline = false;
@@ -486,6 +487,18 @@
             previewJournalId = null;
             previewData = null;
             confirmPayload = null;
+
+            if (confirmType === "REWARD DISTRIBUTION") {
+                addToolNotification("Reward distribution broadcasted", successMessage, "success");
+            } else if (txid) {
+                addTransactionNotification(
+                    "Asset operation broadcasted",
+                    confirmType.toLowerCase(),
+                    "success",
+                    txid,
+                );
+            }
+
             triggerAlert("Success", successMessage, "success");
             resetFields();
         } catch (err) {
@@ -503,6 +516,13 @@
             }
             confirmOpen = false;
             previewJournalId = null;
+
+            addToolNotification(
+                `${confirmType || "Operation"} failed`,
+                String(err).substring(0, 200),
+                "error",
+            );
+
             triggerAlert("Error", String(err), "error");
         } finally {
             isBroadcasting = false;

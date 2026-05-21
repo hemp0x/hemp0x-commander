@@ -5,6 +5,7 @@
     import { save, open } from "@tauri-apps/plugin-dialog";
     import CryptoJS from "crypto-js";
     import { systemStatus } from "../../stores.js"; // Import Store
+    import { addToolNotification } from "../stores/notifications.js";
 
     $: tauriReady = $systemStatus.tauriReady;
     export let isProcessing = false;
@@ -15,8 +16,8 @@
 
     const dispatch = createEventDispatcher();
 
-    function showToast(msg, type = "info") {
-        dispatch("toast", { msg, type });
+    function showToast(msg, type = "info", notify = true) {
+        dispatch("toast", { msg, type, notify });
     }
 
     // --- WALLET MANAGEMENT ---
@@ -623,7 +624,8 @@
                     path,
                     content: finalContent,
                 });
-                showToast("Keys Exported Successfully", "success");
+                showToast("Keys Exported Successfully", "success", false);
+                addToolNotification("Private keys exported", `${selected.length} keys exported to file`, "success");
                 showKeyModal = false;
             }
         } catch (e) {
@@ -755,10 +757,16 @@
                 allowOverwrite: migrationExportOverwrite,
                 exportPassphrase: migrationExportPass,
             });
-            showToast("Migration package exported successfully", "success");
+            showToast("Migration package exported successfully", "success", false);
+            addToolNotification(
+                "Wallet migration exported",
+                migrationExportPrivate ? "Private migration package exported" : "Public migration package exported",
+                "success",
+            );
         } catch (e) {
             migrationError = String(e);
-            showToast("Export failed: " + e, "error");
+            showToast("Export failed: " + e, "error", false);
+            addToolNotification("Wallet migration export failed", String(e).substring(0, 200), "error");
         }
         migrationWorking = false;
         migrationExportPass = "";
@@ -808,10 +816,12 @@
                 path: migrationValidatePath,
                 passphrase: migrationValidatePass,
             });
-            showToast("Validation complete", "info");
+            showToast("Validation complete", "info", false);
+            addToolNotification("Wallet migration validated", "", "success");
         } catch (e) {
             migrationError = String(e);
-            showToast("Validation failed: " + e, "error");
+            showToast("Validation failed: " + e, "error", false);
+            addToolNotification("Wallet migration validation failed", String(e).substring(0, 200), "error");
         }
         migrationWorking = false;
         migrationValidatePass = "";
@@ -863,10 +873,12 @@
                 passphrase: migrationRestorePass,
                 birthHeight: migrationRestoreBirth === "" ? null : Number(migrationRestoreBirth),
             });
-            showToast("Wallet restored successfully", "success");
+            showToast("Wallet restored successfully", "success", false);
+            addToolNotification("Wallet migration restored", "", "success");
         } catch (e) {
             migrationError = String(e);
-            showToast("Restore failed: " + e, "error");
+            showToast("Restore failed: " + e, "error", false);
+            addToolNotification("Wallet migration restore failed", String(e).substring(0, 200), "error");
         }
         migrationWorking = false;
         migrationRestorePass = "";

@@ -4,6 +4,7 @@
     import { core } from "@tauri-apps/api";
     import { formatAmount } from "../utils.js";
     import { systemStatus } from "../../stores.js";
+    import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -308,6 +309,11 @@
             }
 
             showPreviewModal = true;
+            addToolNotification(
+                "Consolidation preview ready",
+                `${previewData.utxo_count} UTXOs, ${previewData.input_total} HEMP in, ${previewData.fee_estimate} HEMP fee`,
+                "info",
+            );
         } catch (err) {
             status = "Preview failed: " + err;
             previewData = null;
@@ -340,6 +346,12 @@
             });
 
             status = "Consolidated! TXID: " + txid.substring(0, 16) + "...";
+            addTransactionNotification(
+                "Consolidation broadcasted",
+                `${previewData.utxo_count} UTXOs merged`,
+                "success",
+                txid,
+            );
 
             if (previewJournalId) {
                 try {
@@ -362,6 +374,7 @@
             await fetchUtxos(true);
         } catch (err) {
             status = "Consolidation failed: " + err;
+            addToolNotification("Consolidation failed", String(err).substring(0, 200), "error");
             if (previewJournalId) {
                 try {
                     await core.invoke("update_tx_journal_entry", {

@@ -10,6 +10,7 @@
     systemStatus as systemStore,
     daemonRuntime,
   } from "./stores.js";
+  import { addRuntimeNotification } from "./lib/stores/notifications.js";
 
   import logoNew from "./assets/logonew.png";
   import eyeOpen from "./assets/eye-open.png";
@@ -53,6 +54,10 @@
   let lastKnownDashboard = null; // preserve last good data across transient errors
   let dashboardFailCount = 0;
 
+  // Runtime notification state tracking (prevents duplicate notifications)
+  let coreNextReadyNotified = false;
+  let coreNextMismatchNotified = false;
+
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
   let globalConsoleHistory = [];
@@ -95,22 +100,30 @@
     showDaemonConflict = false;
     if (choice === "continue") {
       await core.invoke("release_daemon_ownership");
+      addRuntimeNotification("Using existing daemon", "", "info");
     } else if (choice === "stop_and_use_bundled") {
       try {
         await core.invoke("stop_node");
+        addRuntimeNotification("External daemon stopped", "", "info");
         await core.invoke("start_node");
+        addRuntimeNotification("Bundled daemon started", "", "info");
         await core.invoke("take_daemon_ownership");
         daemonRuntime.update((d) => ({ ...d, commanderOwns: true }));
         const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 25000 });
         daemonRuntime.update((d) => ({ ...d, readiness }));
         if (!readiness.ready) {
           lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
+          addRuntimeNotification("Daemon readiness failed", lastError, "error");
+        } else {
+          addRuntimeNotification("Bundled daemon ready", "", "success");
         }
       } catch (e) {
         lastError = String(e || "Failed to switch daemon");
+        addRuntimeNotification("Daemon switch failed", lastError, "error");
       }
     } else {
       await core.invoke("release_daemon_ownership");
+      addRuntimeNotification("Staying offline", "Daemon not started.", "info");
     }
     conflictResolved = true;
     daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
@@ -212,6 +225,10 @@
   function setOffline(reason = "") {
     if (nodeInfo.state === "OFFLINE" && lastError === reason) return;
 
+    if (nodeInfo.state !== "OFFLINE") {
+      addRuntimeNotification("Daemon offline", reason || "Node connection lost.", "warning");
+    }
+
     lastKnownDashboard = null;
     nodeInfo = {
       state: "OFFLINE",
@@ -287,10 +304,15 @@
       lastKnownDashboard = data;
       dashboardFailCount = 0;
 
+      const wasOffline = nodeInfo.state !== "RUNNING";
       nodeInfo = data.node;
       walletInfo = data.wallet;
       recentTx = data.tx;
       lastError = "";
+
+      if (wasOffline && data.node.state === "RUNNING") {
+        addRuntimeNotification("Daemon running", "Node is connected and responding.", "success");
+      }
 
       nodeStatus.set({
         online: data.node.state === "RUNNING",
@@ -417,21 +439,27 @@
 
   async function handleStart() {
     if (!tauriReady) return;
+    addRuntimeNotification("Daemon start requested", "", "info");
     try {
       await core.invoke("start_node");
+      addRuntimeNotification("Daemon started", "", "success");
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to start node");
+      addRuntimeNotification("Daemon start failed", lastError, "error");
     }
   }
 
   async function handleStop() {
     if (!tauriReady) return;
+    addRuntimeNotification("Daemon stop requested", "", "info");
     try {
       await core.invoke("stop_node");
+      addRuntimeNotification("Daemon stopped", "", "info");
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to stop node");
+      addRuntimeNotification("Daemon stop failed", lastError, "error");
     }
   }
 
@@ -505,6 +533,24 @@
             },
           }));
 
+          if (status.bundled_core_next_ready && !coreNextReadyNotified) {
+            coreNextReadyNotified = true;
+            const hash = status.daemon.commit_hash || "unknown";
+            addRuntimeNotification("Core Next ready", `${hash}`, "success");
+          }
+
+          if (!status.bundled_core_next_ready && status.daemon.exists && !coreNextMismatchNotified) {
+            coreNextMismatchNotified = true;
+            const bundled = status.daemon.base_version
+              ? `v${status.daemon.base_version}${status.daemon.commit_hash ? ` (${status.daemon.commit_hash})` : ""}`
+              : "unrecognized";
+            addRuntimeNotification(
+              "Core Next version mismatch",
+              `Bundled: ${bundled}. Required: ${status.required_base_version}-${status.required_commit_hash}.`,
+              "warning",
+            );
+          }
+
           if (status.probe.rpc_port_open) {
             conflictRuntimeStatus = status;
             try {
@@ -516,8 +562,14 @@
             } catch {
               // identity probe is best-effort
             }
+            addRuntimeNotification(
+              "External daemon detected",
+              `An existing daemon is running on port ${status.probe.default_rpc_port}.`,
+              "warning",
+            );
             showDaemonConflict = true;
           } else if (appSettings.auto_start_daemon_on_launch && status.bundled_core_next_ready) {
+            addRuntimeNotification("Daemon start requested (auto)", "", "info");
             try {
               await core.invoke("start_node");
               await core.invoke("take_daemon_ownership");
@@ -526,11 +578,15 @@
               daemonRuntime.update((d) => ({ ...d, readiness }));
               if (!readiness.ready) {
                 lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
+                addRuntimeNotification("Daemon readiness failed", lastError, "error");
+              } else {
+                addRuntimeNotification("Daemon started (auto)", "", "success");
               }
               conflictResolved = true;
               daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
             } catch (e) {
               console.error("Failed to auto-start daemon:", e);
+              addRuntimeNotification("Daemon auto-start failed", String(e).substring(0, 200), "error");
             }
           } else {
             conflictResolved = true;
@@ -544,6 +600,7 @@
           }
         } catch (e) {
           console.error("Daemon runtime init failed:", e);
+          addRuntimeNotification("Runtime init failed", String(e).substring(0, 200), "error");
           conflictResolved = true;
           daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
         }

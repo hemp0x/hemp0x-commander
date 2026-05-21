@@ -62,6 +62,7 @@
             message: "MSG",
             ipfs: "IPFS",
             runtime: "RUN",
+            tool: "TOOL",
             system: "SYS",
         };
         return map[type] || type.substring(0, 3).toUpperCase();

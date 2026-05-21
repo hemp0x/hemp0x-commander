@@ -319,3 +319,19 @@ pub struct SnapshotData {
   pub height: i64,
   pub owners: Vec<SnapshotOwnerEntry>,
 }
+
+#[derive(Serialize)]
+pub struct RewardDistributionPreview {
+  pub operation_type: String,
+  pub asset_name: String,
+  pub ownership_asset: String,
+  pub snapshot_height: i64,
+  pub distribution_asset: String,
+  pub gross_amount: String,
+  pub exception_addresses: Option<String>,
+  pub estimated_recipient_count: Option<usize>,
+  pub warnings: Vec<String>,
+  pub summary: String,
+  pub is_irreversible: bool,
+  pub validated: bool,
+}

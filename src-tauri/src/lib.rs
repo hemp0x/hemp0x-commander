@@ -94,6 +94,9 @@ pub fn run() {
       commands::list_snapshot_requests,
       commands::cancel_snapshot_request,
       commands::get_asset_snapshot,
+      commands::preview_distribute_reward,
+      commands::distribute_reward,
+      commands::get_distribute_reward_status,
 
       // Commands from modules::process
       process::start_node,

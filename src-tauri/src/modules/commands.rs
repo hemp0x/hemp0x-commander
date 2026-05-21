@@ -2866,6 +2866,247 @@ pub fn get_asset_snapshot(asset_name: String, block_height: i64) -> Result<Snaps
 }
 
 // ---------------------------------------------------------------------------
+// Rewards / Dividends Distribution
+// ---------------------------------------------------------------------------
+
+fn validate_reward_snapshot_height(height: i64) -> Result<i64, String> {
+  if height <= 0 {
+    return Err("Snapshot block height must be greater than zero".to_string());
+  }
+  Ok(height)
+}
+
+fn validate_distribution_amount(amount: &str) -> Result<f64, String> {
+  parse_positive_amount(amount)
+}
+
+fn format_reward_amount(amount: f64) -> String {
+  format!("{amount:.8}")
+}
+
+fn parse_exception_addresses(raw: Option<String>) -> Result<String, String> {
+  match raw {
+    Some(val) => {
+      let trimmed = val.trim().to_string();
+      if trimmed.is_empty() {
+        return Ok(String::new());
+      }
+      let addresses: Vec<&str> = trimmed.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+      if addresses.len() > 500 {
+        return Err("Too many exception addresses (max 500)".to_string());
+      }
+      Ok(addresses.join(","))
+    }
+    None => Ok(String::new()),
+  }
+}
+
+fn validate_reward_exception_addresses(addresses: &str) -> Result<(), String> {
+  for address in addresses.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if address.len() < 20 || address.len() > 90 {
+      return Err("Exception address length is invalid".to_string());
+    }
+    if !address.chars().all(|c| c.is_ascii_alphanumeric()) {
+      return Err("Exception addresses must be comma-separated address strings".to_string());
+    }
+  }
+  Ok(())
+}
+
+fn reward_status_label(status: i64) -> &'static str {
+  match status {
+    0 => "ERROR",
+    1 => "PROCESSING",
+    2 => "COMPLETE",
+    3 => "LOW_FUNDS",
+    4 => "NOT_ENOUGH_FEE",
+    5 => "LOW_REWARDS",
+    6 => "STUCK_TX",
+    7 => "NETWORK_ERROR",
+    8 => "FAILED_CREATE_TRANSACTION",
+    9 => "FAILED_COMMIT_TRANSACTION",
+    _ => "UNKNOWN",
+  }
+}
+
+fn reward_rpc_status_value(raw: &str) -> serde_json::Value {
+  let trimmed = raw.trim();
+  match serde_json::from_str::<serde_json::Value>(trimmed) {
+    Ok(mut value) => {
+      if let Some(status) = value.get("Status").and_then(|v| v.as_i64()) {
+        if let Some(obj) = value.as_object_mut() {
+          obj.insert("Status Label".to_string(), serde_json::Value::String(reward_status_label(status).to_string()));
+        }
+      }
+      value
+    }
+    Err(_) => serde_json::json!({ "Status": trimmed }),
+  }
+}
+
+#[tauri::command]
+pub fn preview_distribute_reward(
+  ownership_asset: String,
+  snapshot_height: i64,
+  distribution_asset: String,
+  gross_amount: String,
+  exception_addresses: Option<String>,
+) -> Result<RewardDistributionPreview, String> {
+  ensure_config()?;
+  let ownership_asset = ownership_asset.trim().to_string();
+  validate_asset_name(&ownership_asset)?;
+  let snapshot_height = validate_reward_snapshot_height(snapshot_height)?;
+  let distribution_asset = distribution_asset.trim().to_string();
+  if distribution_asset == "HEMP" {
+    // HEMP distribution does not need ownership token check
+  } else {
+    validate_asset_name(&distribution_asset)?;
+  }
+  let amount_val = validate_distribution_amount(&gross_amount)?;
+  let amount_formatted = format_reward_amount(amount_val);
+  let exceptions = parse_exception_addresses(exception_addresses)?;
+  validate_reward_exception_addresses(&exceptions)?;
+
+  let mut warnings = Vec::new();
+  warnings.push("Reward distributions are IRREVERSIBLE once triggered. Funds cannot be recalled.".to_string());
+  warnings.push("Distributereward requires -assetindex to be enabled on the node.".to_string());
+  warnings.push("The distribution is processed asynchronously in batches by the node. The operation returns a status, not individual transaction IDs.".to_string());
+  warnings.push(format!(
+    "The snapshot must have been requested and completed at block height {} before distribution can be initiated.",
+    snapshot_height
+  ));
+
+  let mut estimated_recipient_count: Option<usize> = None;
+
+  // Try to get the snapshot for recipient count estimate (best-effort, non-blocking)
+  if let Ok(raw) = run_cli(&[
+    String::from("getsnapshot"),
+    ownership_asset.clone(),
+    format!("{snapshot_height}"),
+  ]) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+      if let Some(owners) = value.get("owners").and_then(|v| v.as_array()) {
+        estimated_recipient_count = Some(owners.len());
+        if owners.len() > 1000 {
+          warnings.push(format!(
+            "Distribution has {} recipients which exceeds the 1000-per-batch limit. The node will process this in multiple batches.",
+            owners.len()
+          ));
+        }
+        if owners.len() == 0 {
+          warnings.push("Snapshot has zero holders. Distribution will have no recipients.".to_string());
+        }
+      }
+    }
+  }
+
+  let summary = format!(
+    "Distribute {} {} to {} holders of '{}' at snapshot height {}",
+    amount_formatted, distribution_asset,
+    estimated_recipient_count.map_or("unknown".to_string(), |c| c.to_string()),
+    ownership_asset, snapshot_height
+  );
+
+  Ok(RewardDistributionPreview {
+    operation_type: "distribute_reward".to_string(),
+    asset_name: ownership_asset.clone(),
+    ownership_asset: ownership_asset.clone(),
+    snapshot_height,
+    distribution_asset: distribution_asset.clone(),
+    gross_amount: amount_formatted,
+    exception_addresses: if exceptions.is_empty() { None } else { Some(exceptions) },
+    estimated_recipient_count,
+    warnings,
+    summary,
+    is_irreversible: true,
+    validated: true,
+  })
+}
+
+#[tauri::command]
+pub fn distribute_reward(
+  ownership_asset: String,
+  snapshot_height: i64,
+  distribution_asset: String,
+  gross_amount: String,
+  exception_addresses: Option<String>,
+) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let ownership_asset = ownership_asset.trim().to_string();
+  validate_asset_name(&ownership_asset)?;
+  let snapshot_height = validate_reward_snapshot_height(snapshot_height)?;
+  let distribution_asset = distribution_asset.trim().to_string();
+  if distribution_asset != "HEMP" {
+    validate_asset_name(&distribution_asset)?;
+  }
+  let amount_val = validate_distribution_amount(&gross_amount)?;
+  let amount_formatted = format_reward_amount(amount_val);
+  let exceptions = parse_exception_addresses(exception_addresses)?;
+  validate_reward_exception_addresses(&exceptions)?;
+
+  // Build args for distributereward:
+  // distributereward "asset_name" snapshot_height "distribution_asset_name" gross_amount ["exception_addresses"] ["change_address"]
+  let mut args = vec![
+    String::from("distributereward"),
+    ownership_asset,
+    format!("{snapshot_height}"),
+    distribution_asset,
+    amount_formatted,
+  ];
+  if !exceptions.is_empty() {
+    args.push(exceptions);
+  }
+
+  let raw = run_cli(&args)?;
+
+  // distributereward returns "Created reward distribution" (a simple string, not JSON)
+  let trimmed = raw.trim();
+  if trimmed != "Created reward distribution" {
+    return Err(trimmed.to_string());
+  }
+  Ok(serde_json::json!({
+    "status": trimmed,
+    "command": "distributereward"
+  }))
+}
+
+#[tauri::command]
+pub fn get_distribute_reward_status(
+  ownership_asset: String,
+  snapshot_height: i64,
+  distribution_asset: String,
+  gross_amount: String,
+  exception_addresses: Option<String>,
+) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let ownership_asset = ownership_asset.trim().to_string();
+  validate_asset_name(&ownership_asset)?;
+  let snapshot_height = validate_reward_snapshot_height(snapshot_height)?;
+  let distribution_asset = distribution_asset.trim().to_string();
+  if distribution_asset != "HEMP" {
+    validate_asset_name(&distribution_asset)?;
+  }
+  let amount_val = validate_distribution_amount(&gross_amount)?;
+  let amount_formatted = format_reward_amount(amount_val);
+  let exceptions = parse_exception_addresses(exception_addresses)?;
+  validate_reward_exception_addresses(&exceptions)?;
+
+  let mut args = vec![
+    String::from("getdistributestatus"),
+    ownership_asset,
+    format!("{snapshot_height}"),
+    distribution_asset,
+    amount_formatted,
+  ];
+  if !exceptions.is_empty() {
+    args.push(exceptions);
+  }
+
+  let raw = run_cli(&args)?;
+  Ok(reward_rpc_status_value(&raw))
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -3553,5 +3794,110 @@ mod tests {
     let verifier = validate_verifier_string("#KYC").unwrap();
     assert_eq!(name, "$TOKEN");
     assert_eq!(verifier, "#KYC");
+  }
+
+  // --- Reward Distribution Tests ---
+
+  use super::{
+    format_reward_amount, parse_exception_addresses, reward_rpc_status_value,
+    validate_distribution_amount, validate_reward_exception_addresses,
+    validate_reward_snapshot_height,
+  };
+
+  #[test]
+  fn reward_snapshot_height_positive() {
+    assert_eq!(validate_reward_snapshot_height(100).unwrap(), 100);
+  }
+
+  #[test]
+  fn reward_snapshot_height_rejects_zero() {
+    assert!(validate_reward_snapshot_height(0).is_err());
+  }
+
+  #[test]
+  fn reward_snapshot_height_rejects_negative() {
+    assert!(validate_reward_snapshot_height(-1).is_err());
+  }
+
+  #[test]
+  fn reward_amount_positive() {
+    assert_eq!(validate_distribution_amount("100.5").unwrap(), 100.5);
+  }
+
+  #[test]
+  fn reward_amount_formats_fixed_precision() {
+    assert_eq!(format_reward_amount(100.5), "100.50000000");
+  }
+
+  #[test]
+  fn reward_amount_rejects_zero() {
+    assert!(validate_distribution_amount("0").is_err());
+    assert!(validate_distribution_amount("0.0").is_err());
+  }
+
+  #[test]
+  fn reward_amount_rejects_negative() {
+    assert!(validate_distribution_amount("-50").is_err());
+  }
+
+  #[test]
+  fn reward_amount_rejects_non_numeric() {
+    assert!(validate_distribution_amount("abc").is_err());
+  }
+
+  #[test]
+  fn reward_exception_addresses_parses_single() {
+    let result = parse_exception_addresses(Some("Haddr1".to_string())).unwrap();
+    assert_eq!(result, "Haddr1");
+  }
+
+  #[test]
+  fn reward_exception_addresses_parses_comma_separated() {
+    let result = parse_exception_addresses(Some("Haddr1, Haddr2 , Haddr3".to_string())).unwrap();
+    assert_eq!(result, "Haddr1,Haddr2,Haddr3");
+  }
+
+  #[test]
+  fn reward_exception_addresses_empty_none() {
+    assert_eq!(parse_exception_addresses(None).unwrap(), "");
+  }
+
+  #[test]
+  fn reward_exception_addresses_empty_some() {
+    assert_eq!(parse_exception_addresses(Some("   ".to_string())).unwrap(), "");
+  }
+
+  #[test]
+  fn reward_exception_addresses_validate_lightweight_syntax() {
+    assert!(validate_reward_exception_addresses("H123456789ABCDEFGHijklmno").is_ok());
+    assert!(validate_reward_exception_addresses("bad address").is_err());
+    assert!(validate_reward_exception_addresses("short").is_err());
+  }
+
+  #[test]
+  fn reward_status_value_labels_numeric_status() {
+    let value = reward_rpc_status_value(r#"{"Status":1}"#);
+    assert_eq!(value["Status Label"], "PROCESSING");
+  }
+
+  #[test]
+  fn reward_distributereward_args_validation() {
+    let asset = "MYTOKEN".to_string();
+    let height = 12345i64;
+    let _dist = "HEMP".to_string();
+    let amount = "1000";
+    assert!(validate_asset_name(&asset).is_ok());
+    assert!(validate_reward_snapshot_height(height).is_ok());
+    assert!(validate_distribution_amount(amount).is_ok());
+    // For HEMP distribution, no ownership token check needed client-side
+    // Non-HEMP distribution would require asset name validation
+    assert!(validate_asset_name("DIVIDENDS").is_ok());
+  }
+
+  #[test]
+  fn reward_distributereward_args_validation_non_hemp() {
+    assert!(validate_asset_name("DIVIDENDS").is_ok());
+    assert!(validate_distribution_amount("500").is_ok());
+    assert!(validate_reward_snapshot_height(100000).is_ok());
   }
 }

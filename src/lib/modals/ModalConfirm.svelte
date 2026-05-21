@@ -74,6 +74,30 @@
                             <span class="row-val" style="font-size:0.7rem;">{previewData.tags.join(", ")}</span>
                         </div>
                     {/if}
+                    {#if previewData.operation_type === "distribute_reward"}
+                        <div class="confirm-row">
+                            <span class="row-key">SNAPSHOT HEIGHT</span>
+                            <span class="row-val">{previewData.snapshot_height}</span>
+                        </div>
+                        <div class="confirm-row">
+                            <span class="row-key">DISTRIBUTION ASSET</span>
+                            <span class="row-val">{previewData.distribution_asset}</span>
+                        </div>
+                        <div class="confirm-row">
+                            <span class="row-key">GROSS AMOUNT</span>
+                            <span class="row-val">{previewData.gross_amount}</span>
+                        </div>
+                        <div class="confirm-row">
+                            <span class="row-key">RECIPIENTS</span>
+                            <span class="row-val">{previewData.estimated_recipient_count ?? "unknown"}</span>
+                        </div>
+                        {#if previewData.exception_addresses}
+                            <div class="confirm-row">
+                                <span class="row-key">EXCLUSIONS</span>
+                                <span class="row-val mono" style="font-size:0.65rem;">{previewData.exception_addresses}</span>
+                            </div>
+                        {/if}
+                    {/if}
 
                     {#if previewData.is_irreversible}
                         <div class="warning-box irreversible">

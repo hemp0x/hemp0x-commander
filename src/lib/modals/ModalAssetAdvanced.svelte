@@ -12,7 +12,7 @@
     const dispatch = createEventDispatcher();
 
     // Tabs
-    let activeTab = "qualifier"; // qualifier, restricted, tags, snapshot
+    let activeTab = "qualifier"; // qualifier, restricted, tags, snapshot, rewards
 
     // Qualifier State
     let qualifierName = "";
@@ -53,6 +53,15 @@
     let snapGetHeight = "";
     let snapData = null;
     let snapGetLoading = false;
+
+    // Rewards State
+    let rewardOwnershipAsset = "";
+    let rewardSnapshotHeight = "";
+    let rewardDistAsset = "HEMP";
+    let rewardGrossAmount = "";
+    let rewardExceptions = "";
+    let rewardStatusData = null;
+    let rewardStatusLoading = false;
 
     // Alerts
     let alertOpen = false;
@@ -99,6 +108,13 @@
         snapGetHeight = "";
         snapData = null;
         snapGetLoading = false;
+        rewardOwnershipAsset = "";
+        rewardSnapshotHeight = "";
+        rewardDistAsset = "HEMP";
+        rewardGrossAmount = "";
+        rewardExceptions = "";
+        rewardStatusData = null;
+        rewardStatusLoading = false;
     }
 
     // ---- Qualifier Operations ----
@@ -319,12 +335,92 @@
         snapGetLoading = false;
     }
 
+    // ---- Rewards / Dividends ----
+
+    async function previewReward() {
+        if (previewInProgress) return;
+        if (!rewardOwnershipAsset || !rewardSnapshotHeight || !rewardGrossAmount) {
+            triggerAlert("Validation", "Ownership asset, snapshot height, and gross amount are required.", "error");
+            return;
+        }
+        const height = Number(rewardSnapshotHeight);
+        if (!Number.isInteger(height) || height <= 0) {
+            triggerAlert("Validation", "Snapshot block height must be a positive whole number.", "error");
+            return;
+        }
+        previewInProgress = true;
+        try {
+            previewData = await invoke("preview_distribute_reward", {
+                ownershipAsset: rewardOwnershipAsset.trim(),
+                snapshotHeight: height,
+                distributionAsset: rewardDistAsset.trim() || "HEMP",
+                grossAmount: rewardGrossAmount.trim(),
+                exceptionAddresses: rewardExceptions.trim() || null,
+            });
+            confirmType = "REWARD DISTRIBUTION";
+            confirmOpen = true;
+            try {
+                const entry = await invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Previewed",
+                        operation_type: "distribute_reward",
+                        summary: previewData.summary,
+                        txid: null,
+                        details: {
+                            ownership_asset: previewData.ownership_asset,
+                            snapshot_height: previewData.snapshot_height,
+                            distribution_asset: previewData.distribution_asset,
+                            gross_amount: previewData.gross_amount,
+                            exception_addresses: previewData.exception_addresses,
+                        },
+                    },
+                });
+                previewJournalId = entry.id;
+            } catch (journalErr) {
+                console.warn("Failed to record journal preview entry:", journalErr);
+                previewJournalId = null;
+            }
+        } catch (err) {
+            triggerAlert("Preview Failed", String(err), "error");
+        } finally {
+            previewInProgress = false;
+        }
+    }
+
+    async function checkRewardStatus() {
+        if (!rewardOwnershipAsset || !rewardSnapshotHeight || !rewardGrossAmount) {
+            triggerAlert("Validation", "Ownership asset, snapshot height, and gross amount are required for status check.", "error");
+            return;
+        }
+        const height = Number(rewardSnapshotHeight);
+        if (!Number.isInteger(height) || height <= 0) {
+            triggerAlert("Validation", "Snapshot block height must be a positive whole number.", "error");
+            return;
+        }
+        rewardStatusLoading = true;
+        try {
+            rewardStatusData = await invoke("get_distribute_reward_status", {
+                ownershipAsset: rewardOwnershipAsset.trim(),
+                snapshotHeight: height,
+                distributionAsset: rewardDistAsset.trim() || "HEMP",
+                grossAmount: rewardGrossAmount.trim(),
+                exceptionAddresses: rewardExceptions.trim() || null,
+            });
+        } catch (err) {
+            rewardStatusData = null;
+            triggerAlert("Status Check Failed", String(err), "error");
+        }
+        rewardStatusLoading = false;
+    }
+
     // ---- Confirm Handler ----
 
     async function confirmAction() {
         isBroadcasting = true;
         try {
             let txid = "";
+            let successMessage = "";
+            let journalDetails = null;
             if (confirmType === "QUALIFIER ISSUE") {
                 txid = await invoke("issue_qualifier_asset", {
                     name: previewData.qualifier_name,
@@ -352,6 +448,26 @@
                     tagName: confirmPayload.tag_name,
                     address: confirmPayload.address,
                 });
+            } else if (confirmType === "REWARD DISTRIBUTION") {
+                const result = await invoke("distribute_reward", {
+                    ownershipAsset: previewData.ownership_asset,
+                    snapshotHeight: previewData.snapshot_height,
+                    distributionAsset: previewData.distribution_asset,
+                    grossAmount: previewData.gross_amount,
+                    exceptionAddresses: previewData.exception_addresses,
+                });
+                successMessage = result.status || JSON.stringify(result);
+                journalDetails = {
+                    distribution_status: successMessage,
+                    ownership_asset: previewData.ownership_asset,
+                    snapshot_height: previewData.snapshot_height,
+                    distribution_asset: previewData.distribution_asset,
+                    gross_amount: previewData.gross_amount,
+                    exception_addresses: previewData.exception_addresses,
+                };
+            }
+            if (!successMessage) {
+                successMessage = `Transaction broadcasted. TXID: ${txid}`;
             }
 
             confirmOpen = false;
@@ -360,8 +476,8 @@
                     await invoke("update_tx_journal_entry", {
                         id: previewJournalId,
                         status: "Broadcasted",
-                        txid: txid,
-                        details: null,
+                        txid: txid || null,
+                        details: journalDetails,
                     });
                 } catch (journalErr) {
                     console.warn("Failed to update journal entry:", journalErr);
@@ -370,7 +486,7 @@
             previewJournalId = null;
             previewData = null;
             confirmPayload = null;
-            triggerAlert("Success", `Transaction broadcasted. TXID: ${txid}`, "success");
+            triggerAlert("Success", successMessage, "success");
             resetFields();
         } catch (err) {
             if (previewJournalId) {
@@ -448,6 +564,10 @@
                 <button
                     class:active={activeTab === "snapshot"}
                     on:click={() => (activeTab = "snapshot")}>Snapshots</button
+                >
+                <button
+                    class:active={activeTab === "rewards"}
+                    on:click={() => (activeTab = "rewards")}>Rewards</button
                 >
             </div>
 
@@ -629,6 +749,52 @@
                                                 {/each}
                                             </div>
                                         {/if}
+                                    </div>
+                                {/if}
+                            </div>
+                        </div>
+                    {:else if activeTab === "rewards"}
+                        <div class="tab-panel">
+                            <h4>Rewards / Dividends Distribution</h4>
+                            <p class="section-desc">
+                                Distribute rewards or dividends to all holders of an asset using a previously completed snapshot.
+                                Requires <code>-assetindex</code> enabled on the node and a completed snapshot at the target height.
+                            </p>
+                            <!-- Distribution Form -->
+                            <div class="subsection">
+                                <h5>Setup Distribution</h5>
+                                <label for="reward-ownership">Ownership Asset</label>
+                                <input id="reward-ownership" type="text" bind:value={rewardOwnershipAsset} placeholder="ASSET_NAME whose holders receive rewards" class="cyber-input" />
+                                <label for="reward-height">Snapshot Block Height</label>
+                                <input id="reward-height" type="number" bind:value={rewardSnapshotHeight} placeholder="Completed snapshot block number" class="cyber-input" />
+                                <label for="reward-dist-asset">Distribution Asset</label>
+                                <input id="reward-dist-asset" type="text" bind:value={rewardDistAsset} placeholder="HEMP or ASSET_NAME to distribute" class="cyber-input" />
+                                <label for="reward-gross">Gross Distribution Amount</label>
+                                <input id="reward-gross" type="text" bind:value={rewardGrossAmount} placeholder="Total amount to split among holders" class="cyber-input" />
+                                <label for="reward-exceptions">Excluded Addresses (optional)</label>
+                                <input id="reward-exceptions" type="text" bind:value={rewardExceptions} placeholder="Comma-separated addresses to exclude" class="cyber-input" />
+                                <div class="actions">
+                                    <button class="cyber-btn warning" on:click={previewReward} disabled={previewInProgress}>
+                                        {previewInProgress ? "Building Preview..." : "Preview Distribution"}
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Status Check -->
+                            <div class="subsection">
+                                <h5>Check Distribution Status</h5>
+                                <p class="section-desc">
+                                    For distributions already submitted, use the same parameters to check status.
+                                </p>
+                                <div class="actions">
+                                    <button class="cyber-btn" on:click={checkRewardStatus} disabled={rewardStatusLoading}>
+                                        {rewardStatusLoading ? "Checking..." : "Check Status"}
+                                    </button>
+                                </div>
+                                {#if rewardStatusData}
+                                    <div class="snapshot-result">
+                                        {#each Object.entries(rewardStatusData) as [k, v]}
+                                            <p><strong>{k}:</strong> {typeof v === 'object' ? JSON.stringify(v) : v}</p>
+                                        {/each}
                                     </div>
                                 {/if}
                             </div>

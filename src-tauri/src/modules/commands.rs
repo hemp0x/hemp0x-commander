@@ -3618,6 +3618,58 @@ pub fn send_announcement(
 }
 
 // ---------------------------------------------------------------------------
+// IPFS Reference Helpers
+// ---------------------------------------------------------------------------
+
+fn validate_ipfs_reference(hash: &str) -> Result<IpfsReferenceInfo, String> {
+  let trimmed = hash.trim();
+  if trimmed.is_empty() {
+    return Err("IPFS hash is empty".to_string());
+  }
+  if trimmed.len() > 64 {
+    return Err("IPFS hash is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    return Err("IPFS hash contains whitespace or control characters".to_string());
+  }
+  let mut warnings = Vec::new();
+  let kind = if trimmed.starts_with("Qm") && trimmed.len() >= 46 {
+    "cidv0".to_string()
+  } else if trimmed.starts_with("bafy") || trimmed.starts_with("bafk") || trimmed.starts_with("bae") {
+    "cidv1".to_string()
+  } else {
+    warnings.push("Hash does not match known CIDv0 or CIDv1 prefix patterns".to_string());
+    "unknown".to_string()
+  };
+  Ok(IpfsReferenceInfo {
+    normalized: trimmed.to_string(),
+    kind,
+    warnings,
+  })
+}
+
+fn build_ipfs_gateway_url(hash: &str, gateway_base: Option<String>) -> Result<String, String> {
+  let info = validate_ipfs_reference(hash)?;
+  let base = match gateway_base {
+    Some(ref g) if !g.trim().is_empty() => g.trim().to_string(),
+    _ => "http://127.0.0.1:8080/ipfs/".to_string(),
+  };
+  let clean_base = base.trim_end_matches('/');
+  let url = format!("{}/{}", clean_base, info.normalized);
+  Ok(url)
+}
+
+#[tauri::command]
+pub fn ipfs_validate(hash: String) -> Result<IpfsReferenceInfo, String> {
+  validate_ipfs_reference(&hash)
+}
+
+#[tauri::command]
+pub fn ipfs_gateway_url(hash: String, gateway_base: Option<String>) -> Result<String, String> {
+  build_ipfs_gateway_url(&hash, gateway_base)
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -3638,6 +3690,7 @@ mod tests {
     validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
     message_authority_asset_name,
     parse_message_entry, parse_channel_name_list, parse_messaging_info,
+    validate_ipfs_reference, build_ipfs_gateway_url,
   };
 
   #[test]
@@ -4762,5 +4815,97 @@ mod tests {
     assert!(!info.enabled);
     assert_eq!(info.warnings.len(), 1);
     assert_eq!(info.warnings[0], "Messaging is disabled via -disablemessaging");
+  }
+
+  // --- IPFS Reference Tests ---
+
+  #[test]
+  fn ipfs_validate_accepts_cidv0() {
+    let result = validate_ipfs_reference("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26").unwrap();
+    assert_eq!(result.kind, "cidv0");
+    assert_eq!(result.normalized, "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26");
+    assert!(result.warnings.is_empty());
+  }
+
+  #[test]
+  fn ipfs_validate_accepts_cidv1_bafy() {
+    let result = validate_ipfs_reference("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap();
+    assert_eq!(result.kind, "cidv1");
+  }
+
+  #[test]
+  fn ipfs_validate_accepts_cidv1_bafk() {
+    let result = validate_ipfs_reference("bafkreidgvpkjawlxz6sffxzwgooouw5s2e4foc3b7b6r7d5e7a2vz").unwrap();
+    assert_eq!(result.kind, "cidv1");
+  }
+
+  #[test]
+  fn ipfs_validate_marks_unknown_prefix() {
+    let result = validate_ipfs_reference("xyz123notaciddata").unwrap();
+    assert_eq!(result.kind, "unknown");
+    assert!(!result.warnings.is_empty());
+  }
+
+  #[test]
+  fn ipfs_validate_rejects_empty() {
+    assert!(validate_ipfs_reference("").is_err());
+  }
+
+  #[test]
+  fn ipfs_validate_rejects_whitespace_only() {
+    assert!(validate_ipfs_reference("   ").is_err());
+  }
+
+  #[test]
+  fn ipfs_validate_rejects_whitespace_inside() {
+    assert!(validate_ipfs_reference("Qm Hash with spaces").is_err());
+  }
+
+  #[test]
+  fn ipfs_validate_rejects_control_characters() {
+    assert!(validate_ipfs_reference("QmHash\nwith\nnewline").is_err());
+  }
+
+  #[test]
+  fn ipfs_validate_rejects_too_long() {
+    let long_hash = "Qm".to_string() + &"a".repeat(63);
+    assert!(validate_ipfs_reference(&long_hash).is_err());
+  }
+
+  #[test]
+  fn ipfs_validate_accepts_max_length() {
+    let hash_64 = "Qm".to_string() + &"a".repeat(62);
+    assert!(validate_ipfs_reference(&hash_64).is_ok());
+  }
+
+  #[test]
+  fn ipfs_gateway_url_builds_with_local_default() {
+    let url = build_ipfs_gateway_url("QmTest", None).unwrap();
+    assert!(url.starts_with("http://127.0.0.1:8080/ipfs/"));
+    assert!(url.ends_with("/QmTest"));
+  }
+
+  #[test]
+  fn ipfs_gateway_url_builds_with_custom_base() {
+    let url = build_ipfs_gateway_url("QmTest", Some("http://localhost:5001/ipfs/".to_string())).unwrap();
+    assert!(url.starts_with("http://localhost:5001/ipfs/"));
+    assert!(url.ends_with("/QmTest"));
+  }
+
+  #[test]
+  fn ipfs_gateway_url_trims_trailing_slashes() {
+    let url = build_ipfs_gateway_url("QmTest", Some("http://gateway.example/".to_string())).unwrap();
+    assert_eq!(url, "http://gateway.example/QmTest");
+  }
+
+  #[test]
+  fn ipfs_gateway_url_handles_base_without_trailing_slash() {
+    let url = build_ipfs_gateway_url("QmTest", Some("http://gateway.example".to_string())).unwrap();
+    assert_eq!(url, "http://gateway.example/QmTest");
+  }
+
+  #[test]
+  fn ipfs_gateway_url_rejects_invalid_input() {
+    assert!(build_ipfs_gateway_url("", None).is_err());
   }
 }

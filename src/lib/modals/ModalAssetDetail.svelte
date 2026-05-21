@@ -5,6 +5,7 @@
     import { formatBalance } from "../utils.js";
     import "../../components.css";
     import Tooltip from "../ui/Tooltip.svelte";
+    import IpfsReference from "../ui/IpfsReference.svelte";
     import ModalAlert from "./ModalAlert.svelte";
 
     const dispatch = createEventDispatcher();
@@ -353,11 +354,9 @@
                                     </span>
                                 </div>
                                 {#if metadata.has_ipfs && metadata.ipfs_hash}
-                                    <div class="meta-row">
+                                    <div class="meta-row ipfs-row">
                                         <span class="meta-label">IPFS</span>
-                                        <span class="meta-value mono ipfs-hash"
-                                            >{metadata.ipfs_hash}</span
-                                        >
+                                        <IpfsReference hash={metadata.ipfs_hash} compact={true} />
                                     </div>
                                 {/if}
                                 <div class="meta-row">
@@ -453,8 +452,8 @@
                                     {#each filteredMessages as msg (msg.asset_name + msg.time + msg.message)}
                                         <div class="message-entry" class:unread={msg.status === 'UNREAD'}>
                                             <div class="message-channel">{msg.asset_name}</div>
-                                            <div class="message-hash" title={msg.message}>
-                                                IPFS: {msg.message}
+                                            <div class="message-hash">
+                                                <IpfsReference hash={msg.message} compact={true} />
                                             </div>
                                             <div class="message-meta">
                                                 <span class="message-time">{msg.time}</span>
@@ -808,15 +807,6 @@
     }
     .meta-value.yes {
         color: var(--color-primary);
-    }
-    .meta-value.mono {
-        font-family: var(--font-mono);
-    }
-    .ipfs-hash {
-        font-size: 0.55rem;
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
     }
 
     /* Tabs */

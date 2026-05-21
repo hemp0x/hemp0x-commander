@@ -173,6 +173,13 @@ pub struct AppSettings {
   pub allow_non_bundled_core_next: bool,
 }
 
+#[derive(Serialize)]
+pub struct IpfsReferenceInfo {
+  pub normalized: String,
+  pub kind: String,
+  pub warnings: Vec<String>,
+}
+
 impl Default for AppSettings {
   fn default() -> Self {
     Self {

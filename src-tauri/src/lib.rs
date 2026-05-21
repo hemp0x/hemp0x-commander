@@ -107,6 +107,10 @@ pub fn run() {
       commands::preview_send_announcement,
       commands::send_announcement,
 
+      // IPFS Commands
+      commands::ipfs_validate,
+      commands::ipfs_gateway_url,
+
       // Commands from modules::process
       process::start_node,
       process::stop_node,

@@ -24,7 +24,6 @@
 
     let builderInputs = [{ txid: "", vout: 0 }];
     let builderOutputs = [{ address: "", amount: "" }];
-    let changeAddress = "";
     let buildResult = null;
     let buildError = "";
     let buildLoading = false;
@@ -108,7 +107,6 @@
     function clearBuilder() {
         builderInputs = [{ txid: "", vout: 0 }];
         builderOutputs = [{ address: "", amount: "" }];
-        changeAddress = "";
         buildResult = null;
         buildError = "";
     }
@@ -211,7 +209,6 @@
         buildError = "";
         builderInputs = [{ txid: "", vout: 0 }];
         builderOutputs = [{ address: "", amount: "" }];
-        changeAddress = "";
         showBuilderWarnings = false;
     }
 </script>

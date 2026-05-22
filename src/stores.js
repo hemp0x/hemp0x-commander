@@ -86,6 +86,16 @@ export const daemonRuntime = writable({
         commit_match: false,
         commit_available: false,
         status: "",
+        capabilities: {
+            help_probe_success: false,
+            wallet_migration: false,
+            messaging: false,
+            restricted_assets: false,
+            qualifiers: false,
+            rewards: false,
+            snapshots: false,
+            detected_rpc_names: [],
+        },
     },
     readiness: {
         ready: false,

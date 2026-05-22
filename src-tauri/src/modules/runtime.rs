@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::modules::rpc::rpc_context;
+use crate::modules::rpc::RpcContext;
 use crate::modules::utils::resolve_bin;
 
 const REQUIRED_CORE_NEXT_COMMIT: &str = "192c6b5ce";
@@ -208,6 +209,105 @@ pub struct RunningDaemonIdentity {
     pub commit_match: bool,
     pub commit_available: bool,
     pub status: String,
+    pub capabilities: CoreNextCapabilities,
+}
+
+#[derive(Clone, Serialize)]
+pub struct CoreNextCapabilities {
+    pub help_probe_success: bool,
+    pub wallet_migration: bool,
+    pub messaging: bool,
+    pub restricted_assets: bool,
+    pub qualifiers: bool,
+    pub rewards: bool,
+    pub snapshots: bool,
+    pub detected_rpc_names: Vec<String>,
+}
+
+impl Default for CoreNextCapabilities {
+    fn default() -> Self {
+        Self {
+            help_probe_success: false,
+            wallet_migration: false,
+            messaging: false,
+            restricted_assets: false,
+            qualifiers: false,
+            rewards: false,
+            snapshots: false,
+            detected_rpc_names: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilities {
+    if help_text.trim().is_empty() {
+        return CoreNextCapabilities::default();
+    }
+
+    let lower = help_text.to_lowercase();
+
+    let wallet_migration = lower.contains("exportwalletmigration")
+        && lower.contains("validatewalletmigration")
+        && lower.contains("restorewalletmigration");
+
+    let messaging = lower.contains("getmessaginginfo")
+        && lower.contains("viewallmessages")
+        && lower.contains("viewallmessagechannels");
+
+    let restricted_assets = lower.contains("listrestrictedassets")
+        && lower.contains("issuerestrictedasset");
+
+    let qualifiers = lower.contains("listqualifiers")
+        && lower.contains("issuequalifierasset");
+
+    let rewards = lower.contains("distributereward")
+        && lower.contains("getdistributestatus");
+
+    let snapshots = lower.contains("requestsnapshot")
+        && lower.contains("getsnapshot");
+
+    let rpc_names: Vec<String> = lower
+        .lines()
+        .filter(|line| {
+            line.contains("exportwalletmigration")
+                || line.contains("validatewalletmigration")
+                || line.contains("restorewalletmigration")
+                || line.contains("getmessaginginfo")
+                || line.contains("viewallmessages")
+                || line.contains("viewallmessagechannels")
+                || line.contains("listrestrictedassets")
+                || line.contains("issuerestrictedasset")
+                || line.contains("listqualifiers")
+                || line.contains("issuequalifierasset")
+                || line.contains("distributereward")
+                || line.contains("getdistributestatus")
+                || line.contains("requestsnapshot")
+                || line.contains("getsnapshot")
+        })
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|w| w.len() > 2 && !w.contains("->"))
+        .map(|w| w.to_string())
+        .collect();
+
+    CoreNextCapabilities {
+        help_probe_success: true,
+        wallet_migration,
+        messaging,
+        restricted_assets,
+        qualifiers,
+        rewards,
+        snapshots,
+        detected_rpc_names: rpc_names,
+    }
+}
+
+fn probe_capabilities(ctx: &RpcContext) -> CoreNextCapabilities {
+    let help_str = match ctx.call("help", &[]) {
+        Ok(data) => data.as_str().unwrap_or("").to_string(),
+        Err(_) => return CoreNextCapabilities::default(),
+    };
+
+    parse_capabilities_from_help(&help_str)
 }
 
 fn parse_numeric_version(raw: u64) -> String {
@@ -234,6 +334,7 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 commit_match: false,
                 commit_available: false,
                 status: format!("RPC not configured: {e}"),
+                capabilities: CoreNextCapabilities::default(),
             };
         }
     };
@@ -252,6 +353,8 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
             let commit_available = parse_commit_hash(&subver_str).is_some();
             let is_exact = is_required && numeric_version.is_some() && commit_match;
 
+            let capabilities = probe_capabilities(&ctx);
+
             let status = if is_exact {
                 "A verified Core Next daemon is already running.".to_string()
             } else if allow_override {
@@ -263,12 +366,12 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
             } else if is_required && commit_available {
                 format!(
                     "A daemon is running, but it does not match the bundled Core Next build ({}).",
-                    REQUIRED_CORE_NEXT_COMMIT
+                    REQUIRED_CORE_NEXT_COMMIT,
                 )
             } else if is_required {
                 format!(
                     "A daemon is running with the required base version, but Core RPC did not expose the commit hash needed to verify bundled build {}.",
-                    REQUIRED_CORE_NEXT_COMMIT
+                    REQUIRED_CORE_NEXT_COMMIT,
                 )
             } else {
                 format!(
@@ -288,6 +391,7 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 commit_match,
                 commit_available,
                 status,
+                capabilities,
             }
         }
         Err(e) => RunningDaemonIdentity {
@@ -302,6 +406,7 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
             status: format!(
                 "A daemon is listening on the default RPC port, but Commander could not verify its version: {e}"
             ),
+            capabilities: CoreNextCapabilities::default(),
         },
     }
 }
@@ -481,5 +586,117 @@ mod tests {
             "if daemon is running, response should be sub-second"
         );
         assert!(elapsed < 5000, "function should not block for long");
+    }
+
+    fn synthetic_help() -> &'static str {
+        "== Blockchain ==
+getbestblockhash
+getblock \"headerhash\" ( verbosity )
+getblockchaininfo
+getblockcount
+== Control ==
+help ( \"command\" )
+stop
+
+== Wallet Migration ==
+exportwalletmigration \"filename\"
+validatewalletmigration \"filename\"
+restorewalletmigration \"filename\" ( \"walletname\" )
+
+== Messages ==
+getmessaginginfo
+viewallmessages ( count \"asset_name\" \"address\" )
+viewallmessagechannels
+
+== Restricted Assets ==
+listrestrictedassets ( \"asset_name\" )
+issuerestrictedasset \"asset_name\" \"qty\" \"address\" \"verifier\"
+listqualifiers ( \"asset_name\" )
+issuequalifierasset \"asset_name\" \"qualifier_name\" \"qty\" (\"destination\" )
+
+== Rewards ==
+distributereward \"asset_name\" \"ownership_asset\" snapshot_height distribution_asset gross_amount (exception_addresses)
+getdistributestatus \"distributionid\"
+
+== Snapshots ==
+requestsnapshot \"asset_name\" ( block_height )
+getsnapshot \"asset_name\"
+
+== Generating ==
+generate nblocks ( maxtries )
+generatetoaddress nblocks address (maxtries)
+"
+    }
+
+    #[test]
+    fn detects_wallet_migration() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.help_probe_success);
+        assert!(caps.wallet_migration);
+    }
+
+    #[test]
+    fn detects_messaging() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.messaging);
+    }
+
+    #[test]
+    fn detects_restricted_and_qualifier_assets() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.restricted_assets);
+        assert!(caps.qualifiers);
+    }
+
+    #[test]
+    fn detects_rewards() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.rewards);
+    }
+
+    #[test]
+    fn detects_snapshots() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.snapshots);
+    }
+
+    #[test]
+    fn returns_default_for_empty_help() {
+        let caps = parse_capabilities_from_help("");
+        assert!(!caps.help_probe_success);
+        assert!(!caps.wallet_migration);
+        assert!(!caps.messaging);
+        assert!(!caps.restricted_assets);
+        assert!(!caps.qualifiers);
+        assert!(!caps.rewards);
+        assert!(!caps.snapshots);
+        assert!(caps.detected_rpc_names.is_empty());
+    }
+
+    #[test]
+    fn returns_default_for_no_core_next_rpcs() {
+        let help = "== Blockchain ==\ngetbestblockhash\ngetblockchaininfo\n== Control ==\nhelp\nstop\n";
+        let caps = parse_capabilities_from_help(help);
+        assert!(caps.help_probe_success);
+        assert!(!caps.wallet_migration);
+        assert!(!caps.messaging);
+        assert!(!caps.restricted_assets);
+        assert!(!caps.qualifiers);
+        assert!(!caps.rewards);
+        assert!(!caps.snapshots);
+        assert!(caps.detected_rpc_names.is_empty());
+    }
+
+    #[test]
+    fn detects_rpc_names_in_synthetic_help() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(!caps.detected_rpc_names.is_empty());
+        let names_lower: Vec<String> = caps.detected_rpc_names.iter().map(|n| n.to_lowercase()).collect();
+        let joined = names_lower.join(" ");
+        assert!(joined.contains("exportwalletmigration"));
+        assert!(joined.contains("getmessaginginfo"));
+        assert!(joined.contains("listrestrictedassets"));
+        assert!(joined.contains("distributereward"));
+        assert!(joined.contains("requestsnapshot"));
     }
 }

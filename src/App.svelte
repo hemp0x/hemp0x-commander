@@ -74,6 +74,17 @@
     : nodeInfo.state === "RUNNING"
       ? "SYNCING"
       : "--";
+  $: conflictCapabilities = conflictRuntimeStatus?.identity?.capabilities;
+  $: conflictCapabilityLabels = conflictCapabilities
+    ? [
+        conflictCapabilities.wallet_migration ? "migration" : null,
+        conflictCapabilities.messaging ? "messaging" : null,
+        conflictCapabilities.restricted_assets ? "restricted assets" : null,
+        conflictCapabilities.qualifiers ? "qualifiers" : null,
+        conflictCapabilities.rewards ? "rewards" : null,
+        conflictCapabilities.snapshots ? "snapshots" : null,
+      ].filter(Boolean)
+    : [];
 
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
@@ -1178,6 +1189,20 @@
                   {/if}
                   (Protocol: {conflictRuntimeStatus.identity.protocol_version})
                 </p>
+              {/if}
+              {#if conflictCapabilities?.help_probe_success}
+                {#if conflictCapabilityLabels.length > 0}
+                  <p class="welcome-text" style="font-size: 0.85rem; color: #4caf50;">
+                    Core Next capabilities detected by RPC help probe
+                  </p>
+                  <p class="welcome-text" style="font-size: 0.75rem; color: #888;">
+                    {conflictCapabilityLabels.join(", ")}
+                  </p>
+                {:else}
+                  <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
+                    Capabilities not detected; exact build remains unverified through RPC
+                  </p>
+                {/if}
               {/if}
             {:else}
               <p class="welcome-caution">

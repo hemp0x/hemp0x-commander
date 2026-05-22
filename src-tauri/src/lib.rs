@@ -98,6 +98,11 @@ pub fn run() {
       commands::distribute_reward,
       commands::get_distribute_reward_status,
 
+      // Raw Transaction Commands
+      commands::decode_raw_transaction,
+      commands::test_mempool_accept,
+      commands::create_unsigned_raw_transaction,
+
       // Messaging Commands
       commands::get_messaging_info,
       commands::view_asset_messages,

@@ -3163,6 +3163,150 @@ pub fn get_asset_snapshot(asset_name: String, block_height: i64) -> Result<Snaps
 }
 
 // ---------------------------------------------------------------------------
+// Raw Transaction Editor Commands
+// ---------------------------------------------------------------------------
+
+fn validate_raw_tx_hex(hex: &str) -> Result<String, String> {
+  let hex = hex.trim();
+  if hex.is_empty() {
+    return Err("Raw transaction hex is required".to_string());
+  }
+  if hex.len() % 2 != 0 {
+    return Err("Raw transaction hex has odd length (not valid hex bytes)".to_string());
+  }
+  if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+    return Err("Raw transaction hex contains non-hex characters".to_string());
+  }
+  if hex.len() < 20 {
+    return Err("Raw transaction hex is too short to be a valid transaction".to_string());
+  }
+  Ok(hex.to_string())
+}
+
+#[tauri::command]
+pub fn decode_raw_transaction(raw_hex: String) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let hex = validate_raw_tx_hex(&raw_hex)?;
+  let raw = run_cli(&[String::from("decoderawtransaction"), hex])?;
+  serde_json::from_str(&raw).map_err(|e| format!("Failed to parse decoded transaction: {e}"))
+}
+
+#[tauri::command]
+pub fn test_mempool_accept(raw_hex: String) -> Result<serde_json::Value, String> {
+  ensure_config()?;
+  let hex = validate_raw_tx_hex(&raw_hex)?;
+  let hexes = serde_json::to_string(&[hex]).map_err(|e| e.to_string())?;
+  let raw = run_cli(&[String::from("testmempoolaccept"), hexes])?;
+  serde_json::from_str(&raw).map_err(|e| format!("Failed to parse mempool accept result: {e}"))
+}
+
+fn validate_tx_input(input: &serde_json::Value) -> Result<(), String> {
+  let txid = input.get("txid").and_then(|v| v.as_str()).unwrap_or("");
+  if txid.trim().is_empty() {
+    return Err("Each input must have a txid".to_string());
+  }
+  if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
+    return Err(format!("Invalid txid '{}': must be 64 hex characters", txid));
+  }
+  let vout = input.get("vout").and_then(|v| v.as_u64());
+  if vout.is_none() {
+    return Err("Each input must have a numeric vout".to_string());
+  }
+  Ok(())
+}
+
+fn normalize_raw_tx_outputs(outputs: &[serde_json::Value]) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+  if outputs.is_empty() {
+    return Err("At least one output is required".to_string());
+  }
+  let mut normalized = serde_json::Map::new();
+  for output in outputs {
+    let addr = output.get("address").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if addr.trim().is_empty() {
+      return Err("Output address cannot be empty".to_string());
+    }
+    if normalized.contains_key(addr) {
+      return Err(format!("Duplicate output address '{}'", addr));
+    }
+    let amount = output.get("amount")
+      .ok_or_else(|| format!("Output amount is required for address '{}'", addr))?;
+    let amount_text = match amount {
+      serde_json::Value::String(s) => s.trim().to_string(),
+      serde_json::Value::Number(n) => n.to_string(),
+      _ => return Err(format!("Output amount for '{}' is not a valid number", addr)),
+    };
+    let parsed: f64 = amount_text
+      .parse()
+      .map_err(|_| format!("Output amount '{}' is not a valid number", amount_text))?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+      return Err(format!("Output amount '{}' must be a positive number", amount_text));
+    }
+    let number = serde_json::Number::from_f64(parsed)
+      .ok_or_else(|| format!("Output amount '{}' is not finite", amount_text))?;
+    normalized.insert(addr.to_string(), serde_json::Value::Number(number));
+  }
+  Ok(normalized)
+}
+
+#[tauri::command]
+pub fn create_unsigned_raw_transaction(
+  inputs_json: String,
+  outputs_json: String,
+) -> Result<RawTxBuildResult, String> {
+  ensure_config()?;
+
+  let inputs: Vec<serde_json::Value> = serde_json::from_str(&inputs_json)
+    .map_err(|e| format!("Failed to parse inputs JSON: {e}"))?;
+  if inputs.is_empty() {
+    return Err("At least one input is required".to_string());
+  }
+  let mut seen_inputs = std::collections::HashSet::new();
+  for input in &inputs {
+    validate_tx_input(input)?;
+    let txid = input.get("txid").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let vout = input.get("vout").and_then(|v| v.as_u64()).unwrap_or(0);
+    if !seen_inputs.insert(format!("{}:{}", txid, vout)) {
+      return Err(format!("Duplicate input '{}:{}'", txid, vout));
+    }
+  }
+
+  let outputs: Vec<serde_json::Value> = serde_json::from_str(&outputs_json)
+    .map_err(|e| format!("Failed to parse outputs JSON: {e}"))?;
+  let outputs = normalize_raw_tx_outputs(&outputs)?;
+  for address in outputs.keys() {
+    validate_destination_address(address)?;
+  }
+
+  let outputs_json_normalized = serde_json::to_string(&outputs).map_err(|e| e.to_string())?;
+  let inputs_json_normalized = serde_json::to_string(&inputs).map_err(|e| e.to_string())?;
+
+  let raw_hex = run_cli(&[
+    String::from("createrawtransaction"),
+    inputs_json_normalized,
+    outputs_json_normalized,
+  ])?;
+
+  let decoded = run_cli(&[String::from("decoderawtransaction"), raw_hex.clone()])?;
+  let decoded_value: serde_json::Value = serde_json::from_str(&decoded)
+    .map_err(|e| format!("Failed to parse decoded transaction: {e}"))?;
+
+  let input_total = inputs.len();
+  let output_total = outputs.len();
+  let fee_warning = format!(
+    "This is an unsigned raw transaction with {} input(s) and {} output(s). Fees are not computed until all inputs are known. Sign and fund before broadcasting.",
+    input_total, output_total
+  );
+
+  Ok(RawTxBuildResult {
+    raw_hex,
+    decoded: decoded_value,
+    input_count: input_total,
+    output_count: output_total,
+    fee_warning,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Rewards / Dividends Distribution
 // ---------------------------------------------------------------------------
 
@@ -3691,6 +3835,7 @@ mod tests {
     message_authority_asset_name,
     parse_message_entry, parse_channel_name_list, parse_messaging_info,
     validate_ipfs_reference, build_ipfs_gateway_url,
+    validate_raw_tx_hex, validate_tx_input, normalize_raw_tx_outputs,
   };
 
   #[test]
@@ -4448,6 +4593,58 @@ mod tests {
   fn reward_status_value_labels_numeric_status() {
     let value = reward_rpc_status_value(r#"{"Status":1}"#);
     assert_eq!(value["Status Label"], "PROCESSING");
+  }
+
+  #[test]
+  fn raw_tx_hex_validation_accepts_even_hex() {
+    assert_eq!(
+      validate_raw_tx_hex(" 01000000000000000000 ").unwrap(),
+      "01000000000000000000"
+    );
+  }
+
+  #[test]
+  fn raw_tx_hex_validation_rejects_odd_or_non_hex() {
+    assert!(validate_raw_tx_hex("abc").is_err());
+    assert!(validate_raw_tx_hex("zz00000000").is_err());
+    assert!(validate_raw_tx_hex("00").is_err());
+  }
+
+  #[test]
+  fn raw_tx_input_validation_requires_txid_and_numeric_vout() {
+    let valid = serde_json::json!({
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vout": 1
+    });
+    assert!(validate_tx_input(&valid).is_ok());
+
+    let bad_txid = serde_json::json!({ "txid": "abc", "vout": 1 });
+    assert!(validate_tx_input(&bad_txid).is_err());
+
+    let bad_vout = serde_json::json!({
+      "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vout": "1"
+    });
+    assert!(validate_tx_input(&bad_vout).is_err());
+  }
+
+  #[test]
+  fn raw_tx_outputs_normalize_to_numeric_json_values() {
+    let outputs = vec![serde_json::json!({
+      "address": "H123456789ABCDEFGHijklmno",
+      "amount": "1.25000000"
+    })];
+    let normalized = normalize_raw_tx_outputs(&outputs).unwrap();
+    assert_eq!(normalized["H123456789ABCDEFGHijklmno"], serde_json::json!(1.25));
+  }
+
+  #[test]
+  fn raw_tx_outputs_reject_duplicate_address() {
+    let outputs = vec![
+      serde_json::json!({ "address": "H123456789ABCDEFGHijklmno", "amount": "1.0" }),
+      serde_json::json!({ "address": "H123456789ABCDEFGHijklmno", "amount": "2.0" }),
+    ];
+    assert!(normalize_raw_tx_outputs(&outputs).is_err());
   }
 
   #[test]

@@ -360,6 +360,15 @@ pub struct PolicyDiagnostics {
 }
 
 #[derive(Serialize)]
+pub struct RawTxBuildResult {
+  pub raw_hex: String,
+  pub decoded: serde_json::Value,
+  pub input_count: usize,
+  pub output_count: usize,
+  pub fee_warning: String,
+}
+
+#[derive(Serialize)]
 pub struct RewardDistributionPreview {
   pub operation_type: String,
   pub asset_name: String,

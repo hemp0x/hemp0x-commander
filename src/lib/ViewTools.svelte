@@ -939,11 +939,16 @@ timestampindex=1
 # Tracks spent outputs
 spentindex=1
 
-# --- RPC (Remote Control Security) ---
-# Username and password for local control.
-# CHANGE THESE TO SECURE VALUES!
-rpcuser=hemp0xuser
-rpcpassword=CHANGE_THIS_TO_SECURE_PASSWORD
+# --- RPC Authentication ---
+# Core Next uses cookie auth by default (auto-generated .cookie file).
+# No manual credentials needed. Commander detects and uses cookie auth
+# automatically when available.
+
+# --- Legacy RPC (username/password fallback) ---
+# Only needed if you are not using Core Next cookie auth.
+# Uncomment and change these if you cannot use cookie auth:
+# rpcuser=hemp0xuser
+# rpcpassword=CHANGE_THIS_TO_SECURE_PASSWORD
 
 # rpcallowip=IP: Who can issue commands?
 # 127.0.0.1 = Localhost only (Most Secure).

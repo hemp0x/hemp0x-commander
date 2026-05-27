@@ -158,8 +158,7 @@
         addRuntimeNotification("Daemon switch failed", lastError, "error");
       }
     } else {
-      await core.invoke("release_daemon_ownership");
-      addRuntimeNotification("Staying offline", "Daemon not started.", "info");
+      addRuntimeNotification("Dismissed", "Daemon dialog dismissed.", "info");
     }
     conflictResolved = true;
     daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
@@ -514,6 +513,7 @@
         addRuntimeNotification("Daemon readiness failed", lastError, "error");
       } else {
         lastDaemonStartSuccessAt = Date.now();
+        await refreshRpcAuthStatus();
         addRuntimeNotification("Daemon started", "", "success");
       }
       setTimeout(refreshDashboard, 1500);
@@ -528,6 +528,7 @@
     addRuntimeNotification("Daemon stop requested", "", "info");
     try {
       await core.invoke("stop_node");
+      await refreshRpcAuthStatus();
       addRuntimeNotification("Daemon stopped", "", "info");
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
@@ -649,12 +650,37 @@
             } catch {
               // identity probe is best-effort
             }
-            addRuntimeNotification(
-              "External daemon detected",
-              `An existing daemon is running on port ${status.probe.default_rpc_port}.`,
-              "warning",
-            );
-            showDaemonConflict = true;
+            let procId = null;
+            try {
+              procId = await core.invoke("get_daemon_process_identity");
+              daemonRuntime.update((d) => ({ ...d, processIdentity: procId }));
+              if (procId.available) {
+                conflictRuntimeStatus.processIdentity = procId;
+              }
+            } catch {
+              // process identity is best-effort
+            }
+
+            const exactMatch = procId?.available
+              && procId?.sha256_match
+              && procId?.version_commit_match;
+
+            if (exactMatch) {
+              addRuntimeNotification(
+                "Bundled daemon verified",
+                "Exact Core Next match confirmed via process identity.",
+                "success",
+              );
+              conflictResolved = true;
+              daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+            } else {
+              addRuntimeNotification(
+                "External daemon detected",
+                `An existing daemon is running on port ${status.probe.default_rpc_port}.`,
+                "warning",
+              );
+              showDaemonConflict = true;
+            }
           } else if (appSettings.auto_start_daemon_on_launch && status.bundled_core_next_ready) {
             addRuntimeNotification("Daemon start requested (auto)", "", "info");
             try {
@@ -1246,9 +1272,11 @@
 
           {#if conflictRuntimeStatus.identity}
             {#if conflictRuntimeStatus.identity.rpc_authenticated}
-              <p class="welcome-text" style="color: {conflictRuntimeStatus.identity.is_required_core_next ? '#4caf50' : '#ff9800'};">
-                {conflictRuntimeStatus.identity.status}
-              </p>
+              {#if !conflictRuntimeStatus.processIdentity?.available || !(conflictRuntimeStatus.processIdentity?.sha256_match && conflictRuntimeStatus.processIdentity?.version_commit_match)}
+                <p class="welcome-text" style="color: {conflictRuntimeStatus.identity.is_required_core_next ? '#4caf50' : '#ff9800'};">
+                  {conflictRuntimeStatus.identity.status}
+                </p>
+              {/if}
               {#if conflictRuntimeStatus.identity.base_version}
                 <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
                   Version: {conflictRuntimeStatus.identity.base_version}
@@ -1261,14 +1289,10 @@
               {#if conflictCapabilities?.help_probe_success}
                 {#if conflictCapabilityLabels.length > 0}
                   <p class="welcome-text" style="font-size: 0.85rem; color: #4caf50;">
-                    Core Next capabilities detected by RPC help probe
+                    Core Next capabilities detected
                   </p>
                   <p class="welcome-text" style="font-size: 0.75rem; color: #888;">
                     {conflictCapabilityLabels.join(", ")}
-                  </p>
-                {:else}
-                  <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
-                    Capabilities not detected; exact build remains unverified through RPC
                   </p>
                 {/if}
               {/if}
@@ -1276,6 +1300,36 @@
               <p class="welcome-caution">
                 {conflictRuntimeStatus.identity.status}
               </p>
+            {/if}
+            {#if conflictRuntimeStatus.processIdentity?.available && conflictRuntimeStatus.processIdentity?.sha256_match && conflictRuntimeStatus.processIdentity?.version_commit_match}
+              <p class="welcome-text" style="font-size: 0.85rem; color: #4caf50;">
+                Process identity: Exact bundled match
+              </p>
+              <p class="welcome-text" style="font-size: 0.75rem; color: #4caf50;">
+                Commit: {conflictRuntimeStatus.required_commit_hash} verified
+              </p>
+              <p class="welcome-text" style="font-size: 0.75rem; color: #4caf50;">
+                Binary hash: Match
+              </p>
+            {:else if conflictRuntimeStatus.processIdentity?.available && conflictRuntimeStatus.processIdentity?.confidence !== 'none'}
+              <p class="welcome-text" style="font-size: 0.85rem; color: #ffaa00;">
+                Process identity: {conflictRuntimeStatus.processIdentity.confidence.toUpperCase()} confidence
+              </p>
+              {#if conflictRuntimeStatus.processIdentity.matches_bundled_path}
+                <p class="welcome-text" style="font-size: 0.75rem; color: #888;">
+                  Executable: Bundled Core Next
+                </p>
+              {/if}
+              {#if conflictRuntimeStatus.processIdentity.version_commit_match}
+                <p class="welcome-text" style="font-size: 0.75rem; color: #4caf50;">
+                  Commit: {conflictRuntimeStatus.required_commit_hash} verified
+                </p>
+              {/if}
+              {#if conflictRuntimeStatus.processIdentity.sha256_match}
+                <p class="welcome-text" style="font-size: 0.75rem; color: #4caf50;">
+                  Binary hash: Match
+                </p>
+              {/if}
             {/if}
           {:else}
             <p class="welcome-caution">
@@ -1310,9 +1364,6 @@
               Stop it and use bundled Core Next
             </button>
           {/if}
-          <button class="btn-xs ghost" style="flex: 1;" on:click={() => resolveDaemonConflict('cancel')}>
-            Stay offline
-          </button>
         </div>
       </div>
     </div>

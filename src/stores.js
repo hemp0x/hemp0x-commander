@@ -104,6 +104,18 @@ export const daemonRuntime = writable({
         retries: 0,
         rpc_error: "",
     },
+    processIdentity: {
+        available: false,
+        pid: null,
+        exe_path: null,
+        matches_bundled_path: false,
+        exe_sha256: null,
+        bundled_sha256: null,
+        sha256_match: false,
+        version_raw: null,
+        version_commit_match: false,
+        confidence: "none",
+    },
     settings: {
         auto_start_daemon_on_launch: false,
         keep_daemon_running_on_close: false,

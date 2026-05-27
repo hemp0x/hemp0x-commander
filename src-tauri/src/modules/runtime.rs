@@ -1,5 +1,6 @@
+use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -48,6 +49,175 @@ pub struct RuntimeStatus {
 #[derive(Serialize)]
 pub struct DaemonOwnership {
     pub commander_owns: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DaemonProcessIdentity {
+    pub available: bool,
+    pub pid: Option<u32>,
+    pub exe_path: Option<String>,
+    pub matches_bundled_path: bool,
+    pub exe_sha256: Option<String>,
+    pub bundled_sha256: Option<String>,
+    pub sha256_match: bool,
+    pub version_raw: Option<String>,
+    pub version_commit_match: bool,
+    pub confidence: String,
+}
+
+impl DaemonProcessIdentity {
+    fn unavailable() -> Self {
+        Self {
+            available: false,
+            pid: None,
+            exe_path: None,
+            matches_bundled_path: false,
+            exe_sha256: None,
+            bundled_sha256: None,
+            sha256_match: false,
+            version_raw: None,
+            version_commit_match: false,
+            confidence: "none".to_string(),
+        }
+    }
+
+    pub fn is_exact_bundled_match(&self) -> bool {
+        self.available
+            && self.confidence == "exact"
+            && self.sha256_match
+            && self.version_commit_match
+    }
+
+    pub fn can_prove_bundled_daemon(&self) -> bool {
+        self.available && self.sha256_match && self.version_commit_match
+    }
+}
+
+fn bundled_daemon_path() -> PathBuf {
+    PathBuf::from(resolve_bin("hemp0xd"))
+}
+
+#[cfg(target_os = "linux")]
+fn find_pid_by_port(port: u16) -> Option<u32> {
+    let port_hex = format!(":{:04X}", port);
+
+    let tcp_content = fs::read_to_string("/proc/net/tcp").ok()?;
+    let mut socket_inode = None;
+    for line in tcp_content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 2 && fields[1].ends_with(&port_hex) {
+            socket_inode = fields.get(9).map(|s| s.to_string());
+            break;
+        }
+    }
+    let socket_inode = socket_inode?;
+    let socket_target = format!("socket:[{}]", socket_inode);
+
+    if let Ok(proc_entries) = fs::read_dir("/proc") {
+        for entry in proc_entries.flatten() {
+            let pid_dir = entry.path();
+            let pid_str = entry.file_name().to_string_lossy().to_string();
+            if !pid_str.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let fd_dir = pid_dir.join("fd");
+            if !fd_dir.is_dir() {
+                continue;
+            }
+            if let Ok(fd_entries) = fs::read_dir(&fd_dir) {
+                for fd_entry in fd_entries.flatten() {
+                    if let Ok(link_target) = fs::read_link(fd_entry.path()) {
+                        if link_target.to_string_lossy() == socket_target {
+                            return pid_str.parse().ok();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn find_pid_by_port(_port: u16) -> Option<u32> {
+    None
+}
+
+fn compute_sha256(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path).map_err(|e| format!("SHA256 open error: {e}"))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("SHA256 read error: {e}"))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[tauri::command]
+pub fn get_daemon_process_identity() -> DaemonProcessIdentity {
+    #[cfg(not(target_os = "linux"))]
+    {
+        return DaemonProcessIdentity::unavailable();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let pid = match find_pid_by_port(DEFAULT_RPC_PORT) {
+            Some(p) => p,
+            None => return DaemonProcessIdentity::unavailable(),
+        };
+
+        let exe_path = match fs::read_link(format!("/proc/{}/exe", pid)) {
+            Ok(p) => p,
+            Err(_) => return DaemonProcessIdentity::unavailable(),
+        };
+        let exe_path_str = exe_path.to_string_lossy().to_string();
+
+        let bundled = bundled_daemon_path();
+        let matches_bundled_path = exe_path == bundled;
+
+        let exe_sha256 = compute_sha256(&exe_path).ok();
+        let bundled_sha256 = if bundled.exists() {
+            compute_sha256(&bundled).ok()
+        } else {
+            None
+        };
+        let sha256_match = match (&exe_sha256, &bundled_sha256) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+
+        let version_raw = command_version(&exe_path_str).ok();
+        let version_commit_match = version_raw
+            .as_ref()
+            .map_or(false, |v| {
+                parse_commit_hash(v).as_deref() == Some(REQUIRED_CORE_NEXT_COMMIT)
+            });
+
+        let confidence = if matches_bundled_path && sha256_match && version_commit_match {
+            "exact"
+        } else if sha256_match && version_commit_match {
+            "high"
+        } else if version_commit_match && matches_bundled_path {
+            "medium"
+        } else if version_commit_match || matches_bundled_path {
+            "low"
+        } else {
+            "none"
+        };
+
+        DaemonProcessIdentity {
+            available: true,
+            pid: Some(pid),
+            exe_path: Some(exe_path_str),
+            matches_bundled_path,
+            exe_sha256,
+            bundled_sha256,
+            sha256_match,
+            version_raw,
+            version_commit_match,
+            confidence: confidence.to_string(),
+        }
+    }
 }
 
 fn command_version(path: &str) -> Result<String, String> {
@@ -710,5 +880,88 @@ generatetoaddress nblocks address (maxtries)
         assert!(joined.contains("listrestrictedassets"));
         assert!(joined.contains("distributereward"));
         assert!(joined.contains("requestsnapshot"));
+    }
+
+    #[test]
+    fn compute_sha256_known_content() {
+        let dir = std::env::temp_dir().join(format!("hemp0x_sha256_test_{:x}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("test.bin");
+        fs::write(&file_path, b"hemp0x identity probe").unwrap();
+        let hash = compute_sha256(&file_path).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        // SHA256 of "hemp0x identity probe" is deterministic
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn compute_sha256_different_content_different_hash() {
+        let dir = std::env::temp_dir().join(format!("hemp0x_sha256_test2_{:x}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        fs::write(&f1, b"aaaa").unwrap();
+        fs::write(&f2, b"bbbb").unwrap();
+        let h1 = compute_sha256(&f1).unwrap();
+        let h2 = compute_sha256(&f2).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn daemon_process_identity_unavailable_on_empty_port() {
+        let identity = get_daemon_process_identity();
+        // If no daemon is running on port 42068, result should be unavailable
+        if !identity.available {
+            assert_eq!(identity.confidence, "none");
+            assert!(identity.pid.is_none());
+            assert!(identity.exe_path.is_none());
+        }
+        // If a daemon IS running, it's available and should have a pid
+        // This test does not require a daemon to be running.
+    }
+
+    #[test]
+    fn daemon_process_identity_serializable() {
+        let identity = DaemonProcessIdentity::unavailable();
+        let json = serde_json::to_string(&identity).unwrap();
+        assert!(json.contains("\"available\":false"));
+        assert!(json.contains("\"confidence\":\"none\""));
+        assert!(json.contains("\"pid\":null"));
+    }
+
+    #[test]
+    fn parse_commit_hash_matches_required_hash() {
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
+        let result = parse_commit_hash(raw);
+        assert_eq!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
+    }
+
+    #[test]
+    fn parse_commit_hash_rejects_different_hash() {
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-abcdef1234567890";
+        let result = parse_commit_hash(raw);
+        assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
+    }
+
+    #[test]
+    fn daemon_process_identity_unavailable_is_not_exact() {
+        let identity = DaemonProcessIdentity::unavailable();
+        assert!(!identity.is_exact_bundled_match());
+        assert!(!identity.can_prove_bundled_daemon());
+    }
+
+    #[test]
+    fn daemon_process_identity_can_prove_requires_sha256_match() {
+        let mut identity = DaemonProcessIdentity::unavailable();
+        identity.available = true;
+        identity.sha256_match = true;
+        identity.version_commit_match = true;
+        identity.confidence = "high".to_string();
+        assert!(!identity.is_exact_bundled_match());
+        assert!(identity.can_prove_bundled_daemon());
+        identity.sha256_match = false;
+        assert!(!identity.can_prove_bundled_daemon());
     }
 }

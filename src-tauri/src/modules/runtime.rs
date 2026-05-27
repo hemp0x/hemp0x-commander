@@ -425,23 +425,33 @@ pub fn wait_for_daemon_ready(timeout_ms: Option<u64>) -> DaemonReadiness {
     let timeout_dur = Duration::from_millis(timeout_ms.unwrap_or(30_000));
     let poll_interval = Duration::from_millis(500);
     let start = Instant::now();
-
-    let ctx = match rpc_context() {
-        Ok(c) => c,
-        Err(e) => {
-            return DaemonReadiness {
-                ready: false,
-                progress: "RPC configuration failed".to_string(),
-                elapsed_ms: start.elapsed().as_millis() as u64,
-                retries: 0,
-                rpc_error: e,
-            };
-        }
-    };
-
     let mut retries: u32 = 0;
+
     loop {
         retries += 1;
+
+        let ctx = match rpc_context() {
+            Ok(c) => c,
+            Err(e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout_dur {
+                    return DaemonReadiness {
+                        ready: false,
+                        progress: "RPC configuration failed repeatedly".to_string(),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                        retries,
+                        rpc_error: e,
+                    };
+                }
+                if poll_interval > timeout_dur.saturating_sub(elapsed) {
+                    std::thread::sleep(timeout_dur.saturating_sub(elapsed));
+                } else {
+                    std::thread::sleep(poll_interval);
+                }
+                continue;
+            }
+        };
+
         match ctx.call("getnetworkinfo", &[]) {
             Ok(data) => {
                 let _ = data;

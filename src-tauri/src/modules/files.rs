@@ -2,11 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::process::Command;
-use uuid::Uuid;
 use chrono::Local;
 use std::io::{Read, Seek, SeekFrom};
-use rand::Rng;
-use rand::distributions::Alphanumeric;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -36,12 +33,15 @@ pub fn ensure_config() -> Result<PathBuf, String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
   }
   if !cfg.exists() {
-    let rpc_user = format!("u{}", rand::thread_rng().gen_range(10000..99999));
-    let rpc_pass = Uuid::new_v4();
     let daemon_flag = "0";
     let content = format!(
-      "rpcuser={}\nrpcpassword={}\nserver=1\ndaemon={}\naddnode=154.38.164.123:42069\naddnode=147.93.185.184:42069\n",
-      rpc_user, rpc_pass, daemon_flag
+      "# Hemp0x Configuration\n\
+       # Core cookie auth is used by default; rpcuser/rpcpassword are not required.\n\
+       server=1\n\
+       daemon={}\n\
+       addnode=154.38.164.123:42069\n\
+       addnode=147.93.185.184:42069\n",
+      daemon_flag
     );
     fs::write(&cfg, content).map_err(|e| e.to_string())?;
   }
@@ -158,21 +158,8 @@ pub fn create_default_config() -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
   }
   
-  // Generate random RPC credentials for security
-  let rpc_user: String = rand::thread_rng()
-    .sample_iter(&Alphanumeric)
-    .take(12)
-    .map(char::from)
-    .collect();
-  let rpc_pass: String = rand::thread_rng()
-    .sample_iter(&Alphanumeric)
-    .take(24)
-    .map(char::from)
-    .collect();
-  
-  let default_config = format!(r#"# Hemp0x Configuration File
-rpcuser={}
-rpcpassword={}
+  let default_config = r#"# Hemp0x Configuration File
+# Core cookie auth is used by default; rpcuser/rpcpassword are not required.
 server=1
 daemon=0
 listen=1
@@ -180,7 +167,7 @@ txindex=1
 assetindex=1
 port=42069
 rpcport=42068
-"#, rpc_user, rpc_pass);
+"#;
   
   fs::write(&cfg, default_config).map_err(|e| e.to_string())?;
   Ok(())

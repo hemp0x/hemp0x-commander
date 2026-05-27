@@ -368,6 +368,8 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                     "A daemon is running, but it does not match the bundled Core Next build ({}).",
                     REQUIRED_CORE_NEXT_COMMIT,
                 )
+            } else if is_required && !commit_available && capabilities.help_probe_success {
+                "Commander can continue, but cannot prove this daemon is the bundled build because this Core RPC does not expose the build commit.".to_string()
             } else if is_required {
                 format!(
                     "A daemon is running with the required base version, but Core RPC did not expose the commit hash needed to verify bundled build {}.",

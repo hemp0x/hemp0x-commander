@@ -14,43 +14,70 @@ pub struct RpcResult {
     pub error: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcAuthMode {
+    Cookie,
+    LegacyUserpass,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcAuthInfo {
+    pub auth_mode: RpcAuthMode,
+    pub cookie_exists: bool,
+    pub legacy_credentials_exist: bool,
+    pub warning: String,
+}
+
 fn rpc_url() -> Result<String, String> {
     let config = parse_config(&config_path()?)?;
     let port = config.get("rpcport").map(|v| v.as_str()).unwrap_or("42068");
     Ok(format!("http://127.0.0.1:{port}"))
 }
 
-fn rpc_auth() -> Result<String, String> {
+fn rpc_auth() -> Result<(String, RpcAuthMode), String> {
     let dir = data_dir()?;
-    let cookie_path = if cfg!(windows) {
-        dir.join(".cookie")
-    } else {
-        dir.join(".cookie")
-    };
+    let cookie_path = dir.join(".cookie");
+    rpc_auth_for_paths(&cookie_path, &config_path()?)
+}
 
+fn rpc_auth_for_paths(
+    cookie_path: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Result<(String, RpcAuthMode), String> {
     if cookie_path.exists() {
-        let cookie = fs::read_to_string(&cookie_path)
+        let cookie = fs::read_to_string(cookie_path)
             .map_err(|e| format!("Failed to read RPC cookie: {e}"))?;
         let cookie = cookie.trim().to_string();
-        if cookie.is_empty() {
-            return Err("RPC cookie is empty".to_string());
+        if !cookie.is_empty() && cookie.contains(':') {
+            return Ok((
+                format!(
+                    "Basic {}",
+                    BASE64_STANDARD.encode(cookie.as_bytes())
+                ),
+                RpcAuthMode::Cookie,
+            ));
         }
-        if !cookie.contains(':') {
-            return Err("RPC cookie is malformed; expected username:password".to_string());
-        }
-        return Ok(format!(
-            "Basic {}",
-            BASE64_STANDARD.encode(cookie.as_bytes())
-        ));
     }
 
-    let config = parse_config(&config_path()?)?;
+    let config = if config_path.exists() {
+        parse_config(config_path)?
+    } else {
+        return Err(
+            "RPC authentication unavailable: no cookie file and no rpcuser/rpcpassword in hemp.conf"
+                .to_string(),
+        );
+    };
     let user = config.get("rpcuser");
     let pass = config.get("rpcpassword");
 
     if let (Some(u), Some(p)) = (user, pass) {
         let auth = format!("{u}:{p}");
-        return Ok(format!("Basic {}", BASE64_STANDARD.encode(auth.as_bytes())));
+        return Ok((
+            format!("Basic {}", BASE64_STANDARD.encode(auth.as_bytes())),
+            RpcAuthMode::LegacyUserpass,
+        ));
     }
 
     Err(
@@ -59,15 +86,65 @@ fn rpc_auth() -> Result<String, String> {
     )
 }
 
+#[tauri::command]
+pub fn get_rpc_auth_status() -> RpcAuthInfo {
+    let (cookie_exists, legacy_exists) = detect_auth_sources();
+
+    let (auth_mode, warning) = if cookie_exists {
+        (RpcAuthMode::Cookie, String::new())
+    } else if legacy_exists {
+        (
+            RpcAuthMode::LegacyUserpass,
+            "Legacy RPC password auth is active. Cookie auth is recommended for Commander v2 and Core Next."
+                .to_string(),
+        )
+    } else {
+        (RpcAuthMode::Unavailable, String::new())
+    };
+
+    RpcAuthInfo {
+        auth_mode,
+        cookie_exists,
+        legacy_credentials_exist: legacy_exists,
+        warning,
+    }
+}
+
+fn detect_auth_sources() -> (bool, bool) {
+    let cookie_exists = data_dir()
+        .map(|dir| {
+            let cp = dir.join(".cookie");
+            cp.exists()
+                && fs::read_to_string(&cp)
+                    .map(|c| !c.trim().is_empty() && c.contains(':'))
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    let legacy_exists = config_path()
+        .ok()
+        .and_then(|p| parse_config(&p).ok())
+        .map(|config| config.contains_key("rpcuser") && config.contains_key("rpcpassword"))
+        .unwrap_or(false);
+
+    (cookie_exists, legacy_exists)
+}
+
 pub(crate) struct RpcContext {
     url: String,
     auth: String,
+    #[allow(dead_code)]
+    pub auth_mode: RpcAuthMode,
 }
 
 pub(crate) fn rpc_context() -> Result<RpcContext, String> {
     let url = rpc_url()?;
-    let auth = rpc_auth()?;
-    Ok(RpcContext { url, auth })
+    let (auth, auth_mode) = rpc_auth()?;
+    Ok(RpcContext {
+        url,
+        auth,
+        auth_mode,
+    })
 }
 
 impl RpcContext {
@@ -429,5 +506,155 @@ mod tests {
         assert!(!ALLOWED_METHODS.contains(&"submitblock"));
         assert!(!ALLOWED_METHODS.contains(&"pprpcsb"));
         assert!(!ALLOWED_METHODS.contains(&"prioritisetransaction"));
+    }
+
+    fn make_temp_dir() -> std::path::PathBuf {
+        static CNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = CNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "hemp0x_rpc_test_{:x}_{:x}",
+            std::process::id(),
+            n
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn temp_cookie_path(tmp: &std::path::Path) -> std::path::PathBuf {
+        tmp.join(".cookie")
+    }
+
+    fn temp_config_path(tmp: &std::path::Path) -> std::path::PathBuf {
+        tmp.join("hemp.conf")
+    }
+
+    #[test]
+    fn auth_cookie_preferred_over_userpass_when_both_exist() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&cookie_path, "cookie_user:cookie_pass").unwrap();
+        fs::write(&config_path, "rpcuser=config_user\nrpcpassword=config_pass\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        let (header, mode) = result.unwrap();
+        assert_eq!(mode, RpcAuthMode::Cookie);
+        assert!(header.starts_with("Basic "));
+    }
+
+    #[test]
+    fn auth_falls_back_to_userpass_when_cookie_absent() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&config_path, "rpcuser=test_user\nrpcpassword=test_pass\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        let (header, mode) = result.unwrap();
+        assert_eq!(mode, RpcAuthMode::LegacyUserpass);
+        assert!(header.starts_with("Basic "));
+    }
+
+    #[test]
+    fn auth_unavailable_when_neither_cookie_nor_userpass() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&config_path, "server=1\ndaemon=0\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unavailable"));
+    }
+
+    #[test]
+    fn auth_falls_back_on_empty_cookie() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&cookie_path, "").unwrap();
+        fs::write(&config_path, "rpcuser=test_user\nrpcpassword=test_pass\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        let (_, mode) = result.unwrap();
+        assert_eq!(mode, RpcAuthMode::LegacyUserpass);
+    }
+
+    #[test]
+    fn auth_falls_back_on_malformed_cookie_no_colon() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&cookie_path, "no_colon_cookie_value").unwrap();
+        fs::write(&config_path, "rpcuser=test_user\nrpcpassword=test_pass\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        let (_, mode) = result.unwrap();
+        assert_eq!(mode, RpcAuthMode::LegacyUserpass);
+    }
+
+    #[test]
+    fn auth_falls_back_on_whitespace_only_cookie() {
+        let tmp = make_temp_dir();
+        let cookie_path = temp_cookie_path(&tmp);
+        let config_path = temp_config_path(&tmp);
+
+        fs::write(&cookie_path, "   \n  ").unwrap();
+        fs::write(&config_path, "rpcuser=test_user\nrpcpassword=test_pass\n").unwrap();
+
+        let result = rpc_auth_for_paths(&cookie_path, &config_path);
+        let _ = fs::remove_dir_all(&tmp);
+
+        let (_, mode) = result.unwrap();
+        assert_eq!(mode, RpcAuthMode::LegacyUserpass);
+    }
+
+    #[test]
+    fn rpc_auth_mode_serialization() {
+        let cookie_mode = serde_json::to_string(&RpcAuthMode::Cookie).unwrap();
+        assert_eq!(cookie_mode, "\"cookie\"");
+        let legacy_mode = serde_json::to_string(&RpcAuthMode::LegacyUserpass).unwrap();
+        assert_eq!(legacy_mode, "\"legacy_userpass\"");
+        let unavailable_mode = serde_json::to_string(&RpcAuthMode::Unavailable).unwrap();
+        assert_eq!(unavailable_mode, "\"unavailable\"");
+    }
+
+    #[test]
+    fn rpc_auth_info_warning_for_legacy() {
+        let info = RpcAuthInfo {
+            auth_mode: RpcAuthMode::LegacyUserpass,
+            cookie_exists: false,
+            legacy_credentials_exist: true,
+            warning: "test warning".to_string(),
+        };
+        assert!(!info.warning.is_empty());
+        assert_eq!(info.auth_mode, RpcAuthMode::LegacyUserpass);
+    }
+
+    #[test]
+    fn rpc_auth_info_no_warning_for_cookie() {
+        let info = RpcAuthInfo {
+            auth_mode: RpcAuthMode::Cookie,
+            cookie_exists: true,
+            legacy_credentials_exist: true,
+            warning: String::new(),
+        };
+        assert!(info.warning.is_empty());
+        assert_eq!(info.auth_mode, RpcAuthMode::Cookie);
     }
 }

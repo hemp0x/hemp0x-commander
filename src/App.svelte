@@ -122,6 +122,8 @@
   let conflictResolved = false;
   let closeCleanupInProgress = false;
   let closeCleanupComplete = false;
+  let showClosePrompt = false;
+  let rpcAuthStatus = null;
   let appSettings = {
     auto_start_daemon_on_launch: false,
     keep_daemon_running_on_close: false,
@@ -147,6 +149,7 @@
           lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
           addRuntimeNotification("Daemon readiness failed", lastError, "error");
         } else {
+          await refreshRpcAuthStatus();
           lastDaemonStartSuccessAt = Date.now();
           addRuntimeNotification("Bundled daemon ready", "", "success");
         }
@@ -177,28 +180,43 @@
     } catch {
       // use defaults
     }
+    await refreshRpcAuthStatus();
   }
 
-  async function handleCloseRequested() {
-    if (appSettings.keep_daemon_running_on_close) {
-      daemonRuntime.update((d) => ({ ...d, commanderOwns: false }));
-      return;
-    }
+  async function refreshRpcAuthStatus() {
     try {
-      let owns = false;
-      try {
-        const ownership = await core.invoke("get_daemon_ownership");
-        owns = ownership.commander_owns;
-      } catch {
-        // can't determine ownership, leave alone
-      }
-      if (owns) {
-        await core.invoke("stop_node");
-        await core.invoke("release_daemon_ownership");
-      }
+      rpcAuthStatus = await core.invoke("get_rpc_auth_status");
+    } catch {
+      // auth status probe is best-effort
+    }
+  }
+
+  async function closeStopDaemon() {
+    showClosePrompt = false;
+    try {
+      await core.invoke("stop_node");
+      await core.invoke("release_daemon_ownership");
     } catch {
       // best-effort cleanup
     }
+    closeCleanupComplete = true;
+    await getCurrentWindow().close();
+  }
+
+  async function closeLeaveDaemon() {
+    showClosePrompt = false;
+    try {
+      await core.invoke("release_daemon_ownership");
+    } catch {
+      // best-effort cleanup
+    }
+    closeCleanupComplete = true;
+    await getCurrentWindow().close();
+  }
+
+  function closeCancel() {
+    showClosePrompt = false;
+    closeCleanupInProgress = false;
   }
 
   function closeWelcome() {
@@ -563,16 +581,30 @@
         if (closeCleanupInProgress) {
           return;
         }
-        closeCleanupInProgress = true;
-        await handleCloseRequested();
-        closeCleanupComplete = true;
-        await getCurrentWindow().close();
+
+        let owns = false;
+        try {
+          owns = (await core.invoke("get_daemon_ownership")).commander_owns;
+        } catch {
+          // can't determine ownership, close immediately
+        }
+
+        if (owns) {
+          closeCleanupInProgress = true;
+          showClosePrompt = true;
+        } else {
+          closeCleanupComplete = true;
+          await getCurrentWindow().close();
+        }
       });
 
       // Init daemon runtime
       (async function initDaemonRuntime() {
         try {
           await loadAppSettings();
+          if (rpcAuthStatus?.auth_mode === 'legacy_userpass') {
+            addRuntimeNotification("Legacy RPC auth", rpcAuthStatus.warning, "warning");
+          }
           const status = await core.invoke("get_runtime_status");
           daemonRuntime.update((d) => ({
             ...d,
@@ -635,6 +667,7 @@
                 lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
                 addRuntimeNotification("Daemon readiness failed", lastError, "error");
               } else {
+                await refreshRpcAuthStatus();
                 lastDaemonStartSuccessAt = Date.now();
                 addRuntimeNotification("Daemon started (auto)", "", "success");
               }
@@ -690,6 +723,7 @@
       if (conflictResolved) {
         await refreshDashboard();
         await refreshStratumStatus();
+        await refreshRpcAuthStatus();
       }
 
       let delay = 5000;
@@ -797,6 +831,16 @@
     <div class="ts-item">
       <span class="ts-label">Network</span>
       <span class="ts-val">LOCAL ONLY</span>
+    </div>
+    <div
+      class="ts-item"
+      class:ts-ok={rpcAuthStatus?.auth_mode === 'cookie'}
+      class:ts-warn={rpcAuthStatus?.auth_mode === 'legacy_userpass'}
+      class:ts-bad={rpcAuthStatus?.auth_mode === 'unavailable'}
+      title={rpcAuthStatus?.warning || ''}
+    >
+      <span class="ts-label">RPC Auth</span>
+      <span class="ts-val">{rpcAuthStatus ? (rpcAuthStatus.auth_mode === 'cookie' ? 'Cookie' : rpcAuthStatus.auth_mode === 'legacy_userpass' ? 'Legacy' : '--') : '--'}</span>
     </div>
     <div
       class="ts-item"
@@ -1268,6 +1312,33 @@
           {/if}
           <button class="btn-xs ghost" style="flex: 1;" on:click={() => resolveDaemonConflict('cancel')}>
             Stay offline
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- CLOSE PROMPT MODAL -->
+  {#if showClosePrompt}
+    <div class="welcome-overlay">
+      <div class="welcome-modal">
+        <div class="welcome-header">
+          <h2>Daemon Still Running</h2>
+        </div>
+        <div class="welcome-body">
+          <p class="welcome-text">
+            Commander is currently managing the hemp0xd daemon. How would you like to proceed?
+          </p>
+        </div>
+        <div class="welcome-footer" style="flex-wrap: wrap; gap: 0.5rem;">
+          <button class="btn-xs" style="flex: 1;" on:click={closeStopDaemon}>
+            Stop daemon and exit
+          </button>
+          <button class="btn-xs" style="flex: 1;" on:click={closeLeaveDaemon}>
+            Leave daemon running
+          </button>
+          <button class="btn-xs ghost" style="flex: 1;" on:click={closeCancel}>
+            Cancel
           </button>
         </div>
       </div>

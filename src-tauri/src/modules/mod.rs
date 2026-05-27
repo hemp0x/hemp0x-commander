@@ -6,3 +6,4 @@ pub mod process;
 pub mod runtime;
 pub mod rpc;
 pub mod journal;
+pub mod stratum;

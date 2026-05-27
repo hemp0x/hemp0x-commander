@@ -20,6 +20,7 @@
   import ViewAssets from "./lib/ViewAssets.svelte";
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
+  import { stratumStatus } from "./lib/stores/stratum.js";
   import { APP_VERSION } from "./lib/constants.js";
 
   // --- STATE ---
@@ -60,6 +61,9 @@
   let lastDaemonStartSuccessAt = 0;
 
   $: daemonState = $daemonRuntime;
+  $: stratumState = $stratumStatus;
+  $: stratumRunning =
+    stratumState.state === "RUNNING" || stratumState.state === "STARTING";
   $: bundledDaemon = daemonState.daemon || {};
   $: coreNextKnown =
     Boolean(bundledDaemon.exists) ||
@@ -394,6 +398,16 @@
     }
   }
 
+  async function refreshStratumStatus() {
+    if (!tauriReady) return;
+    try {
+      const status = await core.invoke("get_stratum_status");
+      stratumStatus.set(status);
+    } catch {
+      // Stratum status is optional; keep the last known state.
+    }
+  }
+
   function walletActionLabel(status) {
     if (status === "UNENCRYPTED") {
       return "ENCRYPT WALLET";
@@ -675,6 +689,7 @@
     const performPoll = async () => {
       if (conflictResolved) {
         await refreshDashboard();
+        await refreshStratumStatus();
       }
 
       let delay = 5000;
@@ -782,6 +797,15 @@
     <div class="ts-item">
       <span class="ts-label">Network</span>
       <span class="ts-val">LOCAL ONLY</span>
+    </div>
+    <div
+      class="ts-item"
+      class:ts-ok={stratumRunning}
+      class:ts-warn={stratumState.state === "STARTING" || stratumState.state === "STOPPING"}
+      class:ts-bad={stratumState.state === "ERROR"}
+    >
+      <span class="ts-label">Stratum</span>
+      <span class="ts-val">{stratumState.state}</span>
     </div>
   </div>
 
@@ -1251,7 +1275,7 @@
   {/if}
 </main>
 
-<style>
+<style lang="css">
   /* --- LAYOUT SHELL --- */
   .shell {
     display: flex;

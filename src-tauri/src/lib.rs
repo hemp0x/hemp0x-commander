@@ -8,6 +8,7 @@ use modules::files;
 use modules::runtime;
 use modules::rpc;
 use modules::journal;
+use modules::stratum;
 
 
 
@@ -173,6 +174,14 @@ pub fn run() {
       // Additional Commands
       commands::backup_wallet,
       commands::backup_wallet_to,
+
+      // Stratum Commands
+      stratum::start_stratum_server,
+      stratum::stop_stratum_server,
+      stratum::get_stratum_status,
+      stratum::validate_stratum_address,
+      stratum::get_stratum_bind_candidates,
+      stratum::reset_stratum_stats,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

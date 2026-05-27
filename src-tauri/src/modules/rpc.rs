@@ -421,4 +421,13 @@ mod tests {
         assert_eq!(r.data, serde_json::Value::Null);
         assert_eq!(r.error, "something went wrong");
     }
+
+    #[test]
+    fn allowed_methods_exclude_mining_rpcs() {
+        assert!(!ALLOWED_METHODS.contains(&"getblocktemplate"));
+        assert!(!ALLOWED_METHODS.contains(&"getkawpowhash"));
+        assert!(!ALLOWED_METHODS.contains(&"submitblock"));
+        assert!(!ALLOWED_METHODS.contains(&"pprpcsb"));
+        assert!(!ALLOWED_METHODS.contains(&"prioritisetransaction"));
+    }
 }

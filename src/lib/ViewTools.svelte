@@ -14,6 +14,7 @@
   import ToolsHistory from "./tools/ToolsHistory.svelte";
   import ToolsConsolidation from "./tools/ToolsConsolidation.svelte";
   import ToolsRawTx from "./tools/ToolsRawTx.svelte";
+  import ToolsSoloMining from "./tools/ToolsSoloMining.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
   import { addToastNotification } from "./stores/notifications.js";
 
@@ -453,7 +454,7 @@
     <!-- HEADER / TABS -->
     <header class="panel-header no-border">
       <div class="sub-tabs">
-        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "CONSOLIDATE", "RAW TX", "LOGS"] as tab}
+        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "CONSOLIDATE", "RAW TX", "SOLO MINING", "LOGS"] as tab}
           <button
             class="sub-tab-btn"
             class:active={activeSubTab === tab}
@@ -791,6 +792,10 @@
             />
           {:else if activeSubTab === "RAW TX"}
             <ToolsRawTx
+              on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
+            />
+          {:else if activeSubTab === "SOLO MINING"}
+            <ToolsSoloMining
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {/if}

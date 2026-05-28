@@ -3638,17 +3638,25 @@ fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
     .unwrap_or_default();
 
+  fn boolish(value: &serde_json::Value, key: &str) -> bool {
+    match value.get(key) {
+      Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
+      Some(v) if v.is_number() => v.as_i64().unwrap_or(0) != 0,
+      _ => false,
+    }
+  }
+
   MessagingInfo {
-    enabled: value.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
-    messaging_active: value.get("messaging_active").and_then(|v| v.as_bool()).unwrap_or(false),
-    restricted_active: value.get("restricted_active").and_then(|v| v.as_bool()).unwrap_or(false),
+    enabled: boolish(value, "enabled"),
+    messaging_active: boolish(value, "messaging_active"),
+    restricted_active: boolish(value, "restricted_active"),
     activation_block: value.get("activation_block").and_then(|v| v.as_i64()).unwrap_or(0),
-    databases_available: value.get("databases_available").and_then(|v| v.as_bool()).unwrap_or(false),
-    caches_available: value.get("caches_available").and_then(|v| v.as_bool()).unwrap_or(false),
+    databases_available: boolish(value, "databases_available"),
+    caches_available: boolish(value, "caches_available"),
     message_count: value.get("message_count").and_then(|v| v.as_i64()).unwrap_or(0),
     channel_count: value.get("channel_count").and_then(|v| v.as_i64()).unwrap_or(0),
     dirty_cache_size_bytes: value.get("dirty_cache_size_bytes").and_then(|v| v.as_i64()).unwrap_or(0),
-    wallet_available: value.get("wallet_available").and_then(|v| v.as_bool()).unwrap_or(false),
+    wallet_available: boolish(value, "wallet_available"),
     warnings,
   }
 }
@@ -4991,6 +4999,31 @@ mod tests {
     assert_eq!(info.message_count, 5);
     assert_eq!(info.channel_count, 3);
     assert!(info.warnings.is_empty());
+  }
+
+  #[test]
+  fn parses_messaging_info_numeric_booleans() {
+    let json = serde_json::json!({
+      "enabled": 1,
+      "messaging_active": 1,
+      "restricted_active": 1,
+      "activation_block": 1,
+      "databases_available": 1,
+      "caches_available": 1,
+      "message_count": 0,
+      "channel_count": 9,
+      "dirty_cache_size_bytes": 96,
+      "wallet_available": 1,
+      "warnings": []
+    });
+    let info = parse_messaging_info(&json);
+    assert!(info.enabled);
+    assert!(info.messaging_active);
+    assert!(info.restricted_active);
+    assert!(info.databases_available);
+    assert!(info.caches_available);
+    assert!(info.wallet_available);
+    assert_eq!(info.channel_count, 9);
   }
 
   #[test]

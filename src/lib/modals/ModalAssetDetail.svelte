@@ -271,8 +271,19 @@
 
                     <div class="detail-header">
                         <div class="detail-icon">◈</div>
-                        <div class="detail-title">
-                            {asset.name}
+                        <div class="detail-title-group">
+                            <div class="detail-title" title={asset.name}>
+                                {#if asset.isSubAsset}
+                                    {asset.name.split("/").pop()}
+                                {:else}
+                                    {asset.name}
+                                {/if}
+                            </div>
+                            {#if asset.isSubAsset}
+                                <div class="detail-parent-path" title={asset.name}>
+                                    {asset.name.split("/").slice(0, -1).join(" / ")}
+                                </div>
+                            {/if}
                         </div>
                     </div>
 
@@ -301,9 +312,11 @@
                             <div class="detail-stat">
                                 <div class="stat-label">TYPE</div>
                                 <div class="stat-value">
-                                    {asset.isSubAsset
-                                        ? "SUB-ASSET"
-                                        : asset.type || "STANDARD"}
+                                    {asset.name.includes("#")
+                                            ? "NFT"
+                                            : asset.isSubAsset
+                                                ? "SUB-ASSET"
+                                                : asset.type || "TOKEN"}
                                 </div>
                             </div>
                             <div class="detail-stat">
@@ -316,12 +329,12 @@
                                     tabindex={asset.hasOwner ? 0 : -1}
                                     title={asset.hasOwner
                                         ? "Manage Governance"
-                                        : "Status"}
+                                        : "Holder — no owner token"}
                                     on:click={onGovernance}
                                     on:keydown={(e) =>
                                         e.key === "Enter" && onGovernance()}
                                 >
-                                    {asset.hasOwner ? "👑 OWNER" : "🔒 LOCKED"}
+                                    {asset.hasOwner ? "👑 OWNER" : "HOLDER"}
                                 </div>
                             </div>
                             <div class="detail-stat">
@@ -684,6 +697,20 @@
         font-weight: 700;
         color: #fff;
         letter-spacing: 2px;
+    }
+    .detail-title-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    .detail-parent-path {
+        font-size: 0.7rem;
+        color: #666;
+        letter-spacing: 0.5px;
+        max-width: 320px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
     }
     .detail-body {
         padding: 1rem 1.5rem 1.5rem;

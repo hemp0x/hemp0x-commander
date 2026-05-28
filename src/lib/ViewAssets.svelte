@@ -713,6 +713,14 @@
             </div>
             <div class="header-actions">
                 <button
+                    class="header-btn refresh-btn"
+                    on:click={refreshAssets}
+                    disabled={!nodeOnline}
+                    title="Refresh Asset List"
+                >
+                    <span class="btn-icon">↻</span> REFRESH
+                </button>
+                <button
                     class="header-btn create-btn"
                     on:click={() => (createModalOpen = true)}
                     disabled={!nodeOnline}
@@ -810,23 +818,35 @@
                             {#if asset.isSubAsset}
                                 <div
                                     class="sub-badge"
-                                    title="Sub-asset of {asset.parentName}"
+                                    title={asset.name}
                                 >
                                     ↳
                                 </div>
                             {/if}
                             <div class="card-content">
-                                <div class="asset-name">
-                                    {asset.name}
-                                </div>
+                                {#if asset.isSubAsset}
+                                    <div class="asset-name" title={asset.name}>
+                                        {asset.name.split("/").pop()}
+                                    </div>
+                                    <div class="asset-parent-path" title={asset.name}>
+                                        {asset.name.split("/").slice(0, -1).join(" / ")}
+                                    </div>
+                                {:else}
+                                    <div class="asset-name">
+                                        {asset.name}
+                                    </div>
+                                {/if}
                                 <div class="asset-balance">
                                     {formatBalance(asset.balance)}
                                 </div>
                                 <div class="asset-meta">
-                                    <span class="asset-type"
-                                        >{asset.hasOwner
-                                            ? "OWNER"
-                                            : "LOCKED"}</span
+                                    <span class="asset-type">{asset.hasOwner
+                                        ? "OWNER"
+                                        : asset.name.includes("#")
+                                            ? "NFT"
+                                            : asset.isSubAsset
+                                                ? "SUB-ASSET"
+                                                : "TOKEN"}</span
                                     >
                                     <button
                                         class="quick-transfer"
@@ -1298,6 +1318,15 @@
         text-overflow: ellipsis;
         overflow: hidden;
         white-space: nowrap;
+    }
+    .asset-parent-path {
+        font-size: 0.6rem;
+        color: #666;
+        letter-spacing: 0.5px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+        margin-bottom: 0.35rem;
     }
     .asset-balance {
         font-size: 1.4rem;

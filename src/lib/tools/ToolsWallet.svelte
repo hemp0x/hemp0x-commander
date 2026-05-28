@@ -361,6 +361,10 @@
         unlockPassword = "";
         pendingImportData = null;
         keyList = [];
+        migrationExportPass = "";
+        migrationValidatePass = "";
+        migrationRestorePass = "";
+        migrationRestoreConfirm = "";
     });
 
     async function openExportModal() {
@@ -885,12 +889,6 @@
         migrationRestoreConfirm = "";
     }
 
-    onDestroy(() => {
-        migrationExportPass = "";
-        migrationValidatePass = "";
-        migrationRestorePass = "";
-        migrationRestoreConfirm = "";
-    });
 </script>
 
 <div class="tool-grid wallet-view">

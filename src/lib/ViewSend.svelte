@@ -418,10 +418,19 @@
 
             const data = JSON.stringify(favorites, null, 2);
             await core.invoke("write_text_file", { path, content: data });
-            alert("Address Book exported successfully!");
+            addNotification({
+                type: "system",
+                severity: "success",
+                title: "Address Book Exported",
+                body: "Address book saved successfully.",
+            });
         } catch (err) {
-            console.error(err);
-            alert("Export failed: " + err);
+            addNotification({
+                type: "system",
+                severity: "error",
+                title: "Export Failed",
+                body: String(err),
+            });
         }
     }
 
@@ -455,13 +464,27 @@
                 }
                 favorites = favorites; // react
                 saveFavorites();
-                alert(`Imported ${count} new addresses.`);
+                addNotification({
+                    type: "system",
+                    severity: "success",
+                    title: "Address Book Imported",
+                    body: `Imported ${count} new addresses.`,
+                });
             } else {
-                alert("Invalid file format: Expected an array.");
+                addNotification({
+                    type: "system",
+                    severity: "error",
+                    title: "Import Failed",
+                    body: "Invalid file format: Expected an array.",
+                });
             }
         } catch (err) {
-            console.error(err);
-            alert("Import failed: " + err);
+            addNotification({
+                type: "system",
+                severity: "error",
+                title: "Import Failed",
+                body: String(err),
+            });
         }
     }
 
@@ -559,11 +582,21 @@
             });
             const json = JSON.parse(res);
             if (!json.isvalid) {
-                alert("Invalid Hemp0x Address!");
+                addNotification({
+                    type: "system",
+                    severity: "error",
+                    title: "Invalid Address",
+                    body: "The entered address is not a valid Hemp0x address.",
+                });
                 return;
             }
         } catch (err) {
-            alert("Validation failed: " + err);
+            addNotification({
+                type: "system",
+                severity: "error",
+                title: "Validation Failed",
+                body: String(err),
+            });
             return;
         }
 
@@ -872,7 +905,6 @@
             fetchUtxos();
             refreshWalletStatus();
         } catch (err) {
-            console.error(err);
             status = `Error: ${err}`;
             addNotification({
                 type: "transaction",

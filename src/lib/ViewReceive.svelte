@@ -89,10 +89,11 @@
         }
     }
 
-    // Auto-refresh when wallet balance/tx updates
+    // Throttled auto-refresh on balance/tx changes (not per-poll)
     import { walletInfo } from "../stores.js";
-    $: if ($walletInfo && isNodeOnline) {
-        // Trigger refresh if balance changes or new tx comes in
+    let lastAddressRefresh = 0;
+    $: if ($walletInfo && isNodeOnline && Date.now() - lastAddressRefresh > 15000) {
+        lastAddressRefresh = Date.now();
         refreshList();
     }
 

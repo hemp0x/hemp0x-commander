@@ -186,7 +186,12 @@ pub fn get_daemon_process_identity() -> DaemonProcessIdentity {
             _ => false,
         };
 
-        let version_raw = command_version(&exe_path_str).ok();
+        let should_run_version_probe = matches_bundled_path || sha256_match;
+        let version_raw = if should_run_version_probe {
+            command_version(&exe_path_str).ok()
+        } else {
+            None
+        };
         let version_commit_match = version_raw
             .as_ref()
             .map_or(false, |v| {
@@ -266,9 +271,6 @@ fn parse_base_version(raw: &str) -> Option<String> {
 
 fn parse_commit_hash(raw: &str) -> Option<String> {
     let lower = raw.to_lowercase();
-    if lower.contains(REQUIRED_CORE_NEXT_COMMIT) {
-        return Some(REQUIRED_CORE_NEXT_COMMIT.to_string());
-    }
 
     for token in lower.split(|c: char| !c.is_ascii_hexdigit()) {
         if token.len() >= 8 && token.len() <= 40 && token.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -941,6 +943,13 @@ generatetoaddress nblocks address (maxtries)
     #[test]
     fn parse_commit_hash_rejects_different_hash() {
         let raw = "Hemp0x Core Daemon version v4.7.0.0-abcdef1234567890";
+        let result = parse_commit_hash(raw);
+        assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
+    }
+
+    #[test]
+    fn parse_commit_hash_does_not_match_required_hash_as_substring() {
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-00192c6b5ceff";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }

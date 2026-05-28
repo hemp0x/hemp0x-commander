@@ -284,7 +284,7 @@
     $: connectionString = `stratum+tcp://${$stratumStatus.bind_address || bindAddress}:${$stratumStatus.port || port}`;
     $: workerFormat = activePayoutAddress.trim()
         ? `${activePayoutAddress.trim()}.worker1`
-        : "<payout>.worker1";
+        : "<address>.worker1";
     $: workerPassword = "s";
 
     $: hashrateLabel = formatHashrate($stratumStatus.estimated_hashrate_hs);
@@ -487,8 +487,8 @@
 
                 {#if customWarning}
                     <div class="custom-warning">
-                        Block rewards will pay to this address. Commander cannot verify
-                        it belongs to this wallet.
+                        Block rewards go to this address via the coinbase. Commander cannot
+                        verify it belongs to this wallet.
                     </div>
                 {/if}
             </div>
@@ -594,7 +594,7 @@
             <div class="panel-section connection-section">
                 <h4 class="section-label">CONNECTION</h4>
                 <p class="connection-hint">
-                    Miner rewards pay to the address used before the worker name.
+                    Set your miner to use these connection settings.
                 </p>
                 <div class="connection-rows">
                     <div class="conn-row">

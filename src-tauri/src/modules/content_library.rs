@@ -28,6 +28,10 @@ pub struct ContentPackageSummary {
   pub version: u32,
   pub status: String,
   pub file_count: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub cid: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub provider: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -214,6 +218,30 @@ fn validate_package_id(package_id: &str) -> Result<(), String> {
     .map_err(|_| "Invalid package ID".to_string())
 }
 
+fn validate_import_cid(cid: &str) -> Result<(), String> {
+  let trimmed = cid.trim();
+  if trimmed.is_empty() {
+    return Err("CID is required".to_string());
+  }
+  if trimmed.len() > 128 {
+    return Err("CID is too long".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    return Err("CID contains whitespace or control characters".to_string());
+  }
+
+  let is_hex_64 = trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit());
+  let looks_like_cidv0 = trimmed.len() == 46 && trimmed.starts_with("Qm");
+  let looks_like_cidv1 =
+    trimmed.starts_with("bafy") || trimmed.starts_with("bafk") || trimmed.starts_with("bae");
+
+  if is_hex_64 || looks_like_cidv0 || looks_like_cidv1 {
+    Ok(())
+  } else {
+    Err("CID must be a CIDv0 Qm..., CIDv1 bafy/bafk/bae..., or 64-character hex reference".to_string())
+  }
+}
+
 fn sanitize_file_path(package_id: &str, file_path: &str) -> Result<PathBuf, String> {
   let base = files_dir(package_id)?;
   let trimmed = file_path.trim();
@@ -301,6 +329,8 @@ pub fn content_library_list() -> Result<Vec<ContentPackageSummary>, String> {
       version: manifest.version,
       status: manifest.status,
       file_count: manifest.files.len(),
+      cid: manifest.cid.clone(),
+      provider: manifest.provider.clone(),
     });
   }
   summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -494,6 +524,24 @@ pub fn content_library_update(package_id: String, input: ContentPackageInput) ->
     }
   }
 
+  // Preserve files from old manifest that were not in the new input.
+  // If neither body nor files are provided, keep all old files intact.
+  let has_new_content_md = files.iter().any(|f| f.path == "content.md");
+  let has_new_files = !files.is_empty();
+  for old_file in &old_manifest.files {
+    if old_file.path == "content.md" && has_new_content_md {
+      continue;
+    }
+    if has_new_files && files.iter().any(|f| f.path == old_file.path) {
+      continue;
+    }
+    if has_new_files && old_file.path != "content.md" {
+      // new file list explicitly provided, exclude old files not in it
+      continue;
+    }
+    files.push(old_file.clone());
+  }
+
   let pkg = ContentPackage {
     id: pkg_id.clone(),
     name: input.name.trim().to_string(),
@@ -567,6 +615,77 @@ pub fn content_library_get_file(package_id: String, file_path: String) -> Result
 }
 
 // ---------------------------------------------------------------------------
+// CID Import
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct CidImportInput {
+  pub cid: String,
+  pub name: Option<String>,
+  pub description: Option<String>,
+  pub tags: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub fn content_library_import_cid(input: CidImportInput) -> Result<ContentPackage, String> {
+  let cid = input.cid.trim().to_string();
+  validate_import_cid(&cid)?;
+
+  // check for duplicate CID
+  let index = load_index()?;
+  for (existing_id, _entry) in &index.packages {
+    let manifest = match load_manifest(existing_id) {
+      Ok(m) => m,
+      Err(_) => continue,
+    };
+    if let Some(ref existing_cid) = manifest.cid {
+      if existing_cid == &cid {
+        return Err(format!("CID already imported as package {}", existing_id));
+      }
+    }
+  }
+
+  let name = input.name.unwrap_or_else(|| format!("CID: {}", &cid[..cid.len().min(24)]));
+  validate_package_name(&name)?;
+
+  let package_id = Uuid::new_v4().to_string();
+  let now = Utc::now().to_rfc3339();
+
+  let pkg = ContentPackage {
+    id: package_id.clone(),
+    name: name.trim().to_string(),
+    description: input.description.unwrap_or_default(),
+    tags: input.tags.unwrap_or_default(),
+    created_at: now.clone(),
+    updated_at: now,
+    version: 1,
+    status: "external".to_string(),
+    files: vec![],
+    cid: Some(cid.clone()),
+    provider: Some("manual".to_string()),
+    published_at: None,
+  };
+
+  let manifest = package_manifest_to_full(&pkg);
+  save_manifest(&manifest)?;
+
+  let history = history_dir(&package_id)?;
+  fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+  let hist_path = history.join("v1.json");
+  let hist_content = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+  fs::write(&hist_path, &hist_content).map_err(|e| e.to_string())?;
+
+  let mut index = load_index()?;
+  index.packages.insert(package_id.clone(), IndexPackageEntry {
+    name: pkg.name.clone(),
+    tags: pkg.tags.clone(),
+  });
+  save_index(&index)?;
+
+  Ok(pkg)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -615,6 +734,14 @@ mod tests {
     assert!(validate_package_id("").is_err());
     assert!(validate_package_id("../outside").is_err());
     assert!(validate_package_id("test-pkg-id").is_err());
+  }
+
+  #[test]
+  fn validates_import_cid_shapes() {
+    assert!(validate_import_cid("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26").is_ok());
+    assert!(validate_import_cid("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").is_ok());
+    assert!(validate_import_cid("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").is_ok());
+    assert!(validate_import_cid("not-a-cid").is_err());
   }
 
   #[test]
@@ -883,5 +1010,161 @@ mod tests {
     let pkg_id = "test-pkg-id";
     let files_dir = dir.join("packages").join(pkg_id).join("files");
     fs::create_dir_all(&files_dir).ok();
+  }
+
+  #[test]
+  fn cid_import_rejects_empty_cid() {
+    let input = CidImportInput {
+      cid: "".to_string(),
+      name: None,
+      description: None,
+      tags: None,
+    };
+    let result = content_library_import_cid(input);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn cid_import_rejects_whitespace_cid() {
+    let input = CidImportInput {
+      cid: "   ".to_string(),
+      name: None,
+      description: None,
+      tags: None,
+    };
+    let result = content_library_import_cid(input);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn cid_import_rejects_control_chars() {
+    let input = CidImportInput {
+      cid: "QmTest\n123".to_string(),
+      name: None,
+      description: None,
+      tags: None,
+    };
+    let result = content_library_import_cid(input);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn cid_import_creates_external_package() {
+    let dir = test_library_dir();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+
+    let input = CidImportInput {
+      cid: "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string(),
+      name: Some("Test CID Import".to_string()),
+      description: Some("A test".to_string()),
+      tags: Some(vec!["test".to_string()]),
+    };
+    let result = content_library_import_cid(input).unwrap();
+    assert_eq!(result.status, "external");
+    assert_eq!(result.cid, Some("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string()));
+    assert_eq!(result.provider, Some("manual".to_string()));
+    assert_eq!(result.version, 1);
+    assert_eq!(result.name, "Test CID Import");
+
+    // Verify it shows up in list
+    let list = content_library_list().unwrap();
+    assert!(list.iter().any(|s| s.id == result.id && s.cid == Some("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string())));
+
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn cid_import_uses_auto_name_when_none_provided() {
+    let dir = test_library_dir();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+
+    let input = CidImportInput {
+      cid: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
+      name: None,
+      description: None,
+      tags: None,
+    };
+    let result = content_library_import_cid(input).unwrap();
+    assert!(result.name.starts_with("CID: "));
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn content_package_summary_includes_cid_and_provider() {
+    let summary = ContentPackageSummary {
+      id: "test-id".to_string(),
+      name: "Test".to_string(),
+      description: "Desc".to_string(),
+      tags: vec![],
+      created_at: "2026-01-01T00:00:00Z".to_string(),
+      updated_at: "2026-01-01T00:00:00Z".to_string(),
+      version: 1,
+      status: "local".to_string(),
+      file_count: 0,
+      cid: Some("QmTest".to_string()),
+      provider: Some("manual".to_string()),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    assert!(json.contains("QmTest"));
+    assert!(json.contains("manual"));
+  }
+
+  #[test]
+  fn content_package_summary_omits_optionals_when_none() {
+    let summary = ContentPackageSummary {
+      id: "test-id".to_string(),
+      name: "Test".to_string(),
+      description: "Desc".to_string(),
+      tags: vec![],
+      created_at: "2026-01-01T00:00:00Z".to_string(),
+      updated_at: "2026-01-01T00:00:00Z".to_string(),
+      version: 1,
+      status: "local".to_string(),
+      file_count: 0,
+      cid: None,
+      provider: None,
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    assert!(!json.contains("cid"));
+    assert!(!json.contains("provider"));
+  }
+
+  #[test]
+  fn base64_decode_rejects_invalid_input() {
+    assert!(base64_decode("!!!not%valid%base64!!!").is_err());
+    assert!(base64_decode("").is_ok());
+    assert!(base64_decode("aGVsbG8gd29ybGQ=").is_ok());
+  }
+
+  #[test]
+  fn sanitize_file_path_rejects_absolute() {
+    let dir = test_library_dir();
+    let pkg_id = "test-pkg-id";
+    let files_dir = dir.join("packages").join(pkg_id).join("files");
+    fs::create_dir_all(&files_dir).ok();
+    let result = sanitize_file_path(pkg_id, "/etc/passwd");
+    assert!(result.is_err());
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn sanitize_file_path_rejects_dot_dot() {
+    let dir = test_library_dir();
+    let pkg_id = "test-pkg-id";
+    let files_dir = dir.join("packages").join(pkg_id).join("files");
+    fs::create_dir_all(&files_dir).ok();
+    let result = sanitize_file_path(pkg_id, "../outside");
+    assert!(result.is_err());
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_package_id_rejects_invalid_for_public_commands() {
+    assert!(validate_package_id("").is_err());
+    assert!(validate_package_id("   ").is_err());
+    assert!(validate_package_id("not-a-uuid").is_err());
+    assert!(validate_package_id("../../etc/passwd").is_err());
   }
 }

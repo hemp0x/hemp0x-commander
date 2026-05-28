@@ -185,6 +185,7 @@ pub fn run() {
       content_library::content_library_update,
       content_library::content_library_delete,
       content_library::content_library_get_file,
+      content_library::content_library_import_cid,
 
       // Stratum Commands
       stratum::start_stratum_server,

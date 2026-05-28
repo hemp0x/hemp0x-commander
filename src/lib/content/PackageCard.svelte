@@ -8,10 +8,23 @@
     const dispatch = createEventDispatcher();
     let deleteConfirm = false;
     let deleting = false;
+    let cidCopied = false;
 
     function formatDate(iso) {
         if (!iso) return "Unknown";
         return iso.slice(0, 10);
+    }
+
+    function statusLabel(status) {
+        if (status === "external") return "EXTERNAL CID";
+        if (status === "published") return "PUBLISHED";
+        return "LOCAL ONLY";
+    }
+
+    function statusClass(status) {
+        if (status === "external") return "external";
+        if (status === "published") return "published";
+        return "local";
     }
 
     async function deletePackage() {
@@ -28,17 +41,40 @@
     }
 
     function filePreview(files) {
-        const md = files.find((f) => f.path === "content.md");
+        const md = files && files.find((f) => f.path === "content.md");
         if (md) return "Markdown document";
-        const first = files[0];
-        if (first) return `${files.length} file${files.length > 1 ? "s" : ""}`;
+        if (files && files.length > 0) return `${files.length} file${files.length > 1 ? "s" : ""}`;
         return "Empty package";
+    }
+
+    async function copyCid() {
+        if (!pkg.cid) return;
+        cidCopied = true;
+        try {
+            await navigator.clipboard.writeText(pkg.cid);
+        } catch {
+            // Fallback
+            const ta = document.createElement("textarea");
+            ta.value = pkg.cid;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        }
+        setTimeout(() => (cidCopied = false), 1500);
     }
 </script>
 
 <div class="package-card glass-card" class:has-confirm={deleteConfirm}>
     <div class="card-status">
-        <span class="status-badge local">LOCAL ONLY</span>
+          <span
+              class="status-badge"
+              class:local={statusClass(pkg.status) === "local"}
+              class:external={statusClass(pkg.status) === "external"}
+              class:published={statusClass(pkg.status) === "published"}
+          >
+              {statusLabel(pkg.status)}
+        </span>
     </div>
 
     <div class="card-name">{pkg.name}</div>
@@ -59,6 +95,18 @@
         </span>
     </div>
 
+    {#if pkg.cid}
+        <div class="card-cid">
+            <span class="cid-label">CID: </span>
+            <span class="cid-hash mono" title={pkg.cid}>
+                {pkg.cid.length > 20 ? pkg.cid.slice(0, 10) + "..." + pkg.cid.slice(-10) : pkg.cid}
+            </span>
+            <button class="cid-copy-btn" on:click={copyCid} title="Copy CID">
+                {cidCopied ? "copied" : "copy"}
+            </button>
+        </div>
+    {/if}
+
     {#if pkg.tags && pkg.tags.length > 0}
         <div class="card-tags">
             {#each pkg.tags as tag}
@@ -70,6 +118,9 @@
     <div class="card-actions">
         <button class="action-btn" on:click={() => dispatch("edit")} title="Edit Package">
             EDIT
+        </button>
+        <button class="action-btn" on:click={() => dispatch("view")} title="View Details">
+            VIEW
         </button>
         {#if !deleteConfirm}
             <button class="action-btn danger" on:click={() => (deleteConfirm = true)} title="Delete Package">
@@ -108,7 +159,7 @@
         margin-bottom: 0.5rem;
     }
     .status-badge {
-        font-size: 0.55rem;
+        font-size: 0.5rem;
         padding: 2px 8px;
         border-radius: 4px;
         letter-spacing: 1px;
@@ -118,6 +169,16 @@
         background: rgba(255, 255, 255, 0.06);
         color: #777;
         border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .status-badge.external {
+        background: rgba(255, 165, 0, 0.08);
+        color: #cca;
+        border: 1px solid rgba(255, 165, 0, 0.2);
+    }
+    .status-badge.published {
+        background: rgba(0, 255, 65, 0.08);
+        color: var(--color-primary);
+        border: 1px solid rgba(0, 255, 65, 0.2);
     }
     .card-name {
         font-size: 0.9rem;
@@ -147,6 +208,41 @@
     .meta-item {
         font-size: 0.6rem;
         color: #555;
+    }
+    .card-cid {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        margin-bottom: 0.5rem;
+        padding: 0.3rem 0.4rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+        font-size: 0.55rem;
+    }
+    .cid-label {
+        color: #555;
+        flex-shrink: 0;
+    }
+    .cid-hash {
+        color: #888;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cid-copy-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #666;
+        font-size: 0.5rem;
+        padding: 2px 6px;
+        border-radius: 3px;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .cid-copy-btn:hover {
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
     }
     .card-tags {
         display: flex;

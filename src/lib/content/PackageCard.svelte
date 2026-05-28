@@ -1,0 +1,209 @@
+<script>
+    import { createEventDispatcher } from "svelte";
+    import { core } from "@tauri-apps/api";
+    import { fade } from "svelte/transition";
+    import { contentLibrary } from "../stores/contentLibrary.js";
+
+    export let pkg;
+    const dispatch = createEventDispatcher();
+    let deleteConfirm = false;
+    let deleting = false;
+
+    function formatDate(iso) {
+        if (!iso) return "Unknown";
+        return iso.slice(0, 10);
+    }
+
+    async function deletePackage() {
+        if (deleting) return;
+        deleting = true;
+        try {
+            await core.invoke("content_library_delete", { packageId: pkg.id });
+            dispatch("refresh");
+        } catch (err) {
+            alert("Delete failed: " + err);
+        }
+        deleting = false;
+        deleteConfirm = false;
+    }
+
+    function filePreview(files) {
+        const md = files.find((f) => f.path === "content.md");
+        if (md) return "Markdown document";
+        const first = files[0];
+        if (first) return `${files.length} file${files.length > 1 ? "s" : ""}`;
+        return "Empty package";
+    }
+</script>
+
+<div class="package-card glass-card" class:has-confirm={deleteConfirm}>
+    <div class="card-status">
+        <span class="status-badge local">LOCAL ONLY</span>
+    </div>
+
+    <div class="card-name">{pkg.name}</div>
+
+    {#if pkg.description}
+        <div class="card-desc">{pkg.description}</div>
+    {/if}
+
+    <div class="card-meta">
+        <span class="meta-item">
+            <span class="meta-label">v{pkg.version}</span>
+        </span>
+        <span class="meta-item">
+            <span class="meta-label">{pkg.file_count} file{pkg.file_count !== 1 ? "s" : ""}</span>
+        </span>
+        <span class="meta-item">
+            <span class="meta-label">{formatDate(pkg.updated_at)}</span>
+        </span>
+    </div>
+
+    {#if pkg.tags && pkg.tags.length > 0}
+        <div class="card-tags">
+            {#each pkg.tags as tag}
+                <span class="tag-chip">{tag}</span>
+            {/each}
+        </div>
+    {/if}
+
+    <div class="card-actions">
+        <button class="action-btn" on:click={() => dispatch("edit")} title="Edit Package">
+            EDIT
+        </button>
+        {#if !deleteConfirm}
+            <button class="action-btn danger" on:click={() => (deleteConfirm = true)} title="Delete Package">
+                DEL
+            </button>
+        {:else}
+            <div class="confirm-row" transition:fade={{ duration: 150 }}>
+                <button class="action-btn danger confirm" on:click={deletePackage} disabled={deleting}>
+                    {deleting ? "..." : "YES"}
+                </button>
+                <button class="action-btn" on:click={() => (deleteConfirm = false)}>NO</button>
+            </div>
+        {/if}
+    </div>
+</div>
+
+<style>
+    .package-card {
+        position: relative;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        transition: all 0.25s;
+    }
+    .package-card:hover {
+        border-color: rgba(0, 255, 65, 0.3);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .package-card.has-confirm {
+        border-color: rgba(255, 68, 68, 0.3);
+    }
+    .card-status {
+        margin-bottom: 0.5rem;
+    }
+    .status-badge {
+        font-size: 0.55rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        letter-spacing: 1px;
+        font-weight: 600;
+    }
+    .status-badge.local {
+        background: rgba(255, 255, 255, 0.06);
+        color: #777;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .card-name {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 0.3rem;
+        letter-spacing: 0.5px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+    }
+    .card-desc {
+        font-size: 0.7rem;
+        color: #888;
+        line-height: 1.4;
+        margin-bottom: 0.6rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .card-meta {
+        display: flex;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .meta-item {
+        font-size: 0.6rem;
+        color: #555;
+    }
+    .card-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-bottom: 0.75rem;
+    }
+    .tag-chip {
+        font-size: 0.55rem;
+        padding: 2px 6px;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        color: var(--color-primary);
+        border-radius: 3px;
+    }
+    .card-actions {
+        display: flex;
+        gap: 0.4rem;
+        margin-top: auto;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .action-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #aaa;
+        padding: 0.3rem 0.6rem;
+        font-size: 0.6rem;
+        letter-spacing: 1px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .action-btn:hover {
+        border-color: rgba(0, 255, 65, 0.4);
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.05);
+    }
+    .action-btn.danger {
+        border-color: rgba(255, 68, 68, 0.2);
+        color: #c66;
+    }
+    .action-btn.danger:hover {
+        border-color: rgba(255, 68, 68, 0.5);
+        color: #ff5555;
+    }
+    .action-btn.confirm {
+        border-color: rgba(255, 68, 68, 0.4);
+        color: #ff5555;
+        background: rgba(255, 68, 68, 0.08);
+    }
+    .action-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+    .confirm-row {
+        display: flex;
+        gap: 0.3rem;
+    }
+</style>

@@ -15,6 +15,7 @@
   import ToolsConsolidation from "./tools/ToolsConsolidation.svelte";
   import ToolsRawTx from "./tools/ToolsRawTx.svelte";
   import ToolsSoloMining from "./tools/ToolsSoloMining.svelte";
+  import ContentLibraryPanel from "./content/ContentLibraryPanel.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
   import { addToastNotification } from "./stores/notifications.js";
 
@@ -454,7 +455,7 @@
     <!-- HEADER / TABS -->
     <header class="panel-header no-border">
       <div class="sub-tabs">
-        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "CONSOLIDATE", "RAW TX", "SOLO MINING", "LOGS"] as tab}
+        {#each ["CONSOLE", "WALLET", "CONFIG", "DATA", "SYSTEM", "NETWORK", "HISTORY", "JOURNAL", "CONSOLIDATE", "RAW TX", "SOLO MINING", "CONTENT LIBRARY", "LOGS"] as tab}
           <button
             class="sub-tab-btn"
             class:active={activeSubTab === tab}
@@ -475,6 +476,7 @@
       class="tools-body"
       class:no-scroll={activeSubTab === "CONSOLE" ||
         activeSubTab === "CONFIG" ||
+        activeSubTab === "CONTENT LIBRARY" ||
         activeSubTab === "LOGS"}
     >
       {#key activeSubTab}
@@ -798,6 +800,8 @@
             <ToolsSoloMining
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
+          {:else if activeSubTab === "CONTENT LIBRARY"}
+            <ContentLibraryPanel />
           {/if}
         </div>
       {/key}

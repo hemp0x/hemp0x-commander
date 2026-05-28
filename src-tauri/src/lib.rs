@@ -3,6 +3,7 @@ pub mod modules;
 
 // Import commands from modules
 use modules::commands;
+use modules::content_library;
 use modules::process;
 use modules::files;
 use modules::runtime;
@@ -176,6 +177,14 @@ pub fn run() {
       // Additional Commands
       commands::backup_wallet,
       commands::backup_wallet_to,
+
+      // Content Library Commands
+      content_library::content_library_list,
+      content_library::content_library_get,
+      content_library::content_library_create,
+      content_library::content_library_update,
+      content_library::content_library_delete,
+      content_library::content_library_get_file,
 
       // Stratum Commands
       stratum::start_stratum_server,

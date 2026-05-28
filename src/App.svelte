@@ -664,11 +664,24 @@
             const exactMatch = procId?.available
               && procId?.sha256_match
               && procId?.version_commit_match;
+            const compatibleCoreNextRpc =
+              conflictRuntimeStatus.identity?.rpc_authenticated
+              && conflictRuntimeStatus.identity?.base_version === status.required_base_version
+              && conflictRuntimeStatus.identity?.capabilities?.help_probe_success
+              && status.bundled_core_next_ready;
 
             if (exactMatch) {
               addRuntimeNotification(
                 "Bundled daemon verified",
                 "Exact Core Next match confirmed via process identity.",
+                "success",
+              );
+              conflictResolved = true;
+              daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
+            } else if (compatibleCoreNextRpc) {
+              addRuntimeNotification(
+                "Core Next daemon detected",
+                "Compatible Core Next capabilities confirmed over RPC.",
                 "success",
               );
               conflictResolved = true;

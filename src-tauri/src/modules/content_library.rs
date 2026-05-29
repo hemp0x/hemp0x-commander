@@ -218,7 +218,7 @@ fn validate_package_id(package_id: &str) -> Result<(), String> {
     .map_err(|_| "Invalid package ID".to_string())
 }
 
-fn validate_import_cid(cid: &str) -> Result<(), String> {
+pub fn validate_import_cid(cid: &str) -> Result<(), String> {
   let trimmed = cid.trim();
   if trimmed.is_empty() {
     return Err("CID is required".to_string());

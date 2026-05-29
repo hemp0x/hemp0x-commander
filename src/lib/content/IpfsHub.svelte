@@ -2,12 +2,15 @@
     import { fade } from "svelte/transition";
     import { ipfsHubSection } from "../stores/contentLibrary.js";
     import ContentLibraryPanel from "./ContentLibraryPanel.svelte";
+    import CidViewer from "./CidViewer.svelte";
     import CidImportPanel from "./CidImportPanel.svelte";
     import ProviderSettingsPanel from "./ProviderSettingsPanel.svelte";
 
     function setSection(section) {
         $ipfsHubSection = section;
     }
+
+    export let openCid = null;
 </script>
 
 <div class="ipfs-hub" in:fade={{ duration: 200 }}>
@@ -43,7 +46,11 @@
                 {#if $ipfsHubSection === "library"}
                     <ContentLibraryPanel />
                 {:else if $ipfsHubSection === "cid-viewer"}
-                    <CidImportPanel on:imported={() => setSection("library")} />
+                    {#if openCid}
+                        <CidViewer loadCid={openCid} />
+                    {:else}
+                        <CidViewer />
+                    {/if}
                 {:else if $ipfsHubSection === "providers"}
                     <ProviderSettingsPanel />
                 {/if}

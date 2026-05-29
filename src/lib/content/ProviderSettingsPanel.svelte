@@ -1,5 +1,45 @@
 <script>
     import { fade } from "svelte/transition";
+    import { core } from "@tauri-apps/api";
+
+    let cacheStatus = null;
+    let cacheDir = "";
+    let clearing = false;
+    let clearMsg = "";
+
+    async function loadStatus() {
+        try {
+            cacheStatus = await core.invoke("content_library_cache_status");
+            cacheDir = await core.invoke("content_library_get_cache_dir");
+        } catch {
+            cacheStatus = null;
+        }
+    }
+
+    function formatSize(bytes) {
+        if (!bytes) return "0 B";
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+        return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    async function clearCache() {
+        clearing = true;
+        clearMsg = "";
+        try {
+            await core.invoke("content_library_clear_cache");
+            clearMsg = "Cache cleared.";
+            await loadStatus();
+        } catch (err) {
+            clearMsg = "Failed: " + err;
+        }
+        clearing = false;
+    }
+
+    import { onMount } from "svelte";
+    onMount(() => {
+        loadStatus();
+    });
 </script>
 
 <div class="provider-settings" in:fade={{ duration: 150 }}>
@@ -49,6 +89,48 @@
             </div>
         </div>
     </div>
+
+    {#if cacheStatus !== null}
+        <div class="cache-section" in:fade={{ duration: 150 }}>
+            <h4 class="section-subtitle">CONTENT CACHE</h4>
+            <div class="cache-stats">
+                <div class="cache-stat-row">
+                    <span class="cache-stat-label">Entries</span>
+                    <span class="cache-stat-value">{cacheStatus.entry_count}</span>
+                </div>
+                <div class="cache-stat-row">
+                    <span class="cache-stat-label">Total Size</span>
+                    <span class="cache-stat-value">{formatSize(cacheStatus.total_size_bytes)}</span>
+                </div>
+                <div class="cache-stat-row">
+                    <span class="cache-stat-label">Location</span>
+                    <span class="cache-stat-value mono" style="font-size:0.55rem;overflow:hidden;text-overflow:ellipsis;">{cacheDir}</span>
+                </div>
+            </div>
+            <div class="cache-actions">
+                <button class="cyber-btn ghost small" on:click={clearCache} disabled={clearing || cacheStatus.entry_count === 0}>
+                    {clearing ? "CLEARING..." : "CLEAR CACHE"}
+                </button>
+                <button class="cyber-btn ghost small" on:click={loadStatus}>REFRESH</button>
+            </div>
+            {#if clearMsg}
+                <div class="clear-msg">{clearMsg}</div>
+            {/if}
+            {#if cacheStatus.entries.length > 0}
+                <div class="cache-entries">
+                    {#each cacheStatus.entries as entry}
+                        <div class="cache-entry-row">
+                            <span class="cache-entry-cid mono" title={entry.cid}>
+                                {entry.cid.length > 28 ? entry.cid.slice(0, 14) + "..." + entry.cid.slice(-14) : entry.cid}
+                            </span>
+                            <span class="cache-entry-type">{entry.content_type}</span>
+                            <span class="cache-entry-size">{formatSize(entry.size_bytes)}</span>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
+        </div>
+    {/if}
 
     <div class="privacy-section">
         <h4 class="section-subtitle">PRIVACY NOTES</h4>
@@ -156,6 +238,116 @@
         letter-spacing: 1px;
         margin: 0 0 0.6rem 0;
         text-transform: uppercase;
+    }
+    .cache-section {
+        padding: 0.6rem 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        margin-bottom: 0.8rem;
+    }
+    .cache-stats {
+        display: flex;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .cache-stat-row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        padding: 0.3rem 0.5rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+        flex: 1;
+        min-width: 0;
+    }
+    .cache-stat-label {
+        font-size: 0.5rem;
+        color: #555;
+        letter-spacing: 0.5px;
+    }
+    .cache-stat-value {
+        font-size: 0.65rem;
+        color: #aaa;
+    }
+    .cache-actions {
+        display: flex;
+        gap: 0.4rem;
+        margin-bottom: 0.5rem;
+    }
+    .clear-msg {
+        font-size: 0.6rem;
+        color: var(--color-primary);
+        margin-bottom: 0.4rem;
+    }
+    .cache-entries {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    .cache-entry-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.2rem 0.4rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.03);
+        border-radius: 3px;
+        font-size: 0.55rem;
+    }
+    .cache-entry-cid {
+        color: #888;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cache-entry-type {
+        color: #666;
+        flex-shrink: 0;
+    }
+    .cache-entry-size {
+        color: #555;
+        flex-shrink: 0;
+    }
+    .cyber-btn {
+        background: rgba(0, 255, 65, 0.05);
+        border: 1px solid var(--color-primary);
+        color: var(--color-primary);
+        padding: 0.45rem 1rem;
+        letter-spacing: 1px;
+        font-weight: bold;
+        font-size: 0.65rem;
+        cursor: pointer;
+        text-transform: uppercase;
+        transition: all 0.2s;
+        border-radius: 4px;
+    }
+    .cyber-btn:hover:not(:disabled) {
+        background: var(--color-primary);
+        color: #000;
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+    }
+    .cyber-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+    .cyber-btn.ghost {
+        border-color: rgba(255, 255, 255, 0.2);
+        color: #aaa;
+        background: transparent;
+    }
+    .cyber-btn.ghost:hover:not(:disabled) {
+        border-color: #fff;
+        color: #fff;
+        box-shadow: none;
+        background: rgba(255, 255, 255, 0.05);
+    }
+    .cyber-btn.small {
+        padding: 0.25rem 0.65rem;
+        font-size: 0.55rem;
     }
     .privacy-list {
         margin: 0;

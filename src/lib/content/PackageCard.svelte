@@ -2,7 +2,7 @@
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import { fade } from "svelte/transition";
-    import { contentLibrary } from "../stores/contentLibrary.js";
+    import { contentLibrary, ipfsHubSection } from "../stores/contentLibrary.js";
 
     export let pkg;
     const dispatch = createEventDispatcher();

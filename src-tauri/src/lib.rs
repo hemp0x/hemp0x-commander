@@ -6,6 +6,7 @@ use modules::commands;
 use modules::content_library;
 use modules::ipfs_cache;
 use modules::provider_settings;
+use modules::ipfs_publish;
 use modules::process;
 use modules::files;
 use modules::runtime;
@@ -207,6 +208,11 @@ pub fn run() {
       ipfs_cache::content_library_clear_cache,
       ipfs_cache::content_library_get_cache_dir,
       ipfs_cache::content_library_default_gateways,
+
+      // IPFS Publish Commands
+      ipfs_publish::ipfs_test_publish_provider,
+      ipfs_publish::content_library_publish_package,
+      ipfs_publish::content_library_prepare_publish_package,
       ipfs_cache::content_library_save_cached,
       ipfs_cache::content_library_open_cached_file,
       ipfs_cache::content_library_open_cache_folder,

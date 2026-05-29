@@ -24,6 +24,8 @@
     let publishProvider = "manual";
     let publishError = "";
     let publishLinking = false;
+    let publishLoading = false;
+    let publishResult = null;
     let attachmentPreviewFile = null;
     let folderChangeValue = "";
     let folderChanging = false;
@@ -409,6 +411,8 @@
         publishCid = detailFull && detailFull.cid ? detailFull.cid : "";
         publishProvider = (detailFull && detailFull.provider) ? detailFull.provider : "manual";
         publishError = "";
+        publishLoading = false;
+        publishResult = null;
     }
 
     async function doLinkCid() {
@@ -435,6 +439,57 @@
             publishError = String(err);
         }
         publishLinking = false;
+    }
+
+    async function doPublish() {
+        publishError = "";
+        publishLoading = true;
+        publishResult = null;
+        try {
+            const result = await core.invoke("content_library_publish_package", {
+                packageId: detailFull.id,
+                provider: publishProvider,
+            });
+            publishResult = result;
+            publishCid = result.cid;
+            detailFull = {
+                ...detailFull,
+                cid: result.cid,
+                status: result.status,
+                version: result.version,
+                provider: result.provider,
+                published_at: result.published_at,
+            };
+            detailPackage = {
+                ...detailPackage,
+                cid: result.cid,
+                status: result.status,
+                version: result.version,
+                updated_at: result.published_at,
+            };
+        } catch (err) {
+            publishError = String(err);
+        }
+        publishLoading = false;
+    }
+
+    async function copyPublishCid() {
+        const cid = (publishResult && publishResult.cid) || publishCid || (detailFull && detailFull.cid) || "";
+        if (!cid) return;
+        try {
+            await navigator.clipboard.writeText(cid);
+        } catch {
+            const ta = document.createElement("textarea");
+            ta.value = cid;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        }
+    }
+
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).catch(() => {});
     }
 
     function clearAttachmentPreview() {
@@ -971,44 +1026,72 @@
                 {#if showPublishPanel}
                     <div class="publish-panel" in:fly={{ y: 10, duration: 150 }}>
                         <div class="section-label">PUBLISH / LINK PACKAGE</div>
-                        {#if (detailFull && detailFull.status === "published")}
+                        <div class="publish-desc">
+                            Publish this package to IPFS or link a CID you already created. Only publish content you have the right to share.
+                        </div>
+                        {#if detailFull && detailFull.cid}
                             <div class="publish-info">
-                                This package is already published/linked with CID.
+                                Current CID: <span class="mono">{detailFull.cid}</span>
+                                {#if detailFull.provider}
+                                    <span class="link-provider">({detailFull.provider})</span>
+                                {/if}
                             </div>
-                        {:else}
-                            <div class="publish-desc">
-                                Link a CID to this package to mark it as published. Use the CID Viewer to fetch and verify content, then enter the CID here.
+                        {/if}
+                        <div class="publish-form">
+                            <div class="form-group">
+                                <label class="form-label" for="publish-provider">PROVIDER</label>
+                                <select id="publish-provider" class="form-input mono" bind:value={publishProvider}>
+                                    <option value="manual">Manual CID Link</option>
+                                    <option value="pinata">Pinata</option>
+                                    <option value="filebase">Filebase</option>
+                                    <option value="installed_kubo">Installed Kubo</option>
+                                </select>
                             </div>
-                            <div class="publish-form">
+                            {#if publishProvider === "manual"}
                                 <div class="form-group">
                                     <label class="form-label" for="publish-cid">CID</label>
                                     <input id="publish-cid" class="form-input mono" type="text" bind:value={publishCid} placeholder="Qm... or bafy..." />
                                 </div>
-                                <div class="form-group">
-                                    <label class="form-label" for="publish-provider">PROVIDER</label>
-                                    <select id="publish-provider" class="form-input mono" bind:value={publishProvider}>
-                                        <option value="manual">Manual CID Link</option>
-                                        <option value="pinata" disabled>Pinata (coming soon)</option>
-                                        <option value="web3.storage" disabled>web3.storage (coming soon)</option>
-                                        <option value="installed_kubo" disabled>Installed Kubo (planned)</option>
-                                    </select>
+                            {:else}
+                                <div class="publish-note">
+                                    Publishing uploads the full package folder through {publishProvider === "installed_kubo" ? "your local Kubo node" : publishProvider}. Configure provider credentials in IPFS Settings first.
                                 </div>
-                                {#if publishError}
-                                    <div class="error-bar" style="margin-bottom:0.5rem;">{publishError}</div>
-                                {/if}
-                                <div class="publish-actions">
+                            {/if}
+                            {#if publishError}
+                                <div class="error-bar" style="margin-bottom:0.5rem;">{publishError}</div>
+                            {/if}
+                            {#if publishResult}
+                                <div class="publish-success">
+                                    <span>Published CID</span>
+                                    <code>{publishResult.cid}</code>
+                                </div>
+                            {/if}
+                            <div class="publish-actions">
+                                {#if publishProvider === "manual"}
                                     <button class="cyber-btn small" on:click={doLinkCid} disabled={publishLinking || !publishCid.trim()}>
                                         {publishLinking ? "LINKING..." : "LINK CID"}
                                     </button>
-                                    <button class="cyber-btn small ghost" on:click={() => { showPublishPanel = false; publishError = ""; }}>
-                                        CANCEL
+                                {:else}
+                                    <button class="cyber-btn small" on:click={doPublish} disabled={publishLoading}>
+                                        {publishLoading ? "PUBLISHING..." : "PUBLISH PACKAGE"}
                                     </button>
-                                </div>
+                                {/if}
+                                {#if (publishResult && publishResult.cid) || publishCid || (detailFull && detailFull.cid)}
+                                    <button class="cyber-btn small ghost" on:click={copyPublishCid}>
+                                        COPY CID
+                                    </button>
+                                    <button class="cyber-btn small ghost" on:click={() => { $ipfsHubSection = "cid-viewer"; }}>
+                                        CID VIEWER
+                                    </button>
+                                {/if}
+                                <button class="cyber-btn small ghost" on:click={() => { showPublishPanel = false; publishError = ""; }}>
+                                    CLOSE
+                                </button>
                             </div>
-                            <div class="publish-note">
-                                Future: API-key providers (Pinata, web3.storage) and local Kubo publishing will be available after credential storage review.
-                            </div>
-                        {/if}
+                        </div>
+                        <div class="publish-note">
+                            Published IPFS content may be public and difficult to remove.
+                        </div>
                     </div>
                 {/if}
             </div>
@@ -2123,5 +2206,22 @@
         border-color: #ff5555;
         color: #ff5555;
         box-shadow: 0 0 10px rgba(255, 68, 68, 0.15);
+    }
+    .publish-success {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 0.55rem 0.7rem;
+        margin-bottom: 0.5rem;
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 6px;
+        color: var(--color-primary);
+        font-size: 0.65rem;
+    }
+    .publish-success code {
+        color: #d8d8d8;
+        word-break: break-all;
+        font-size: 0.62rem;
     }
 </style>

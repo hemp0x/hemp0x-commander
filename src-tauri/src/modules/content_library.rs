@@ -82,67 +82,67 @@ pub struct ContentFileReadResult {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ContentLibraryIndex {
-  version: u32,
-  packages: HashMap<String, IndexPackageEntry>,
+pub(crate) struct ContentLibraryIndex {
+  pub(crate) version: u32,
+  pub(crate) packages: HashMap<String, IndexPackageEntry>,
   #[serde(default)]
-  folders: Vec<String>,
+  pub(crate) folders: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct IndexPackageEntry {
-  name: String,
-  tags: Vec<String>,
-  folder: String,
+pub(crate) struct IndexPackageEntry {
+  pub(crate) name: String,
+  pub(crate) tags: Vec<String>,
+  pub(crate) folder: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct PackageManifest {
-  id: String,
-  name: String,
-  description: String,
-  tags: Vec<String>,
-  created_at: String,
-  updated_at: String,
-  version: u32,
-  status: String,
-  files: Vec<ContentFileEntry>,
-  cid: Option<String>,
-  provider: Option<String>,
-  published_at: Option<String>,
+pub(crate) struct PackageManifest {
+  pub(crate) id: String,
+  pub(crate) name: String,
+  pub(crate) description: String,
+  pub(crate) tags: Vec<String>,
+  pub(crate) created_at: String,
+  pub(crate) updated_at: String,
+  pub(crate) version: u32,
+  pub(crate) status: String,
+  pub(crate) files: Vec<ContentFileEntry>,
+  pub(crate) cid: Option<String>,
+  pub(crate) provider: Option<String>,
+  pub(crate) published_at: Option<String>,
   #[serde(default)]
-  folder: String,
+  pub(crate) folder: String,
 }
 
-fn content_library_dir() -> Result<PathBuf, String> {
+pub(crate) fn content_library_dir() -> Result<PathBuf, String> {
   let dir = data_dir()?.join("content-library");
   fs::create_dir_all(&dir).map_err(|e| format!("Failed to create content-library dir: {}", e))?;
   fs::create_dir_all(dir.join("packages")).map_err(|e| e.to_string())?;
   Ok(dir)
 }
 
-fn index_path() -> Result<PathBuf, String> {
+pub(crate) fn index_path() -> Result<PathBuf, String> {
   Ok(content_library_dir()?.join("index.json"))
 }
 
-fn package_dir(package_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn package_dir(package_id: &str) -> Result<PathBuf, String> {
   validate_package_id(package_id)?;
   Ok(content_library_dir()?.join("packages").join(package_id))
 }
 
-fn manifest_path(package_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn manifest_path(package_id: &str) -> Result<PathBuf, String> {
   Ok(package_dir(package_id)?.join("manifest.json"))
 }
 
-fn files_dir(package_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn files_dir(package_id: &str) -> Result<PathBuf, String> {
   Ok(package_dir(package_id)?.join("files"))
 }
 
-fn history_dir(package_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn history_dir(package_id: &str) -> Result<PathBuf, String> {
   Ok(package_dir(package_id)?.join("history"))
 }
 
-fn load_index() -> Result<ContentLibraryIndex, String> {
+pub(crate) fn load_index() -> Result<ContentLibraryIndex, String> {
   let path = index_path()?;
   if !path.exists() {
     return Ok(ContentLibraryIndex { version: 1, packages: HashMap::new(), folders: Vec::new() });
@@ -164,7 +164,7 @@ fn load_index() -> Result<ContentLibraryIndex, String> {
   Ok(index)
 }
 
-fn ensure_folder_in_index(index: &mut ContentLibraryIndex, folder: &str) {
+pub(crate) fn ensure_folder_in_index(index: &mut ContentLibraryIndex, folder: &str) {
   let clean = folder.trim();
   if clean.is_empty() { return; }
   if !index.folders.contains(&clean.to_string()) {
@@ -175,7 +175,7 @@ fn ensure_folder_in_index(index: &mut ContentLibraryIndex, folder: &str) {
 
 
 
-fn save_index(index: &ContentLibraryIndex) -> Result<(), String> {
+pub(crate) fn save_index(index: &ContentLibraryIndex) -> Result<(), String> {
   let path = index_path()?;
   let dir = content_library_dir()?;
   let tmp_path = dir.join(".index.json.tmp");
@@ -254,7 +254,7 @@ fn validate_folder(folder: &str) -> Result<String, String> {
   Ok(trimmed.to_string())
 }
 
-fn validate_package_id(package_id: &str) -> Result<(), String> {
+pub(crate) fn validate_package_id(package_id: &str) -> Result<(), String> {
   let trimmed = package_id.trim();
   if trimmed.is_empty() {
     return Err("Package ID is required".to_string());
@@ -318,7 +318,7 @@ fn sanitize_file_path(package_id: &str, file_path: &str) -> Result<PathBuf, Stri
   Ok(resolved)
 }
 
-fn package_manifest_to_full(pkg: &ContentPackage) -> PackageManifest {
+pub(crate) fn package_manifest_to_full(pkg: &ContentPackage) -> PackageManifest {
   PackageManifest {
     id: pkg.id.clone(),
     name: pkg.name.clone(),
@@ -336,7 +336,7 @@ fn package_manifest_to_full(pkg: &ContentPackage) -> PackageManifest {
   }
 }
 
-fn manifest_to_content_package(manifest: &PackageManifest) -> ContentPackage {
+pub(crate) fn manifest_to_content_package(manifest: &PackageManifest) -> ContentPackage {
   ContentPackage {
     id: manifest.id.clone(),
     name: manifest.name.clone(),
@@ -386,7 +386,7 @@ pub fn content_library_list() -> Result<Vec<ContentPackageSummary>, String> {
   Ok(summaries)
 }
 
-fn load_manifest(package_id: &str) -> Result<PackageManifest, String> {
+pub(crate) fn load_manifest(package_id: &str) -> Result<PackageManifest, String> {
   let path = manifest_path(package_id)?;
   if !path.exists() {
     return Err(format!("Manifest not found for package {}", package_id));
@@ -399,7 +399,7 @@ fn load_manifest(package_id: &str) -> Result<PackageManifest, String> {
   Ok(manifest)
 }
 
-fn save_manifest(manifest: &PackageManifest) -> Result<(), String> {
+pub(crate) fn save_manifest(manifest: &PackageManifest) -> Result<(), String> {
   let pkg_dir = package_dir(&manifest.id)?;
   fs::create_dir_all(&pkg_dir).map_err(|e| e.to_string())?;
   let path = manifest_path(&manifest.id)?;
@@ -777,7 +777,7 @@ pub fn content_library_link_cid(input: CidLinkInput) -> Result<ContentPackage, S
   let old_manifest = load_manifest(&pkg_id)?;
 
   let provider = input.provider.unwrap_or_else(|| "manual".to_string());
-  let valid_providers = ["manual", "pinata", "web3.storage", "installed_kubo"];
+  let valid_providers = ["manual", "pinata", "installed_kubo", "filebase"];
   if !valid_providers.contains(&provider.as_str()) {
     return Err(format!(
       "Invalid provider: {}. Must be one of: {}",
@@ -1631,7 +1631,7 @@ mod tests {
     let result2 = CidLinkInput {
       package_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
       cid: "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string(),
-      provider: Some("web3.storage".to_string()),
+      provider: Some("filebase".to_string()),
     };
     // This will fail because package doesn't exist, not because of provider
     let r2 = content_library_link_cid(result2);

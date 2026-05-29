@@ -1916,6 +1916,13 @@
     }
     select.form-input {
         cursor: pointer;
+        background: #020604;
+        color: var(--color-primary);
+        border-color: rgba(0, 255, 65, 0.28);
+    }
+    select.form-input option {
+        background: #101010;
+        color: #d8d8d8;
     }
     .clear-preview-btn {
         background: transparent;

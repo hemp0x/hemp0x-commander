@@ -201,6 +201,7 @@ pub fn run() {
 
       // IPFS Cache / Gateway Commands
       ipfs_cache::content_library_fetch_cid,
+      ipfs_cache::content_library_fetch_cid_path,
       ipfs_cache::content_library_get_cached,
       ipfs_cache::content_library_refresh_cached,
       ipfs_cache::content_library_has_cache,

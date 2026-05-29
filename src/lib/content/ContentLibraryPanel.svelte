@@ -27,8 +27,6 @@
     let publishLoading = false;
     let publishResult = null;
     let attachmentPreviewFile = null;
-    let folderChangeValue = "";
-    let folderChanging = false;
     let viewMode = "grid";
     let backendFolders = [];
     let newPackageFolder = null;
@@ -507,23 +505,6 @@
             errorMsg = String(err);
         }
     }
-
-    async function changePackageFolder() {
-        if (!detailFull || !folderChangeValue.trim()) return;
-        folderChanging = true;
-        try {
-            const result = await core.invoke("content_library_set_folder", {
-                packageId: detailFull.id,
-                folder: folderChangeValue.trim(),
-            });
-            detailFull = { ...detailFull, folder: result.folder };
-            detailPackage = { ...detailPackage, folder: result.folder };
-            await refresh();
-        } catch (err) {
-            errorMsg = String(err);
-        }
-        folderChanging = false;
-    }
 </script>
 
 <div class="content-library">
@@ -744,6 +725,12 @@
                                     {/if}
                                     <span class="list-name">{pkg.name}</span>
                                     <span class="list-meta mono">v{pkg.version} · {pkg.file_count} file{pkg.file_count !== 1 ? "s" : ""} · {(pkg.updated_at || "").slice(0, 10)}</span>
+                                    {#if pkg.cid}
+                                        <span class="list-cid mono" title={pkg.cid}>
+                                            {pkg.cid.length > 20 ? pkg.cid.slice(0, 8) + "..." + pkg.cid.slice(-8) : pkg.cid}
+                                        </span>
+                                        <button class="action-btn tiny" on:click|stopPropagation={async () => { try { await navigator.clipboard.writeText(pkg.cid); } catch {} }} title="Copy CID">COPY CID</button>
+                                    {/if}
                                     {#if !selectMode}
                                         <div class="list-actions">
                                             <button class="action-btn tiny" on:click|stopPropagation={() => { $activePanel = pkg.id; }}>EDIT</button>
@@ -997,30 +984,15 @@
                         <button class="cyber-btn" on:click={togglePublishPanel}>
                             PUBLISH / LINK
                         </button>
+                        <button class="cyber-btn ghost" on:click={openPackageFolder}>
+                            OPEN SYSTEM FOLDER
+                        </button>
                         {#if detailPackage.cid}
                             <button class="cyber-btn ghost" on:click={() => { $ipfsHubSection = "cid-viewer"; }}>
                                 VIEW IN CID VIEWER
                             </button>
                         {/if}
                     </div>
-                </div>
-
-                <div class="detail-section">
-                    <div class="section-label">FOLDER / GROUP</div>
-                    <div class="folder-change-row">
-                        <input
-                            class="form-input mono"
-                            type="text"
-                            placeholder="Folder name"
-                            bind:value={folderChangeValue}
-                        />
-                        <button class="cyber-btn small" on:click={changePackageFolder} disabled={folderChanging || !folderChangeValue.trim()}>
-                            {folderChanging ? "SAVING..." : "SET FOLDER"}
-                        </button>
-                    </div>
-                    {#if detailFull && detailFull.folder}
-                        <div class="folder-current">Current: {detailFull.folder}</div>
-                    {/if}
                 </div>
 
                 {#if showPublishPanel}
@@ -1530,9 +1502,23 @@
         color: #555;
         flex-shrink: 0;
     }
+    .list-cid {
+        font-size: 0.6rem;
+        color: #777;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+        flex-shrink: 0;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
     .package-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        grid-auto-rows: 1fr;
         gap: 1rem;
     }
     .empty-state {
@@ -1971,32 +1957,6 @@
     .form-input:focus {
         border-color: var(--color-primary);
     }
-    .folder-change-row {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-    .folder-change-row .form-input {
-        flex: 1;
-        min-width: 120px;
-        background: #000;
-        border: 1px solid #333;
-        color: #0f0;
-        padding: 0.35rem 0.6rem;
-        border-radius: 4px;
-        font-size: 0.7rem;
-        outline: none;
-        box-sizing: border-box;
-    }
-    .folder-change-row .form-input:focus {
-        border-color: var(--color-primary);
-    }
-    .folder-current {
-        font-size: 0.6rem;
-        color: #555;
-        margin-top: 0.3rem;
-    }
     select.form-input {
         cursor: pointer;
         background: #020604;
@@ -2023,6 +1983,11 @@
     .grid-item {
         position: relative;
         cursor: pointer;
+        display: flex;
+    }
+    .grid-item :global(.package-card) {
+        height: 100%;
+        width: 100%;
     }
     .grid-item.selected {
         opacity: 0.85;

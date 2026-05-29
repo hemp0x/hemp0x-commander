@@ -91,7 +91,7 @@
             <span class="cid-hash mono" title={pkg.cid}>
                 {pkg.cid.length > 20 ? pkg.cid.slice(0, 10) + "..." + pkg.cid.slice(-10) : pkg.cid}
             </span>
-            <button class="cid-copy-btn" on:click={copyCid} title="Copy CID">
+            <button class="cid-copy-btn" on:click|stopPropagation={copyCid} title="Copy CID">
                 {cidCopied ? "copied" : "copy"}
             </button>
         </div>

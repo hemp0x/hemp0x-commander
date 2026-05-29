@@ -6,6 +6,7 @@ use std::process::Command;
 
 use chrono::Utc;
 use serde::{Serialize, Deserialize};
+use sha2::{Digest, Sha256};
 
 use crate::modules::files::data_dir;
 use crate::modules::content_library::validate_import_cid;
@@ -81,6 +82,76 @@ fn safe_cid_dirname(cid: &str) -> String {
         .collect::<String>()
 }
 
+fn validate_cid_subpath(path: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Subpath is required".to_string());
+    }
+    if trimmed.len() > 256 {
+        return Err("Subpath is too long (max 256 characters)".to_string());
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("Subpath contains control characters".to_string());
+    }
+    if trimmed.starts_with('/') {
+        return Err("Subpath must not start with '/'".to_string());
+    }
+    if trimmed.contains("..") {
+        return Err("Subpath contains '..'".to_string());
+    }
+    if trimmed.contains('\\') {
+        return Err("Subpath contains backslash".to_string());
+    }
+    Ok(())
+}
+
+fn safe_subpath_dirname(path: &str) -> String {
+    let mut safe = path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>();
+    if safe.len() > 96 {
+        safe.truncate(96);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    format!("{}-{}", safe, &digest[..12])
+}
+
+fn encode_subpath_for_url(path: &str) -> String {
+    path.split('/')
+        .map(percent_encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn percent_encode_path_segment(segment: &str) -> String {
+    let mut encoded = String::new();
+    for byte in segment.as_bytes() {
+        let c = *byte as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            encoded.push(c);
+        } else {
+            encoded.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    encoded
+}
+
+fn cid_subpath_dir(cid: &str, path: &str) -> Result<PathBuf, String> {
+    let safe_cid = safe_cid_dirname(cid);
+    let safe_path = safe_subpath_dirname(path);
+    Ok(cache_dir()?.join(safe_cid).join("subpaths").join(safe_path))
+}
+
+fn cid_subpath_content_path(cid: &str, path: &str) -> Result<PathBuf, String> {
+    Ok(cid_subpath_dir(cid, path)?.join("content"))
+}
+
+fn cid_subpath_meta_path(cid: &str, path: &str) -> Result<PathBuf, String> {
+    Ok(cid_subpath_dir(cid, path)?.join("meta.json"))
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -112,11 +183,74 @@ fn save_cache_content(cid: &str, data: &[u8]) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn load_cache_meta_subpath(cid: &str, path: &str) -> Result<CacheEntry, String> {
+    let path = cid_subpath_meta_path(cid, path)?;
+    if !path.exists() {
+        return Err("Subpath cache entry not found".to_string());
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let entry: CacheEntry = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(entry)
+}
+
+fn save_cache_meta_subpath(cid: &str, path: &str, entry: &CacheEntry) -> Result<(), String> {
+    let dir = cid_subpath_dir(cid, path)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = cid_subpath_meta_path(cid, path)?;
+    let content = serde_json::to_string_pretty(entry).map_err(|e| e.to_string())?;
+    fs::write(&path, &content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn save_cache_content_subpath(cid: &str, path: &str, data: &[u8]) -> Result<PathBuf, String> {
+    let dir = cid_subpath_dir(cid, path)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = cid_subpath_content_path(cid, path)?;
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 /// Fetches content from a single gateway URL with timeout and size limit.
 /// Returns (content_type, data).
 fn fetch_from_gateway(cid: &str, gateway_base: &str) -> Result<(String, Vec<u8>), String> {
     let clean_base = gateway_base.trim_end_matches('/');
     let url = format!("{}/{}", clean_base, cid);
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .timeout_write(Duration::from_secs(15))
+        .build();
+
+    let response = agent.get(&url)
+        .set("User-Agent", "hemp0x-commander/2.0")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Transport(t) => format!("Gateway unreachable: {}", t),
+            ureq::Error::Status(code, _) => format!("Gateway returned HTTP {}", code),
+        })?;
+
+    let content_type = response.content_type().to_string();
+
+    let reader = response.into_reader();
+    let mut buf = Vec::new();
+
+    let mut limited = reader.take(MAX_DOWNLOAD_SIZE + 1);
+    let bytes_read = limited.read_to_end(&mut buf).map_err(|e| format!("Read error: {}", e))?;
+
+    if bytes_read as u64 > MAX_DOWNLOAD_SIZE {
+        return Err(format!(
+            "Content exceeds max download size of {} MB",
+            MAX_DOWNLOAD_SIZE / (1024 * 1024)
+        ));
+    }
+
+    Ok((content_type, buf))
+}
+
+fn fetch_cid_subpath_from_gateway(cid: &str, path: &str, gateway_base: &str) -> Result<(String, Vec<u8>), String> {
+    let clean_base = gateway_base.trim_end_matches('/');
+    let url = format!("{}/{}/{}", clean_base, cid, encode_subpath_for_url(path));
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
@@ -214,12 +348,25 @@ fn is_utf8_text(data: &[u8]) -> bool {
     std::str::from_utf8(data).is_ok()
 }
 
+#[allow(dead_code)]
+fn is_gateway_directory_listing(content_type: &str, data: &[u8]) -> bool {
+    if !content_type.to_lowercase().contains("text/html") {
+        return false;
+    }
+    let text = match std::str::from_utf8(data) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let lower = text.to_lowercase();
+    lower.contains("index of") && (lower.contains("/ipfs/") || lower.contains("directory listing"))
+}
+
 // ---------------------------------------------------------------------------
 // Tauri Commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+pub async fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
 
@@ -282,6 +429,87 @@ pub fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> R
 }
 
 #[tauri::command]
+pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+    let cid = cid.trim().to_string();
+    validate_import_cid(&cid)?;
+    let path = path.trim().to_string();
+    validate_cid_subpath(&path)?;
+
+    // Check subpath cache first
+    let subpath_meta_path = cid_subpath_meta_path(&cid, &path)?;
+    if subpath_meta_path.exists() {
+        let entry = load_cache_meta_subpath(&cid, &path)?;
+        let content_path = cid_subpath_content_path(&cid, &path)?;
+        let data = fs::read(&content_path).map_err(|e| e.to_string())?;
+        let content_base64 = {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            STANDARD.encode(&data)
+        };
+        return Ok(IpfsFetchResult {
+            cid: cid.clone(),
+            gateway_used: entry.gateway_used,
+            content_type: entry.content_type,
+            size_bytes: entry.size_bytes,
+            fetched_at: entry.fetched_at,
+            local_path: entry.local_path,
+            content_base64,
+        });
+    }
+
+    let gateways = provider_settings::viewing_gateways();
+    let idx = gateway_index.unwrap_or(0);
+    if idx >= gateways.len() {
+        return Err(format!("Invalid gateway index (max {})", gateways.len().saturating_sub(1)));
+    }
+
+    let mut last_error = String::new();
+    for offset in 0..gateways.len() {
+        let gidx = (idx + offset) % gateways.len();
+        let gw = gateways[gidx].as_str();
+        match fetch_cid_subpath_from_gateway(&cid, &path, gw) {
+            Ok((content_type, data)) => {
+                let final_type = guess_content_type_priority(&content_type, &data, &format!("{}/{}", cid, path));
+
+                let local_path = save_cache_content_subpath(&cid, &path, &data)?;
+                let local_path_str = local_path.to_string_lossy().to_string();
+
+                let now = Utc::now().to_rfc3339();
+
+                let entry = CacheEntry {
+                    cid: cid.clone(),
+                    gateway_used: gw.to_string(),
+                    content_type: final_type.clone(),
+                    size_bytes: data.len() as u64,
+                    fetched_at: now.clone(),
+                    local_path: local_path_str,
+                };
+                save_cache_meta_subpath(&cid, &path, &entry)?;
+
+                let content_base64 = {
+                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    STANDARD.encode(&data)
+                };
+
+                return Ok(IpfsFetchResult {
+                    cid: cid.clone(),
+                    gateway_used: gw.to_string(),
+                    content_type: final_type,
+                    size_bytes: data.len() as u64,
+                    fetched_at: now,
+                    local_path: entry.local_path.clone(),
+                    content_base64,
+                });
+            }
+            Err(e) => {
+                last_error = e;
+            }
+        }
+    }
+
+    Err(format!("All gateways failed. Last error: {}", last_error))
+}
+
+#[tauri::command]
 pub fn content_library_get_cached(cid: String) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
@@ -311,7 +539,7 @@ pub fn content_library_get_cached(cid: String) -> Result<IpfsFetchResult, String
 }
 
 #[tauri::command]
-pub fn content_library_refresh_cached(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+pub async fn content_library_refresh_cached(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
 
@@ -320,7 +548,7 @@ pub fn content_library_refresh_cached(cid: String, gateway_index: Option<usize>)
         fs::remove_dir_all(&cache_entry_dir).map_err(|e| e.to_string())?;
     }
 
-    content_library_fetch_cid(cid, gateway_index)
+    content_library_fetch_cid(cid, gateway_index).await
 }
 
 #[tauri::command]
@@ -662,5 +890,59 @@ mod tests {
         };
         assert_eq!(status.entry_count, 1);
         assert_eq!(status.total_size_bytes, 100);
+    }
+
+    #[test]
+    fn validate_cid_subpath_rejects_traversal() {
+        assert!(validate_cid_subpath("../etc/passwd").is_err());
+        assert!(validate_cid_subpath("foo/../bar").is_err());
+        assert!(validate_cid_subpath("/absolute").is_err());
+        assert!(validate_cid_subpath("back\\slash").is_err());
+        assert!(validate_cid_subpath("").is_err());
+        assert!(validate_cid_subpath("control\x00char").is_err());
+    }
+
+    #[test]
+    fn validate_cid_subpath_accepts_safe_paths() {
+        assert!(validate_cid_subpath("metadata.json").is_ok());
+        assert!(validate_cid_subpath("content.md").is_ok());
+        assert!(validate_cid_subpath("files/image.png").is_ok());
+        assert!(validate_cid_subpath("deep/nested/path.txt").is_ok());
+    }
+
+    #[test]
+    fn safe_subpath_dirname_replaces_special_chars() {
+        assert!(safe_subpath_dirname("metadata.json").starts_with("metadata_json-"));
+        assert!(safe_subpath_dirname("content.md").starts_with("content_md-"));
+        assert!(safe_subpath_dirname("files/image.png").starts_with("files_image_png-"));
+        assert!(safe_subpath_dirname("a-b_c").starts_with("a-b_c-"));
+        assert_ne!(safe_subpath_dirname("a/b"), safe_subpath_dirname("a_b"));
+    }
+
+    #[test]
+    fn encode_subpath_for_url_encodes_segments() {
+        assert_eq!(encode_subpath_for_url("files/hello world.png"), "files/hello%20world.png");
+        assert_eq!(encode_subpath_for_url("metadata.json"), "metadata.json");
+        assert_eq!(encode_subpath_for_url("a+b.txt"), "a%2Bb.txt");
+    }
+
+    #[test]
+    fn is_gateway_directory_listing_detects_ipfs_html() {
+        let html = b"<html><head><title>Index of /ipfs/Qm123</title></head><body><h1>Index of /ipfs/Qm123</h1></body></html>";
+        assert!(is_gateway_directory_listing("text/html", html));
+        assert!(is_gateway_directory_listing("TEXT/HTML; charset=utf-8", html));
+    }
+
+    #[test]
+    fn is_gateway_directory_listing_rejects_non_html() {
+        let html = b"<html><head><title>Index of /ipfs/Qm123</title></head></html>";
+        assert!(!is_gateway_directory_listing("application/json", html));
+        assert!(!is_gateway_directory_listing("text/plain", html));
+    }
+
+    #[test]
+    fn is_gateway_directory_listing_rejects_regular_html() {
+        let html = b"<html><head><title>My Page</title></head><body>Hello</body></html>";
+        assert!(!is_gateway_directory_listing("text/html", html));
     }
 }

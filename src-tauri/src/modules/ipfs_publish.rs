@@ -35,6 +35,36 @@ pub struct PackagePublishPreview {
     pub files: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ProviderPinItem {
+    pub cid: String,
+    pub name: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub created_at: Option<String>,
+    pub status: Option<String>,
+    pub provider: String,
+    pub request_id: Option<String>,
+    pub local_package_ids: Vec<String>,
+    pub local_package_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderPinsPage {
+    pub provider: String,
+    pub page: u32,
+    pub page_size: u32,
+    pub has_next_page: bool,
+    pub items: Vec<ProviderPinItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderUnpinResult {
+    pub cid: String,
+    pub provider: String,
+    pub success: bool,
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct PackageMetadata {
     package_id: String,
@@ -470,6 +500,443 @@ fn filebase_upload(
     ipfs_rpc_add(files, &filebase_endpoint(settings), Some(&token))
 }
 
+fn encode_query(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(c),
+            ' ' => out.push_str("%20"),
+            c => {
+                let mut buf = [0u8; 4];
+                let encoded = c.encode_utf8(&mut buf);
+                for b in encoded.as_bytes() {
+                    out.push_str(&format!("%{:02X}", b));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn find_local_packages_for_cid(cid: &str) -> (Vec<String>, Vec<String>) {
+    let mut ids = Vec::new();
+    let mut names = Vec::new();
+    if let Ok(index) = content_library::load_index() {
+        for (id, _entry) in &index.packages {
+            if let Ok(manifest) = content_library::load_manifest(id) {
+                if let Some(ref manifest_cid) = manifest.cid {
+                    if manifest_cid == cid {
+                        ids.push(id.clone());
+                        names.push(manifest.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    (ids, names)
+}
+
+fn pinata_list_pins(
+    settings: &provider_settings::ProviderSettings,
+    page: u32,
+    query: Option<&str>,
+) -> Result<ProviderPinsPage, String> {
+    let token = settings.pinata_api_token.trim();
+    if token.is_empty() {
+        return Err("Pinata API token is not configured.".to_string());
+    }
+
+    let offset = page.saturating_sub(1) * 50;
+    let mut url = format!(
+        "{}/data/pinList?status=pinned&pageLimit=50&pageOffset={}",
+        pinata_api_url(settings),
+        offset
+    );
+
+    if let Some(q) = query {
+        let trimmed = q.trim();
+        if !trimmed.is_empty() {
+            url.push_str(&format!("&metadata[name]={}", encode_query(trimmed)));
+            if trimmed.len() >= 4 {
+                url.push_str(&format!("&hashContains={}", encode_query(trimmed)));
+            }
+        }
+    }
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .build();
+
+    let response = agent.get(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("User-Agent", "hemp0x-commander/2.0")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "Pinata returned 401 Unauthorized.".to_string(),
+            ureq::Error::Status(403, _) => "Pinata returned 403 Forbidden.".to_string(),
+            ureq::Error::Status(429, _) => "Pinata returned 429 Rate Limited.".to_string(),
+            ureq::Error::Status(code, _) => format!("Pinata returned HTTP {}.", code),
+            ureq::Error::Transport(t) => format!("Pinata connection failed: {}", t),
+        })?;
+
+    let body: serde_json::Value = response.into_json()
+        .map_err(|e| format!("Failed to parse Pinata response: {}", e))?;
+
+    let rows = body.get("rows").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let row_count = rows.len();
+    let mut items = Vec::new();
+
+    for row in rows {
+        let cid = row.get("ipfs_pin_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if cid.is_empty() {
+            continue;
+        }
+
+        let name = row.get("metadata")
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let size_bytes = row.get("size")
+            .and_then(|v| v.as_u64());
+
+        let created_at = row.get("date_pinned")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let status = Some("pinned".to_string());
+        let request_id = row.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let (local_ids, local_names) = find_local_packages_for_cid(&cid);
+
+        items.push(ProviderPinItem {
+            cid,
+            name,
+            size_bytes,
+            created_at,
+            status,
+            provider: "pinata".to_string(),
+            request_id,
+            local_package_ids: local_ids,
+            local_package_names: local_names,
+        });
+    }
+
+    let count = body.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let total_fetched = offset + row_count as u32;
+    let has_next_page = (count as u32) > total_fetched;
+
+    if let Some(q) = query {
+        let trimmed = q.trim().to_lowercase();
+        if !trimmed.is_empty() {
+            items.retain(|item| {
+                item.cid.to_lowercase().contains(&trimmed)
+                    || item.name.as_ref().map(|n| n.to_lowercase().contains(&trimmed)).unwrap_or(false)
+            });
+        }
+    }
+
+    Ok(ProviderPinsPage {
+        provider: "pinata".to_string(),
+        page,
+        page_size: 50,
+        has_next_page,
+        items,
+    })
+}
+
+fn kubo_list_pins(
+    api_endpoint: &str,
+    bearer_token: Option<&str>,
+    page: u32,
+    query: Option<&str>,
+    provider_name: &str,
+) -> Result<ProviderPinsPage, String> {
+    let url = format!("{}/api/v0/pin/ls", api_endpoint);
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .build();
+
+    let mut req = agent.post(&url)
+        .set("User-Agent", "hemp0x-commander/2.0");
+    if let Some(token) = bearer_token {
+        req = req.set("Authorization", &format!("Bearer {}", token));
+    }
+
+    let response = req.call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
+            ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
+            ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
+        })?;
+
+    let body: serde_json::Value = response.into_json()
+        .map_err(|e| format!("Failed to parse IPFS RPC pin/ls response: {}", e))?;
+
+    let keys = body.get("Keys").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let mut items = Vec::new();
+
+    for (cid, info) in keys {
+        let status = info.get("Type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let (local_ids, local_names) = find_local_packages_for_cid(&cid);
+
+        items.push(ProviderPinItem {
+            cid,
+            name: None,
+            size_bytes: None,
+            created_at: None,
+            status,
+            provider: provider_name.to_string(),
+            request_id: None,
+            local_package_ids: local_ids,
+            local_package_names: local_names,
+        });
+    }
+
+    items.sort_by(|a, b| a.cid.cmp(&b.cid));
+
+    if let Some(q) = query {
+        let trimmed = q.trim().to_lowercase();
+        if !trimmed.is_empty() {
+            items.retain(|item| item.cid.to_lowercase().contains(&trimmed));
+        }
+    }
+
+    let page_size = 50usize;
+    let total = items.len();
+    let start = ((page.saturating_sub(1)) as usize) * page_size;
+    let has_next_page = total > start + page_size;
+    let end = (start + page_size).min(total);
+    let page_items = if start >= total {
+        Vec::new()
+    } else {
+        items[start..end].to_vec()
+    };
+
+    Ok(ProviderPinsPage {
+        provider: provider_name.to_string(),
+        page,
+        page_size: 50,
+        has_next_page,
+        items: page_items,
+    })
+}
+
+fn pinata_unpin(cid: &str, settings: &provider_settings::ProviderSettings) -> Result<String, String> {
+    let token = settings.pinata_api_token.trim();
+    if token.is_empty() {
+        return Err("Pinata API token is not configured.".to_string());
+    }
+
+    let url = format!("{}/pinning/unpin/{}", pinata_api_url(settings), cid);
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .build();
+
+    match agent.delete(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("User-Agent", "hemp0x-commander/2.0")
+        .call()
+    {
+        Ok(_) => Ok("Unpinned from Pinata.".to_string()),
+        Err(ureq::Error::Status(404, _)) => {
+            Err("CID not found on Pinata. It may have already been unpinned.".to_string())
+        }
+        Err(ureq::Error::Status(401, _)) => Err("Pinata returned 401 Unauthorized.".to_string()),
+        Err(ureq::Error::Status(403, _)) => Err("Pinata returned 403 Forbidden.".to_string()),
+        Err(ureq::Error::Status(429, _)) => Err("Pinata returned 429 Rate Limited.".to_string()),
+        Err(ureq::Error::Status(code, _)) => Err(format!("Pinata returned HTTP {}.", code)),
+        Err(ureq::Error::Transport(t)) => Err(format!("Pinata connection failed: {}", t)),
+    }
+}
+
+fn kubo_unpin(cid: &str, api_endpoint: &str, bearer_token: Option<&str>) -> Result<String, String> {
+    let url = format!("{}/api/v0/pin/rm?arg={}&recursive=true", api_endpoint, cid);
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .build();
+
+    let mut req = agent.post(&url)
+        .set("User-Agent", "hemp0x-commander/2.0");
+    if let Some(token) = bearer_token {
+        req = req.set("Authorization", &format!("Bearer {}", token));
+    }
+
+    let response = req.call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
+            ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
+            ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
+        })?;
+
+    let body: serde_json::Value = response.into_json()
+        .map_err(|e| format!("Failed to parse IPFS RPC response: {}", e))?;
+
+    if let Some(msg) = body.get("Message").and_then(|v| v.as_str()) {
+        let lower = msg.to_lowercase();
+        if lower.contains("not pinned") || lower.contains("not found") {
+            return Err(format!("CID is not pinned: {}", msg));
+        }
+        if body.get("Type").and_then(|v| v.as_str()) == Some("error") {
+            return Err(format!("IPFS RPC error: {}", msg));
+        }
+    }
+
+    if let Some(pins) = body.get("Pins").and_then(|v| v.as_array()) {
+        if pins.iter().any(|p| p.as_str() == Some(cid)) {
+            return Ok("Unpinned from IPFS node.".to_string());
+        }
+    }
+
+    Ok("Unpin request sent to IPFS node.".to_string())
+}
+
+fn do_unpin_provider_cid(provider: &str, cid: &str, settings: &provider_settings::ProviderSettings) -> Result<String, String> {
+    match provider {
+        "pinata" => pinata_unpin(cid, settings),
+        "filebase" => {
+            let token = settings.filebase_token.trim();
+            if token.is_empty() {
+                Err("Filebase access token is not configured.".to_string())
+            } else {
+                kubo_unpin(cid, &filebase_endpoint(settings), Some(token))
+            }
+        }
+        "installed_kubo" => kubo_unpin(cid, &kubo_endpoint(settings), None),
+        _ => Err(format!("Unknown provider: {}", provider)),
+    }
+}
+
+#[tauri::command]
+pub fn ipfs_list_provider_pins(
+    provider: String,
+    page: Option<u32>,
+    query: Option<String>,
+) -> Result<ProviderPinsPage, String> {
+    let provider = provider.trim().to_string();
+    let valid_providers = ["pinata", "installed_kubo", "filebase"];
+    if !valid_providers.contains(&provider.as_str()) {
+        return Err(format!(
+            "Unknown provider: {}. Valid providers: {}",
+            provider,
+            valid_providers.join(", ")
+        ));
+    }
+
+    let page = page.unwrap_or(1).max(1);
+    let settings = provider_settings::load_provider_settings()?;
+
+    match provider.as_str() {
+        "pinata" => pinata_list_pins(&settings, page, query.as_deref()),
+        "filebase" => {
+            let token = settings.filebase_token.trim();
+            if token.is_empty() {
+                return Err("Filebase access token is not configured.".to_string());
+            }
+            kubo_list_pins(&filebase_endpoint(&settings), Some(token), page, query.as_deref(), "filebase")
+        }
+        "installed_kubo" => kubo_list_pins(&kubo_endpoint(&settings), None, page, query.as_deref(), "installed_kubo"),
+        _ => unreachable!(),
+    }
+}
+
+#[tauri::command]
+pub fn ipfs_unpin_provider_cid(provider: String, cid: String) -> Result<ProviderUnpinResult, String> {
+    let provider = provider.trim().to_string();
+    let cid = cid.trim().to_string();
+    let valid_providers = ["pinata", "installed_kubo", "filebase"];
+    if !valid_providers.contains(&provider.as_str()) {
+        return Err(format!(
+            "Unknown provider: {}. Valid providers: {}",
+            provider,
+            valid_providers.join(", ")
+        ));
+    }
+
+    content_library::validate_import_cid(&cid)?;
+
+    let settings = provider_settings::load_provider_settings()?;
+
+    match do_unpin_provider_cid(&provider, &cid, &settings) {
+        Ok(msg) => Ok(ProviderUnpinResult {
+            cid: cid.clone(),
+            provider: provider.clone(),
+            success: true,
+            message: msg,
+        }),
+        Err(msg) => Ok(ProviderUnpinResult {
+            cid: cid.clone(),
+            provider: provider.clone(),
+            success: false,
+            message: msg,
+        }),
+    }
+}
+
+#[tauri::command]
+pub fn ipfs_unpin_provider_cids(provider: String, cids: Vec<String>) -> Result<Vec<ProviderUnpinResult>, String> {
+    let provider = provider.trim().to_string();
+    let valid_providers = ["pinata", "installed_kubo", "filebase"];
+    if !valid_providers.contains(&provider.as_str()) {
+        return Err(format!(
+            "Unknown provider: {}. Valid providers: {}",
+            provider,
+            valid_providers.join(", ")
+        ));
+    }
+
+    let settings = provider_settings::load_provider_settings()?;
+    let mut results = Vec::new();
+    for cid in cids {
+        let cid = cid.trim().to_string();
+        if cid.is_empty() {
+            continue;
+        }
+        if let Err(e) = content_library::validate_import_cid(&cid) {
+            results.push(ProviderUnpinResult {
+                cid: cid.clone(),
+                provider: provider.clone(),
+                success: false,
+                message: e,
+            });
+            continue;
+        }
+
+        match do_unpin_provider_cid(&provider, &cid, &settings) {
+            Ok(msg) => results.push(ProviderUnpinResult {
+                cid: cid.clone(),
+                provider: provider.clone(),
+                success: true,
+                message: msg,
+            }),
+            Err(msg) => results.push(ProviderUnpinResult {
+                cid: cid.clone(),
+                provider: provider.clone(),
+                success: false,
+                message: msg,
+            }),
+        }
+    }
+
+    Ok(results)
+}
+
 #[tauri::command]
 pub fn ipfs_test_publish_provider(provider: String) -> Result<ProviderTestResult, String> {
     let settings = provider_settings::load_provider_settings()?;
@@ -675,5 +1142,113 @@ mod tests {
         };
         let json = serde_json::to_string(&preview).unwrap();
         assert!(json.contains("content.md"));
+    }
+
+    #[test]
+    fn provider_pin_item_serializes() {
+        let item = ProviderPinItem {
+            cid: "QmTest123".to_string(),
+            name: Some("Test Pin".to_string()),
+            size_bytes: Some(1024),
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            status: Some("pinned".to_string()),
+            provider: "pinata".to_string(),
+            request_id: Some("req-1".to_string()),
+            local_package_ids: vec!["pkg-1".to_string()],
+            local_package_names: vec!["My Package".to_string()],
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("QmTest123"));
+        assert!(json.contains("Test Pin"));
+        assert!(json.contains("pinata"));
+        assert!(json.contains("pkg-1"));
+    }
+
+    #[test]
+    fn provider_pins_page_serializes() {
+        let page = ProviderPinsPage {
+            provider: "filebase".to_string(),
+            page: 1,
+            page_size: 50,
+            has_next_page: true,
+            items: vec![],
+        };
+        let json = serde_json::to_string(&page).unwrap();
+        assert!(json.contains("filebase"));
+        assert!(json.contains("has_next_page"));
+    }
+
+    #[test]
+    fn provider_unpin_result_serializes() {
+        let result = ProviderUnpinResult {
+            cid: "QmTest".to_string(),
+            provider: "installed_kubo".to_string(),
+            success: false,
+            message: "not pinned".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("QmTest"));
+        assert!(json.contains("not pinned"));
+    }
+
+    #[test]
+    fn list_provider_pins_rejects_unknown_provider() {
+        let result = ipfs_list_provider_pins("unknown".to_string(), Some(1), None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Unknown provider"));
+    }
+
+    #[test]
+    fn unpin_provider_cid_rejects_invalid_cid() {
+        let result = ipfs_unpin_provider_cid("pinata".to_string(), "not-a-cid".to_string());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("CID"));
+    }
+
+    #[test]
+    fn unpin_provider_cid_rejects_unknown_provider() {
+        let result = ipfs_unpin_provider_cid("evil_provider".to_string(), "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Unknown provider"));
+    }
+
+    #[test]
+    fn multi_unpin_returns_partial_failure_shape() {
+        let results = vec![
+            ProviderUnpinResult {
+                cid: "QmA".to_string(),
+                provider: "pinata".to_string(),
+                success: true,
+                message: "OK".to_string(),
+            },
+            ProviderUnpinResult {
+                cid: "QmB".to_string(),
+                provider: "pinata".to_string(),
+                success: false,
+                message: "Not found".to_string(),
+            },
+        ];
+        let json = serde_json::to_string(&results).unwrap();
+        assert!(json.contains("QmA"));
+        assert!(json.contains("QmB"));
+        assert!(json.contains("true"));
+        assert!(json.contains("false"));
+    }
+
+    #[test]
+    fn encode_query_encodes_special_chars() {
+        assert_eq!(encode_query("hello world"), "hello%20world");
+        assert_eq!(encode_query("a+b"), "a%2Bb");
+        assert_eq!(encode_query("test&foo"), "test%26foo");
+    }
+
+    #[test]
+    fn find_local_packages_for_cid_returns_empty_when_no_packages() {
+        let (ids, names) = find_local_packages_for_cid("QmNonExistent");
+        assert!(ids.is_empty());
+        assert!(names.is_empty());
     }
 }

@@ -26,6 +26,19 @@
     let testingProvider = "";
     let providerTestResults = {};
 
+    let showPublishedModal = false;
+    let modalProvider = "";
+    let modalLoading = false;
+    let modalError = "";
+    let modalSuccess = "";
+    let modalItems = [];
+    let modalPage = 1;
+    let modalHasNext = false;
+    let modalQuery = "";
+    let selectedCids = [];
+    let unpinningCid = "";
+    let unpinningBulk = false;
+
     function normalizeSettings(settings) {
         return {
             selected_publish_provider: settings?.selected_publish_provider || "manual",
@@ -111,6 +124,119 @@
         testingProvider = "";
     }
 
+    function openPublishedModal(provider) {
+        modalProvider = provider;
+        showPublishedModal = true;
+        modalPage = 1;
+        modalQuery = "";
+        selectedCids = [];
+        modalError = "";
+        modalSuccess = "";
+        loadPublishedPins();
+    }
+
+    function closePublishedModal() {
+        showPublishedModal = false;
+    }
+
+    async function loadPublishedPins() {
+        modalLoading = true;
+        modalError = "";
+        try {
+            const result = await core.invoke("ipfs_list_provider_pins", {
+                provider: modalProvider,
+                page: modalPage,
+                query: modalQuery || null,
+            });
+            modalItems = result.items;
+            modalHasNext = result.has_next_page;
+        } catch (err) {
+            modalError = String(err);
+            modalItems = [];
+            modalHasNext = false;
+        }
+        modalLoading = false;
+    }
+
+    function toggleCid(cid) {
+        if (selectedCids.includes(cid)) {
+            selectedCids = selectedCids.filter((c) => c !== cid);
+        } else {
+            selectedCids = [...selectedCids, cid];
+        }
+    }
+
+    function toggleAll() {
+        if (selectedCids.length === modalItems.length && modalItems.length > 0) {
+            selectedCids = [];
+        } else {
+            selectedCids = modalItems.map((item) => item.cid);
+        }
+    }
+
+    async function unpinCid(cid) {
+        unpinningCid = cid;
+        modalSuccess = "";
+        modalError = "";
+        try {
+            const result = await core.invoke("ipfs_unpin_provider_cid", {
+                provider: modalProvider,
+                cid,
+            });
+            if (result.success) {
+                modalSuccess = result.message;
+                const item = modalItems.find((i) => i.cid === cid);
+                if (item && item.local_package_ids && item.local_package_ids.length > 0) {
+                    modalSuccess += " Provider pin removed. Local package CID remains linked.";
+                }
+            } else {
+                modalError = result.message;
+            }
+            selectedCids = selectedCids.filter((c) => c !== cid);
+            await loadPublishedPins();
+        } catch (err) {
+            modalError = String(err);
+        }
+        unpinningCid = "";
+    }
+
+    async function unpinSelected() {
+        if (selectedCids.length === 0) return;
+        unpinningBulk = true;
+        modalSuccess = "";
+        modalError = "";
+        try {
+            const results = await core.invoke("ipfs_unpin_provider_cids", {
+                provider: modalProvider,
+                cids: selectedCids,
+            });
+            const successes = results.filter((r) => r.success);
+            const failures = results.filter((r) => !r.success);
+            if (successes.length > 0) {
+                modalSuccess = `Unpinned ${successes.length} CID(s) from provider.`;
+            }
+            if (failures.length > 0) {
+                modalError = `${failures.length} failed: ${failures.map((f) => f.message).join("; ")}`;
+            }
+            selectedCids = [];
+            await loadPublishedPins();
+        } catch (err) {
+            modalError = String(err);
+        }
+        unpinningBulk = false;
+    }
+
+    function shortCid(cid) {
+        if (cid.length <= 16) return cid;
+        return cid.slice(0, 8) + "..." + cid.slice(-8);
+    }
+
+    async function copyCid(cid) {
+        try {
+            await navigator.clipboard.writeText(cid);
+        } catch {}
+    }
+
     async function clearCache() {
         clearing = true;
         clearMsg = "";
@@ -179,6 +305,7 @@
                 <button class="cyber-btn ghost small" on:click={() => testProvider("pinata")} disabled={testingProvider === "pinata"}>
                     {testingProvider === "pinata" ? "TESTING..." : "TEST"}
                 </button>
+                <button class="cyber-btn ghost small" on:click={() => openPublishedModal("pinata")}>PINS</button>
             </div>
             {#if providerTestResults.pinata}
                 <div class:ok={providerTestResults.pinata.success} class:bad={!providerTestResults.pinata.success} class="test-result">
@@ -214,6 +341,7 @@
                 <button class="cyber-btn ghost small" on:click={() => testProvider("filebase")} disabled={testingProvider === "filebase"}>
                     {testingProvider === "filebase" ? "TESTING..." : "TEST"}
                 </button>
+                <button class="cyber-btn ghost small" on:click={() => openPublishedModal("filebase")}>PINS</button>
             </div>
             {#if providerTestResults.filebase}
                 <div class:ok={providerTestResults.filebase.success} class:bad={!providerTestResults.filebase.success} class="test-result">
@@ -240,6 +368,7 @@
                 <button class="cyber-btn ghost small" on:click={() => testProvider("installed_kubo")} disabled={testingProvider === "installed_kubo"}>
                     {testingProvider === "installed_kubo" ? "TESTING..." : "TEST"}
                 </button>
+                <button class="cyber-btn ghost small" on:click={() => openPublishedModal("installed_kubo")}>PINS</button>
             </div>
             {#if providerTestResults.installed_kubo}
                 <div class:ok={providerTestResults.installed_kubo.success} class:bad={!providerTestResults.installed_kubo.success} class="test-result">
@@ -308,6 +437,103 @@ https://ipfs.io/ipfs/"
         <div class="settings-msg">{settingsMsg}</div>
     {/if}
 </div>
+
+{#if showPublishedModal}
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="modal-backdrop" on:click={closePublishedModal}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-container" on:click|stopPropagation>
+        <div class="modal-header">
+            <h4 class="modal-title">
+                Published Content — {modalProvider === "pinata" ? "Pinata" : modalProvider === "filebase" ? "Filebase" : "Installed Kubo"}
+            </h4>
+            <button class="cyber-btn ghost small" on:click={closePublishedModal}>CLOSE</button>
+        </div>
+        <div class="modal-warning">
+            Unpinning removes this provider's copy only. It cannot delete content from IPFS if another node has cached or pinned it.
+        </div>
+        <div class="modal-toolbar">
+            <input
+                class="form-input mono search-input"
+                type="text"
+                bind:value={modalQuery}
+                on:keyup={(e) => { if (e.key === 'Enter') { modalPage = 1; loadPublishedPins(); } }}
+                placeholder="Search by CID or name..."
+            />
+            <button class="cyber-btn ghost small" on:click={() => { modalPage = 1; loadPublishedPins(); }}>SEARCH</button>
+        </div>
+        {#if modalLoading}
+            <div class="modal-body center">
+                <div class="modal-status">Loading...</div>
+            </div>
+        {:else if modalError && modalItems.length === 0}
+            <div class="modal-body center">
+                <div class="modal-status error">{modalError}</div>
+            </div>
+        {:else if modalItems.length === 0}
+            <div class="modal-body center">
+                <div class="modal-status">No pins found for this provider.</div>
+            </div>
+        {:else}
+            <div class="modal-body">
+                <table class="pins-table">
+                    <thead>
+                        <tr>
+                            <th class="col-check"><input type="checkbox" checked={selectedCids.length === modalItems.length && modalItems.length > 0} on:change={toggleAll} /></th>
+                            <th class="col-name">Name</th>
+                            <th class="col-cid">CID</th>
+                            <th class="col-size">Size</th>
+                            <th class="col-status">Status</th>
+                            <th class="col-local">Local Match</th>
+                            <th class="col-actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each modalItems as item}
+                        <tr>
+                            <td class="col-check"><input type="checkbox" checked={selectedCids.includes(item.cid)} on:change={() => toggleCid(item.cid)} /></td>
+                            <td class="col-name" title={item.name || ""}>{item.name || "—"}</td>
+                            <td class="col-cid mono" title={item.cid}>{shortCid(item.cid)}</td>
+                            <td class="col-size">{item.size_bytes != null ? formatSize(item.size_bytes) : "—"}</td>
+                            <td class="col-status">{item.status || "—"}</td>
+                            <td class="col-local">
+                                {#if item.local_package_names && item.local_package_names.length > 0}
+                                    <span class="local-badge" title={item.local_package_names.join(", ")}>Matched local package</span>
+                                {:else}
+                                    —
+                                {/if}
+                            </td>
+                            <td class="col-actions">
+                                <button class="cyber-btn ghost tiny" on:click={() => copyCid(item.cid)} title="Copy CID">COPY</button>
+                                <button class="cyber-btn ghost tiny" on:click={() => unpinCid(item.cid)} disabled={unpinningCid === item.cid}>
+                                    {unpinningCid === item.cid ? "..." : "UNPIN"}
+                                </button>
+                            </td>
+                        </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            </div>
+        {/if}
+        <div class="modal-footer">
+            <div class="pagination">
+                <button class="cyber-btn ghost small" on:click={() => { modalPage -= 1; loadPublishedPins(); }} disabled={modalPage <= 1 || modalLoading}>PREVIOUS</button>
+                <span class="page-info">Page {modalPage}</span>
+                <button class="cyber-btn ghost small" on:click={() => { modalPage += 1; loadPublishedPins(); }} disabled={!modalHasNext || modalLoading}>NEXT</button>
+            </div>
+            <button class="cyber-btn ghost small" on:click={unpinSelected} disabled={selectedCids.length === 0 || unpinningBulk}>
+                {unpinningBulk ? "UNPINNING..." : `UNPIN SELECTED (${selectedCids.length})`}
+            </button>
+        </div>
+        {#if modalSuccess}
+            <div class="modal-success">{modalSuccess}</div>
+        {/if}
+        {#if modalError && modalItems.length > 0}
+            <div class="modal-error-bar">{modalError}</div>
+        {/if}
+    </div>
+</div>
+{/if}
 
 <style>
     .provider-settings {
@@ -515,5 +741,154 @@ https://ipfs.io/ipfs/"
     .cyber-btn.small {
         padding: 0.25rem 0.65rem;
         font-size: 0.55rem;
+    }
+    .cyber-btn.tiny {
+        padding: 0.15rem 0.4rem;
+        font-size: 0.5rem;
+    }
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 1rem;
+    }
+    .modal-container {
+        background: #0a0f0d;
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 8px;
+        width: 100%;
+        max-width: 1080px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+    }
+    .modal-title {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #ccc;
+        letter-spacing: 1px;
+        margin: 0;
+        text-transform: uppercase;
+    }
+    .modal-warning {
+        padding: 0.5rem 0.75rem;
+        background: rgba(255, 165, 0, 0.05);
+        border-bottom: 1px solid rgba(255, 165, 0, 0.15);
+        color: #bb9955;
+        font-size: 0.62rem;
+        line-height: 1.4;
+        flex-shrink: 0;
+    }
+    .modal-toolbar {
+        display: flex;
+        gap: 0.4rem;
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+    }
+    .search-input {
+        flex: 1;
+        min-width: 0;
+    }
+    .modal-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 1rem;
+    }
+    .modal-body.center {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 120px;
+    }
+    .modal-status {
+        font-size: 0.68rem;
+        color: #777;
+    }
+    .modal-status.error {
+        color: #ff6666;
+    }
+    .pins-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.65rem;
+    }
+    .pins-table th,
+    .pins-table td {
+        padding: 0.45rem 0.5rem;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .pins-table th {
+        color: #888;
+        font-weight: 600;
+        font-size: 0.56rem;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        position: sticky;
+        top: 0;
+        background: #0a0f0d;
+    }
+    .col-check { width: 32px; }
+    .col-name { min-width: 100px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-cid { min-width: 100px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-size { width: 60px; }
+    .col-status { width: 70px; }
+    .col-local { width: 120px; }
+    .col-actions { width: 120px; white-space: nowrap; }
+    .local-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+        border-radius: 4px;
+        font-size: 0.55rem;
+    }
+    .modal-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 1rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+    .pagination {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .page-info {
+        font-size: 0.62rem;
+        color: #777;
+    }
+    .modal-success {
+        padding: 0.4rem 1rem 0.6rem;
+        color: var(--color-primary);
+        font-size: 0.62rem;
+        border-top: 1px solid rgba(0, 255, 65, 0.08);
+        flex-shrink: 0;
+    }
+    .modal-error-bar {
+        padding: 0.4rem 1rem 0.6rem;
+        color: #ff6666;
+        font-size: 0.62rem;
+        border-top: 1px solid rgba(255, 102, 102, 0.1);
+        flex-shrink: 0;
     }
 </style>

@@ -477,7 +477,6 @@
       class="tools-body"
       class:no-scroll={activeSubTab === "CONSOLE" ||
         activeSubTab === "CONFIG" ||
-        activeSubTab === "IPFS" ||
         activeSubTab === "LOGS"}
     >
       {#key activeSubTab}

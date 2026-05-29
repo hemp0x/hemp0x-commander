@@ -420,7 +420,6 @@
         max-width: 100%;
         display: flex;
         flex-direction: column;
-        max-height: calc(100vh - 220px);
     }
     .composer-title {
         font-size: 0.85rem;
@@ -445,9 +444,6 @@
         display: flex;
         gap: 1.5rem;
         padding: 0 1.5rem;
-        flex: 1;
-        overflow-y: auto;
-        min-height: 0;
     }
     .form-col {
         flex: 1;

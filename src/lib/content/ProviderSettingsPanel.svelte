@@ -98,7 +98,7 @@
 </script>
 
 <div class="provider-settings" in:fade={{ duration: 150 }}>
-    <h3 class="panel-title">PROVIDER SETTINGS</h3>
+    <h3 class="panel-title">SETTINGS</h3>
 
     <div class="notice-bar">
         Configured publish providers are not enabled yet. This section allows you to select and configure IPFS providers for publishing content packages.
@@ -259,8 +259,14 @@ https://ipfs.io/ipfs/"
     .provider-card {
         background: rgba(0, 0, 0, 0.25);
         border: 1px solid rgba(255, 255, 255, 0.06);
+        border-left: 2px solid transparent;
         border-radius: 6px;
         padding: 0.75rem 1rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .provider-card:hover {
+        border-left-color: var(--color-primary);
+        box-shadow: 0 2px 12px rgba(0, 255, 65, 0.06);
     }
     .provider-card.disabled {
         opacity: 0.75;
@@ -311,9 +317,11 @@ https://ipfs.io/ipfs/"
         text-transform: uppercase;
     }
     .gateway-section {
-        padding: 0.6rem 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 0.75rem;
         margin-bottom: 0.8rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .gateway-desc {
         font-size: 0.6rem;
@@ -353,9 +361,11 @@ https://ipfs.io/ipfs/"
         color: var(--color-primary);
     }
     .cache-section {
-        padding: 0.6rem 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 0.75rem;
         margin-bottom: 0.8rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .cache-stats {
         display: flex;
@@ -366,10 +376,10 @@ https://ipfs.io/ipfs/"
         display: flex;
         flex-direction: column;
         gap: 0.15rem;
-        padding: 0.3rem 0.5rem;
+        padding: 0.4rem 0.6rem;
         background: rgba(0, 0, 0, 0.25);
         border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 4px;
+        border-radius: 6px;
         flex: 1;
         min-width: 0;
     }
@@ -395,7 +405,7 @@ https://ipfs.io/ipfs/"
     .cache-entries {
         display: flex;
         flex-direction: column;
-        gap: 0.15rem;
+        gap: 0.2rem;
         max-height: 200px;
         overflow-y: auto;
     }
@@ -403,11 +413,15 @@ https://ipfs.io/ipfs/"
         display: flex;
         align-items: center;
         gap: 0.4rem;
-        padding: 0.2rem 0.4rem;
+        padding: 0.25rem 0.5rem;
         background: rgba(0, 0, 0, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.03);
-        border-radius: 3px;
+        border-radius: 4px;
         font-size: 0.55rem;
+        transition: border-color 0.15s;
+    }
+    .cache-entry-row:hover {
+        border-color: rgba(0, 255, 65, 0.1);
     }
     .cache-entry-cid {
         color: #888;

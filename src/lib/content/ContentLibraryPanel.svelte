@@ -251,19 +251,14 @@
             <span class="header-count mono">{$filteredPackages.length} packages</span>
         </div>
         <div class="header-actions">
-            {#if $activePanel !== "browse"}
-                <button class="header-btn" on:click={showBrowse}>
-                    BACK TO LIBRARY
-                </button>
-            {/if}
             {#if $activePanel === "browse"}
                 <button class="header-btn create-btn" on:click={showCreate}>
                     + NEW PACKAGE
                 </button>
+                <button class="header-btn refresh-btn" on:click={refresh} disabled={$libraryLoading}>
+                    {$libraryLoading ? "LOADING..." : "REFRESH"}
+                </button>
             {/if}
-            <button class="header-btn refresh-btn" on:click={refresh} disabled={$libraryLoading}>
-                {$libraryLoading ? "LOADING..." : "REFRESH"}
-            </button>
         </div>
     </header>
 
@@ -621,7 +616,6 @@
 
 <style>
     .content-library {
-        flex: 1;
         display: flex;
         flex-direction: column;
         min-height: 0;
@@ -630,7 +624,7 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0 0 0.75rem 0;
+        padding: 0.5rem 0 0.75rem 0;
         border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         flex-shrink: 0;
     }
@@ -730,8 +724,6 @@
         color: var(--color-primary);
     }
     .library-body {
-        flex: 1;
-        overflow-y: auto;
         padding: 1rem 0;
     }
     .package-grid {
@@ -774,6 +766,7 @@
         display: flex;
         gap: 0.5rem;
         margin-bottom: 1rem;
+        padding-top: 0.25rem;
     }
     .detail-name-row {
         display: flex;
@@ -816,8 +809,8 @@
         line-height: 1.4;
     }
     .detail-meta {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
         gap: 0.5rem;
         margin-bottom: 0.8rem;
     }
@@ -828,11 +821,11 @@
         padding: 0.35rem 0.6rem;
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 4px;
+        border-radius: 6px;
         font-size: 0.65rem;
     }
     .detail-meta-item.wide {
-        flex-basis: 100%;
+        grid-column: 1 / -1;
     }
     .detail-meta-label {
         color: #555;
@@ -885,8 +878,10 @@
     }
     .detail-section {
         margin-top: 1rem;
-        padding-top: 0.5rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .section-label {
         font-size: 0.65rem;
@@ -903,9 +898,17 @@
     }
     .detail-markdown-section {
         margin-top: 1rem;
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .detail-fetched-section {
         margin-top: 1rem;
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .gateway-consent-panel {
         margin-top: 0.75rem;
@@ -927,21 +930,29 @@
     }
     .detail-attachments-section {
         margin-top: 1rem;
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
     }
     .attachment-list {
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 0.3rem;
     }
     .attachment-row {
         display: flex;
         align-items: center;
-        gap: 0.4rem;
-        padding: 0.3rem 0.5rem;
+        gap: 0.5rem;
+        padding: 0.35rem 0.6rem;
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 4px;
+        border-radius: 6px;
         font-size: 0.65rem;
+        transition: border-color 0.15s;
+    }
+    .attachment-row:hover {
+        border-color: rgba(0, 255, 65, 0.15);
     }
     .attachment-icon {
         font-size: 0.5rem;

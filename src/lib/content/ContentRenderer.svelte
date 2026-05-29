@@ -301,8 +301,8 @@
     }
     .render-image img {
         max-width: 100%;
-        max-height: 400px;
-        border-radius: 4px;
+        max-height: min(400px, 50vh);
+        border-radius: 6px;
         border: 1px solid rgba(0, 255, 65, 0.1);
     }
     .image-controls {
@@ -316,7 +316,7 @@
         color: #ccc;
         font-size: 0.78rem;
         line-height: 1.55;
-        max-height: 500px;
+        max-height: min(500px, 55vh);
         overflow-y: auto;
     }
     .render-markdown :global(h1) { font-size: 1.1rem; color: var(--color-primary); margin: 0.4rem 0; }
@@ -334,7 +334,7 @@
     .render-markdown :global(a) { color: var(--color-primary); }
     .render-markdown :global(li) { margin: 0.15rem 0; padding-left: 0.4rem; }
     .render-json {
-        max-height: 500px;
+        max-height: min(500px, 55vh);
         overflow-y: auto;
     }
     .json-pre {
@@ -362,7 +362,7 @@
         border-radius: 4px;
         overflow-x: auto;
         margin: 0;
-        max-height: 500px;
+        max-height: min(500px, 55vh);
         overflow-y: auto;
         white-space: pre-wrap;
         word-break: break-word;

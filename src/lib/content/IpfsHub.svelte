@@ -35,7 +35,7 @@
                 class:active={$ipfsHubSection === "providers"}
                 on:click={() => setSection("providers")}
             >
-                PROVIDERS
+                SETTINGS
             </button>
         </div>
     </header>
@@ -62,12 +62,12 @@
 <style>
     .ipfs-hub {
         flex: 1;
-        display: flex;
-        flex-direction: column;
         min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
     }
     .hub-header {
-        flex-shrink: 0;
+        padding: 0.25rem 0;
         margin-bottom: 0.5rem;
         border-bottom: 1px solid rgba(0, 255, 65, 0.08);
     }
@@ -97,8 +97,8 @@
         text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
     }
     .hub-body {
-        flex: 1;
-        overflow-y: auto;
         min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
 </style>

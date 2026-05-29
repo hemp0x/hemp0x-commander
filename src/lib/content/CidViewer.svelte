@@ -21,7 +21,6 @@
     let fetchResult = null;
     let fetchError = "";
     let cacheExists = false;
-    let cacheStatus = null;
     let gatewayOptions = [];
     let pendingGatewayAction = "fetch";
 
@@ -52,14 +51,6 @@
 
     $: if (cid) {
         checkCache(cid);
-    }
-
-    async function loadCacheStatus() {
-        try {
-            cacheStatus = await core.invoke("content_library_cache_status");
-        } catch {
-            cacheStatus = null;
-        }
     }
 
     function askConsent(action = "fetch") {
@@ -122,7 +113,6 @@
                 });
                 fetchState = "fetched";
                 cacheExists = true;
-                await loadCacheStatus();
             } catch (err) {
                 fetchState = "error";
                 fetchError = String(err);
@@ -141,7 +131,6 @@
                 });
                 fetchState = "fetched";
                 cacheExists = true;
-                await loadCacheStatus();
             } catch (err) {
                 fetchState = "error";
                 fetchError = String(err);
@@ -164,7 +153,6 @@
     }
 
     onMount(() => {
-        loadCacheStatus();
         core.invoke("content_library_default_gateways")
             .then((gateways) => {
                 gatewayOptions = Array.isArray(gateways) && gateways.length ? gateways : [];
@@ -317,24 +305,6 @@
         </div>
     {/if}
 
-    {#if cacheStatus}
-        <div class="cache-status-bar">
-            <span class="cache-label">CACHE</span>
-            <span class="cache-stat">{cacheStatus.entry_count} entries</span>
-            <span class="cache-stat">{cacheStatus.total_size_bytes < 1024 ? cacheStatus.total_size_bytes + " B" : cacheStatus.total_size_bytes < 1048576 ? (cacheStatus.total_size_bytes / 1024).toFixed(0) + " KB" : (cacheStatus.total_size_bytes / 1048576).toFixed(1) + " MB"}</span>
-            <div class="cache-actions">
-                <button class="cache-action-btn" on:click={async () => {
-                    try { await core.invoke("content_library_clear_cache"); cacheExists = false; fetchResult = null; fetchState = "idle"; await loadCacheStatus(); }
-                    catch (e) { fetchError = String(e); fetchState = "error"; }
-                }}>CLEAR</button>
-                <button class="cache-action-btn" on:click={async () => {
-                    try { await core.invoke("content_library_open_cache_folder"); }
-                    catch (e) { fetchError = String(e); fetchState = "error"; }
-                }}>FOLDER</button>
-                <button class="cache-action-btn" on:click={loadCacheStatus}>REFRESH</button>
-            </div>
-        </div>
-    {/if}
 </div>
 
 <style>
@@ -343,10 +313,14 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 8px;
         padding: 1rem;
-        max-width: 800px;
     }
     .viewer-header {
+        padding-top: 0.25rem;
         margin-bottom: 0.8rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .viewer-title {
         font-size: 0.8rem;
@@ -356,6 +330,10 @@
     }
     .cid-form {
         margin-bottom: 0.8rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .form-group {
         margin-bottom: 0.5rem;
@@ -406,6 +384,10 @@
         background: rgba(0, 0, 0, 0.25);
         border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 6px;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .ready-meta {
         display: flex;
@@ -477,6 +459,10 @@
         border-radius: 6px;
         padding: 0.8rem;
         margin-bottom: 0.8rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .consent-header {
         font-size: 0.7rem;
@@ -517,6 +503,10 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 6px;
         color: #aaa;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .fetching-icon {
         font-size: 1.2rem;
@@ -535,21 +525,26 @@
     /* Fetched content */
     .fetched-content {
         margin-top: 0.6rem;
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 8px;
     }
     .content-meta-bar {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.4rem;
-        margin-bottom: 0.6rem;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        justify-content: center;
     }
     .meta-item {
         display: flex;
         align-items: center;
-        gap: 0.3rem;
-        padding: 0.3rem 0.5rem;
-        background: rgba(0, 0, 0, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 4px;
+        gap: 0.35rem;
+        padding: 0.35rem 0.65rem;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
         font-size: 0.6rem;
     }
     .meta-label {
@@ -564,9 +559,10 @@
         border: 1px solid rgba(255, 255, 255, 0.1);
         color: #666;
         font-size: 0.5rem;
-        padding: 1px 5px;
-        border-radius: 3px;
+        padding: 2px 6px;
+        border-radius: 4px;
         cursor: pointer;
+        transition: all 0.15s;
     }
     .copy-btn:hover {
         border-color: rgba(0, 255, 65, 0.3);
@@ -575,45 +571,32 @@
     .content-actions {
         display: flex;
         gap: 0.5rem;
-        margin-top: 0.6rem;
-        padding-top: 0.5rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        margin-top: 0.75rem;
+        padding-top: 0.6rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        justify-content: center;
     }
 
     /* Empty hint */
     .empty-hint {
         text-align: center;
-        padding: 2rem 1rem;
+        padding: 3rem 1rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        width: 100%;
     }
     .hint-icon {
-        font-size: 1.5rem;
-        color: #444;
-        margin-bottom: 0.5rem;
+        font-size: 2rem;
+        color: #333;
+        margin-bottom: 0.75rem;
     }
     .hint-text {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: #666;
         max-width: 400px;
-        margin: 0 auto 0.4rem;
-        line-height: 1.4;
+        margin: 0 auto 0.5rem;
+        line-height: 1.5;
     }
-    /* Cache status bar */
-    .cache-status-bar {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
-        padding: 0.4rem 0.6rem;
-        background: rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 4px;
-        margin-top: 0.8rem;
-        font-size: 0.6rem;
-    }
-    .cache-label {
-        color: #555;
-        letter-spacing: 1px;
-    }
-    .cache-stat {
-        color: #888;
-    }
+
 </style>

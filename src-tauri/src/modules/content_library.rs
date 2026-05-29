@@ -32,6 +32,7 @@ pub struct ContentPackageSummary {
   pub cid: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub provider: Option<String>,
+  pub folder: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -51,6 +52,7 @@ pub struct ContentPackage {
   pub provider: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub published_at: Option<String>,
+  pub folder: String,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +62,7 @@ pub struct ContentPackageInput {
   pub tags: Option<Vec<String>>,
   pub body: Option<String>,
   pub files: Option<Vec<ContentFileInputEntry>>,
+  pub folder: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -82,12 +85,15 @@ pub struct ContentFileReadResult {
 struct ContentLibraryIndex {
   version: u32,
   packages: HashMap<String, IndexPackageEntry>,
+  #[serde(default)]
+  folders: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct IndexPackageEntry {
   name: String,
   tags: Vec<String>,
+  folder: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -104,6 +110,8 @@ struct PackageManifest {
   cid: Option<String>,
   provider: Option<String>,
   published_at: Option<String>,
+  #[serde(default)]
+  folder: String,
 }
 
 fn content_library_dir() -> Result<PathBuf, String> {
@@ -137,14 +145,35 @@ fn history_dir(package_id: &str) -> Result<PathBuf, String> {
 fn load_index() -> Result<ContentLibraryIndex, String> {
   let path = index_path()?;
   if !path.exists() {
-    return Ok(ContentLibraryIndex { version: 1, packages: HashMap::new() });
+    return Ok(ContentLibraryIndex { version: 1, packages: HashMap::new(), folders: Vec::new() });
   }
   let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-  let index: ContentLibraryIndex = serde_json::from_str(&content).unwrap_or_else(|_| {
-    ContentLibraryIndex { version: 1, packages: HashMap::new() }
+  let mut index: ContentLibraryIndex = serde_json::from_str(&content).unwrap_or_else(|_| {
+    ContentLibraryIndex { version: 1, packages: HashMap::new(), folders: Vec::new() }
   });
+  // Ensure folders list is deduped and sorted, and includes all folders from packages
+  let mut folder_set: std::collections::HashSet<String> = index.folders.iter().cloned().collect();
+  for entry in index.packages.values() {
+    if !entry.folder.is_empty() {
+      folder_set.insert(entry.folder.clone());
+    }
+  }
+  let mut folders: Vec<String> = folder_set.into_iter().collect();
+  folders.sort();
+  index.folders = folders;
   Ok(index)
 }
+
+fn ensure_folder_in_index(index: &mut ContentLibraryIndex, folder: &str) {
+  let clean = folder.trim();
+  if clean.is_empty() { return; }
+  if !index.folders.contains(&clean.to_string()) {
+    index.folders.push(clean.to_string());
+    index.folders.sort();
+  }
+}
+
+
 
 fn save_index(index: &ContentLibraryIndex) -> Result<(), String> {
   let path = index_path()?;
@@ -206,6 +235,23 @@ fn validate_package_name(name: &str) -> Result<(), String> {
     return Err("Package name is too long (max 128 characters)".to_string());
   }
   Ok(())
+}
+
+fn validate_folder(folder: &str) -> Result<String, String> {
+  let trimmed = folder.trim();
+  if trimmed.len() > 64 {
+    return Err("Folder name is too long (max 64 characters)".to_string());
+  }
+  if trimmed.chars().any(|c| c.is_control()) {
+    return Err("Folder name contains control characters".to_string());
+  }
+  if trimmed.contains("..") {
+    return Err("Folder name contains '..'".to_string());
+  }
+  if trimmed.contains('/') || trimmed.contains('\\') {
+    return Err("Folder name cannot contain path separators".to_string());
+  }
+  Ok(trimmed.to_string())
 }
 
 fn validate_package_id(package_id: &str) -> Result<(), String> {
@@ -286,6 +332,7 @@ fn package_manifest_to_full(pkg: &ContentPackage) -> PackageManifest {
     cid: pkg.cid.clone(),
     provider: pkg.provider.clone(),
     published_at: pkg.published_at.clone(),
+    folder: pkg.folder.clone(),
   }
 }
 
@@ -303,6 +350,7 @@ fn manifest_to_content_package(manifest: &PackageManifest) -> ContentPackage {
     cid: manifest.cid.clone(),
     provider: manifest.provider.clone(),
     published_at: manifest.published_at.clone(),
+    folder: manifest.folder.clone(),
   }
 }
 
@@ -331,6 +379,7 @@ pub fn content_library_list() -> Result<Vec<ContentPackageSummary>, String> {
       file_count: manifest.files.len(),
       cid: manifest.cid.clone(),
       provider: manifest.provider.clone(),
+      folder: manifest.folder.clone(),
     });
   }
   summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -430,6 +479,13 @@ pub fn content_library_create(input: ContentPackageInput) -> Result<ContentPacka
     }
   }
 
+  let folder = input
+    .folder
+    .as_ref()
+    .map(|f| validate_folder(f))
+    .transpose()?
+    .unwrap_or_default();
+
   let pkg = ContentPackage {
     id: package_id.clone(),
     name: input.name.trim().to_string(),
@@ -443,6 +499,7 @@ pub fn content_library_create(input: ContentPackageInput) -> Result<ContentPacka
     cid: None,
     provider: None,
     published_at: None,
+    folder,
   };
 
   let manifest = package_manifest_to_full(&pkg);
@@ -458,7 +515,9 @@ pub fn content_library_create(input: ContentPackageInput) -> Result<ContentPacka
   index.packages.insert(package_id.clone(), IndexPackageEntry {
     name: pkg.name.clone(),
     tags: pkg.tags.clone(),
+    folder: pkg.folder.clone(),
   });
+  ensure_folder_in_index(&mut index, &pkg.folder);
   save_index(&index)?;
 
   Ok(pkg)
@@ -542,6 +601,13 @@ pub fn content_library_update(package_id: String, input: ContentPackageInput) ->
     files.push(old_file.clone());
   }
 
+  let folder = input
+    .folder
+    .as_ref()
+    .map(|f| validate_folder(f))
+    .transpose()?
+    .unwrap_or(old_manifest.folder.clone());
+
   let pkg = ContentPackage {
     id: pkg_id.clone(),
     name: input.name.trim().to_string(),
@@ -555,6 +621,7 @@ pub fn content_library_update(package_id: String, input: ContentPackageInput) ->
     cid: old_manifest.cid.clone(),
     provider: old_manifest.provider.clone(),
     published_at: old_manifest.published_at.clone(),
+    folder,
   };
 
   let manifest = package_manifest_to_full(&pkg);
@@ -570,7 +637,9 @@ pub fn content_library_update(package_id: String, input: ContentPackageInput) ->
   index.packages.insert(pkg_id.clone(), IndexPackageEntry {
     name: pkg.name.clone(),
     tags: pkg.tags.clone(),
+    folder: pkg.folder.clone(),
   });
+  ensure_folder_in_index(&mut index, &pkg.folder);
   save_index(&index)?;
 
   Ok(pkg)
@@ -664,6 +733,7 @@ pub fn content_library_import_cid(input: CidImportInput) -> Result<ContentPackag
     cid: Some(cid.clone()),
     provider: Some("manual".to_string()),
     published_at: None,
+    folder: "".to_string(),
   };
 
   let manifest = package_manifest_to_full(&pkg);
@@ -679,6 +749,7 @@ pub fn content_library_import_cid(input: CidImportInput) -> Result<ContentPackag
   index.packages.insert(package_id.clone(), IndexPackageEntry {
     name: pkg.name.clone(),
     tags: pkg.tags.clone(),
+    folder: pkg.folder.clone(),
   });
   save_index(&index)?;
 
@@ -748,6 +819,7 @@ pub fn content_library_link_cid(input: CidLinkInput) -> Result<ContentPackage, S
     cid: Some(cid.clone()),
     provider: Some(provider),
     published_at: Some(now),
+    folder: old_manifest.folder.clone(),
   };
 
   let manifest = package_manifest_to_full(&pkg);
@@ -763,10 +835,251 @@ pub fn content_library_link_cid(input: CidLinkInput) -> Result<ContentPackage, S
   index.packages.insert(pkg_id.clone(), IndexPackageEntry {
     name: pkg.name.clone(),
     tags: pkg.tags.clone(),
+    folder: pkg.folder.clone(),
   });
   save_index(&index)?;
 
   Ok(pkg)
+}
+
+#[tauri::command]
+pub fn content_library_set_folder(package_id: String, folder: String) -> Result<ContentPackage, String> {
+  let pkg_id = package_id.trim().to_string();
+  validate_package_id(&pkg_id)?;
+  let folder_clean = validate_folder(&folder)?;
+
+  let mut manifest = load_manifest(&pkg_id)?;
+  manifest.folder = folder_clean.clone();
+  save_manifest(&manifest)?;
+
+  let mut index = load_index()?;
+  if let Some(entry) = index.packages.get_mut(&pkg_id) {
+    entry.folder = folder_clean.clone();
+  }
+  ensure_folder_in_index(&mut index, &folder_clean);
+  save_index(&index)?;
+
+  Ok(manifest_to_content_package(&manifest))
+}
+
+#[tauri::command]
+pub fn content_library_open_root_folder() -> Result<String, String> {
+  use std::process::Command;
+  let dir = content_library_dir()?;
+  let dir_str = dir.to_string_lossy().to_string();
+
+  #[cfg(target_os = "windows")]
+  {
+    Command::new("explorer")
+      .arg(&dir)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  #[cfg(target_os = "macos")]
+  {
+    Command::new("open")
+      .arg(&dir)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    Command::new("xdg-open")
+      .arg(&dir_str)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  Ok(dir_str)
+}
+
+#[tauri::command]
+pub fn content_library_open_package_folder(package_id: String) -> Result<String, String> {
+  use std::process::Command;
+  let pkg_id = package_id.trim().to_string();
+  validate_package_id(&pkg_id)?;
+  let pkg_dir = package_dir(&pkg_id)?;
+  if !pkg_dir.exists() {
+    return Err(format!("Package folder not found: {}", pkg_id));
+  }
+  let dir_str = pkg_dir.to_string_lossy().to_string();
+
+  #[cfg(target_os = "windows")]
+  {
+    Command::new("explorer")
+      .arg(&pkg_dir)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  #[cfg(target_os = "macos")]
+  {
+    Command::new("open")
+      .arg(&pkg_dir)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    Command::new("xdg-open")
+      .arg(&dir_str)
+      .spawn()
+      .map_err(|e| format!("Failed to open folder: {}", e))?;
+  }
+
+  Ok(dir_str)
+}
+
+#[tauri::command]
+pub fn content_library_create_folder(name: String) -> Result<Vec<String>, String> {
+  let folder_clean = validate_folder(&name)?;
+  if folder_clean.is_empty() {
+    return Err("Folder name cannot be empty".to_string());
+  }
+  let mut index = load_index()?;
+  ensure_folder_in_index(&mut index, &folder_clean);
+  save_index(&index)?;
+  Ok(index.folders.clone())
+}
+
+#[tauri::command]
+pub fn content_library_delete_folder(name: String) -> Result<(), String> {
+  let folder_clean = validate_folder(&name)?;
+  if folder_clean.is_empty() {
+    return Err("Cannot delete the default folder".to_string());
+  }
+  let mut index = load_index()?;
+
+  // Find all packages in this folder
+  let pkg_ids_to_delete: Vec<String> = index.packages.iter()
+    .filter(|(_, entry)| entry.folder.trim() == folder_clean)
+    .map(|(id, _)| id.clone())
+    .collect();
+
+  // Delete package directories and remove from index
+  for pkg_id in &pkg_ids_to_delete {
+    let pkg_dir = package_dir(pkg_id)?;
+    if pkg_dir.exists() {
+      fs::remove_dir_all(&pkg_dir).map_err(|e| format!("Failed to delete package {}: {}", pkg_id, e))?;
+    }
+    index.packages.remove(pkg_id);
+  }
+
+  // Remove folder from index
+  index.folders.retain(|f| f.trim() != folder_clean);
+  save_index(&index)?;
+  Ok(())
+}
+
+#[tauri::command]
+pub fn content_library_list_folders() -> Result<Vec<String>, String> {
+  let index = load_index()?;
+  Ok(index.folders.clone())
+}
+
+#[tauri::command]
+pub fn content_library_duplicate(package_id: String) -> Result<ContentPackage, String> {
+  let pkg_id = package_id.trim().to_string();
+  validate_package_id(&pkg_id)?;
+
+  let manifest = load_manifest(&pkg_id)?;
+  let new_id = Uuid::new_v4().to_string();
+  let now = Utc::now().to_rfc3339();
+
+  // Copy files directory
+  let old_dir = package_dir(&pkg_id)?;
+  let new_dir = package_dir(&new_id)?;
+  if old_dir.exists() {
+    copy_dir_all(&old_dir, &new_dir).map_err(|e| format!("Failed to copy package files: {}", e))?;
+  }
+  let old_history_copy = new_dir.join("history");
+  if old_history_copy.exists() {
+    fs::remove_dir_all(&old_history_copy).map_err(|e| format!("Failed to reset copied history: {}", e))?;
+  }
+
+  // Update manifest with new ID and timestamps
+  let mut new_manifest = manifest.clone();
+  new_manifest.id = new_id.clone();
+  new_manifest.created_at = now.clone();
+  new_manifest.updated_at = now.clone();
+  new_manifest.version = 1;
+  new_manifest.cid = None;
+  new_manifest.provider = None;
+  new_manifest.published_at = None;
+  new_manifest.status = "local".to_string();
+  // Append " (Copy)" to name, capped at 128 chars
+  let copy_suffix = " (Copy)";
+  let new_name = if manifest.name.len() + copy_suffix.len() > 128 {
+    format!("{}…{}", &manifest.name[..(128 - copy_suffix.len() - 1)], copy_suffix)
+  } else {
+    format!("{}{}", manifest.name, copy_suffix)
+  };
+  new_manifest.name = new_name;
+
+  // Update manifest.json inside new dir
+  let new_manifest_path = new_dir.join("manifest.json");
+  let new_manifest_content = serde_json::to_string_pretty(&new_manifest).map_err(|e| e.to_string())?;
+  fs::write(&new_manifest_path, &new_manifest_content).map_err(|e| e.to_string())?;
+
+  // Create empty history dir for the new package
+  let new_history = new_dir.join("history");
+  fs::create_dir_all(&new_history).map_err(|e| e.to_string())?;
+
+  // Update index
+  let mut index = load_index()?;
+  index.packages.insert(new_id.clone(), IndexPackageEntry {
+    name: new_manifest.name.clone(),
+    tags: new_manifest.tags.clone(),
+    folder: new_manifest.folder.clone(),
+  });
+  ensure_folder_in_index(&mut index, &new_manifest.folder);
+  save_index(&index)?;
+
+  Ok(manifest_to_content_package(&new_manifest))
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+  fs::create_dir_all(dst)?;
+  for entry in fs::read_dir(src)? {
+    let entry = entry?;
+    let ty = entry.file_type()?;
+    let src_path = entry.path();
+    let dst_path = dst.join(entry.file_name());
+    if ty.is_dir() {
+      copy_dir_all(&src_path, &dst_path)?;
+    } else {
+      fs::copy(&src_path, &dst_path)?;
+    }
+  }
+  Ok(())
+}
+
+#[tauri::command]
+pub fn content_library_move_packages(package_ids: Vec<String>, folder: String) -> Result<(), String> {
+  let folder_clean = validate_folder(&folder)?;
+  let mut index = load_index()?;
+
+  for pkg_id in &package_ids {
+    let pid = pkg_id.trim().to_string();
+    validate_package_id(&pid)?;
+
+    // Update manifest
+    let mut manifest = load_manifest(&pid)?;
+    manifest.folder = folder_clean.clone();
+    save_manifest(&manifest)?;
+
+    // Update index
+    if let Some(entry) = index.packages.get_mut(&pid) {
+      entry.folder = folder_clean.clone();
+    }
+  }
+
+  ensure_folder_in_index(&mut index, &folder_clean);
+  save_index(&index)?;
+  Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -776,9 +1089,12 @@ pub fn content_library_link_cid(input: CidLinkInput) -> Result<ContentPackage, S
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::Mutex;
+
+  static TEST_LOCK: Mutex<()> = Mutex::new(());
 
   fn test_library_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("content_library_test");
+    let dir = std::env::temp_dir().join(format!("content_library_test_{}", Uuid::new_v4()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).ok();
     dir
@@ -835,7 +1151,7 @@ mod tests {
     let files_dir = pkg_dir.join("files");
     fs::create_dir_all(&files_dir).ok();
     let index_path = dir.join("index.json");
-    let index = ContentLibraryIndex { version: 1, packages: HashMap::new() };
+    let index = ContentLibraryIndex { version: 1, packages: HashMap::new(), folders: Vec::new() };
     fs::write(&index_path, serde_json::to_string(&index).unwrap()).ok();
 
     let manifest_path = pkg_dir.join("manifest.json");
@@ -921,6 +1237,7 @@ mod tests {
       cid: None,
       provider: None,
       published_at: None,
+      folder: "".to_string(),
     };
     let manifest = package_manifest_to_full(&pkg);
     let roundtripped = manifest_to_content_package(&manifest);
@@ -945,6 +1262,7 @@ mod tests {
       cid: Some("QmTest123".to_string()),
       provider: Some("manual".to_string()),
       published_at: Some("2026-02-01T00:00:00Z".to_string()),
+      folder: "".to_string(),
     };
     let manifest = package_manifest_to_full(&pkg);
     let roundtripped = manifest_to_content_package(&manifest);
@@ -974,8 +1292,10 @@ mod tests {
       cid: Some("QmXYZ789".to_string()),
       provider: Some("kubo".to_string()),
       published_at: Some("2026-03-20T14:45:00Z".to_string()),
+      folder: "nfts".to_string(),
     };
     let manifest = package_manifest_to_full(&pkg);
+    assert_eq!(manifest.folder, "nfts");
     assert_eq!(manifest.id, "test-id-3");
     assert_eq!(manifest.name, "My NFT");
     assert_eq!(manifest.description, "A description");
@@ -1009,6 +1329,7 @@ mod tests {
       cid: None,
       provider: None,
       published_at: None,
+      folder: "".to_string(),
     };
     let pkg = manifest_to_content_package(&manifest);
     assert_eq!(pkg.id, "no-cid");
@@ -1032,6 +1353,7 @@ mod tests {
       cid: None,
       provider: None,
       published_at: None,
+      folder: "".to_string(),
     };
     let json = serde_json::to_string(&pkg).unwrap();
     assert!(!json.contains("cid"));
@@ -1054,10 +1376,12 @@ mod tests {
       cid: Some("QmTest".to_string()),
       provider: Some("manual".to_string()),
       published_at: Some("2026-03-01T00:00:00Z".to_string()),
+      folder: "test-folder".to_string(),
     };
     let json = serde_json::to_string(&pkg).unwrap();
     assert!(json.contains("QmTest"));
     assert!(json.contains("manual"));
+    assert!(json.contains("test-folder"));
   }
 
   #[test]
@@ -1069,7 +1393,7 @@ mod tests {
   #[test]
   fn load_index_returns_empty_when_missing() {
     let dir = test_library_dir();
-    let index = ContentLibraryIndex { version: 1, packages: HashMap::new() };
+    let index = ContentLibraryIndex { version: 1, packages: HashMap::new(), folders: Vec::new() };
     assert_eq!(index.packages.len(), 0);
     let _ = fs::remove_dir_all(&dir);
   }
@@ -1134,6 +1458,7 @@ mod tests {
 
   #[test]
   fn cid_import_creates_external_package() {
+    let _lock = TEST_LOCK.lock().unwrap();
     let dir = test_library_dir();
     std::env::set_var("HOME", dir.to_str().unwrap());
     std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
@@ -1160,6 +1485,7 @@ mod tests {
 
   #[test]
   fn cid_import_uses_auto_name_when_none_provided() {
+    let _lock = TEST_LOCK.lock().unwrap();
     let dir = test_library_dir();
     std::env::set_var("HOME", dir.to_str().unwrap());
     std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
@@ -1189,10 +1515,12 @@ mod tests {
       file_count: 0,
       cid: Some("QmTest".to_string()),
       provider: Some("manual".to_string()),
+      folder: "my-folder".to_string(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     assert!(json.contains("QmTest"));
     assert!(json.contains("manual"));
+    assert!(json.contains("my-folder"));
   }
 
   #[test]
@@ -1209,6 +1537,7 @@ mod tests {
       file_count: 0,
       cid: None,
       provider: None,
+      folder: "".to_string(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     assert!(!json.contains("cid"));
@@ -1325,6 +1654,131 @@ mod tests {
       provider: None,
     };
     let result = content_library_link_cid(input);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn old_manifest_without_folder_deserializes() {
+    let json = r#"{"id":"old","name":"Old","description":"","tags":[],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","version":1,"status":"local","files":[],"cid":null,"provider":null,"published_at":null}"#;
+    let manifest: PackageManifest = serde_json::from_str(json).unwrap();
+    assert_eq!(manifest.folder, "");
+  }
+
+  #[test]
+  fn folder_validation_accepts_normal_names() {
+    assert_eq!(validate_folder("NFTs").unwrap(), "NFTs");
+    assert_eq!(validate_folder("  My Folder  ").unwrap(), "My Folder");
+    assert_eq!(validate_folder("").unwrap(), "");
+    assert_eq!(validate_folder("a-b_c").unwrap(), "a-b_c");
+    assert!(validate_folder("a".repeat(64).as_str()).is_ok());
+  }
+
+  #[test]
+  fn folder_validation_rejects_traversal_and_separators_and_control() {
+    assert!(validate_folder("../escape").is_err());
+    assert!(validate_folder("folder/sub").is_err());
+    assert!(validate_folder("folder\\sub").is_err());
+    assert!(validate_folder("folder\x00null").is_err());
+    assert!(validate_folder("folder\nline").is_err());
+    assert!(validate_folder("a".repeat(65).as_str()).is_err());
+  }
+
+  #[test]
+  fn create_preserves_folder_from_input() {
+    let _lock = TEST_LOCK.lock().unwrap();
+    let dir = test_library_dir();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+
+    let input = ContentPackageInput {
+      name: "Foldered Package".to_string(),
+      description: None,
+      tags: None,
+      body: None,
+      files: None,
+      folder: Some("  My Folder  ".to_string()),
+    };
+    let result = content_library_create(input).unwrap();
+    assert_eq!(result.folder, "My Folder");
+
+    let list = content_library_list().unwrap();
+    let found = list.iter().find(|s| s.id == result.id).unwrap();
+    assert_eq!(found.folder, "My Folder");
+
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn update_preserves_existing_folder_when_not_provided() {
+    let _lock = TEST_LOCK.lock().unwrap();
+    let dir = test_library_dir();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+
+    let create_input = ContentPackageInput {
+      name: "Original".to_string(),
+      description: None,
+      tags: None,
+      body: Some("body".to_string()),
+      files: None,
+      folder: Some("Original Folder".to_string()),
+    };
+    let created = content_library_create(create_input).unwrap();
+
+    let update_input = ContentPackageInput {
+      name: "Renamed".to_string(),
+      description: None,
+      tags: None,
+      body: Some("new body".to_string()),
+      files: None,
+      folder: None,
+    };
+    let updated = content_library_update(created.id.clone(), update_input).unwrap();
+    assert_eq!(updated.folder, "Original Folder");
+
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn update_changes_folder_when_provided() {
+    let _lock = TEST_LOCK.lock().unwrap();
+    let dir = test_library_dir();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+
+    let create_input = ContentPackageInput {
+      name: "Original".to_string(),
+      description: None,
+      tags: None,
+      body: Some("body".to_string()),
+      files: None,
+      folder: Some("Old Folder".to_string()),
+    };
+    let created = content_library_create(create_input).unwrap();
+
+    let update_input = ContentPackageInput {
+      name: "Renamed".to_string(),
+      description: None,
+      tags: None,
+      body: Some("new body".to_string()),
+      files: None,
+      folder: Some("New Folder".to_string()),
+    };
+    let updated = content_library_update(created.id.clone(), update_input).unwrap();
+    assert_eq!(updated.folder, "New Folder");
+
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn set_folder_rejects_invalid_package_id() {
+    let result = content_library_set_folder("not-a-uuid".to_string(), "test".to_string());
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn set_folder_rejects_invalid_folder_name() {
+    let result = content_library_set_folder("550e8400-e29b-41d4-a716-446655440000".to_string(), "bad/folder".to_string());
     assert!(result.is_err());
   }
 }

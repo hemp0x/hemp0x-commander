@@ -9,22 +9,11 @@
     let deleteConfirm = false;
     let deleting = false;
     let cidCopied = false;
+    let duplicating = false;
 
     function formatDate(iso) {
         if (!iso) return "Unknown";
         return iso.slice(0, 10);
-    }
-
-    function statusLabel(status) {
-        if (status === "external") return "EXTERNAL CID";
-        if (status === "published") return "PUBLISHED";
-        return "LOCAL ONLY";
-    }
-
-    function statusClass(status) {
-        if (status === "external") return "external";
-        if (status === "published") return "published";
-        return "local";
     }
 
     async function deletePackage() {
@@ -38,6 +27,18 @@
         }
         deleting = false;
         deleteConfirm = false;
+    }
+
+    async function dupPackage() {
+        if (duplicating) return;
+        duplicating = true;
+        try {
+            await core.invoke("content_library_duplicate", { packageId: pkg.id });
+            dispatch("refresh");
+        } catch (err) {
+            alert("Duplicate failed: " + err);
+        }
+        duplicating = false;
     }
 
     function filePreview(files) {
@@ -66,17 +67,6 @@
 </script>
 
 <div class="package-card glass-card" class:has-confirm={deleteConfirm}>
-    <div class="card-status">
-          <span
-              class="status-badge"
-              class:local={statusClass(pkg.status) === "local"}
-              class:external={statusClass(pkg.status) === "external"}
-              class:published={statusClass(pkg.status) === "published"}
-          >
-              {statusLabel(pkg.status)}
-        </span>
-    </div>
-
     <div class="card-name">{pkg.name}</div>
 
     {#if pkg.description}
@@ -115,23 +105,22 @@
         </div>
     {/if}
 
-    <div class="card-actions">
-        <button class="action-btn" on:click={() => dispatch("edit")} title="Edit Package">
-            EDIT
-        </button>
-        <button class="action-btn" on:click={() => dispatch("view")} title="View Details">
-            VIEW
-        </button>
-        {#if !deleteConfirm}
-            <button class="action-btn danger" on:click={() => (deleteConfirm = true)} title="Delete Package">
-                DEL
+    <div class="actions-wrap">
+        <div class="card-actions">
+            <button class="action-btn" on:click|stopPropagation={() => dispatch("edit")} title="Edit Package">EDIT</button>
+            <button class="action-btn" on:click|stopPropagation={() => dispatch("view")} title="View Details">VIEW</button>
+            <button class="action-btn" on:click|stopPropagation={dupPackage} disabled={duplicating} title="Duplicate Package">
+                {duplicating ? "..." : "DUP"}
             </button>
-        {:else}
-            <div class="confirm-row" transition:fade={{ duration: 150 }}>
-                <button class="action-btn danger confirm" on:click={deletePackage} disabled={deleting}>
+            <button class="action-btn danger" on:click|stopPropagation={() => (deleteConfirm = true)} title="Delete Package">DEL</button>
+        </div>
+        {#if deleteConfirm}
+            <div class="delete-overlay" transition:fade={{ duration: 120 }}>
+                <span class="delete-overlay-text">Delete?</span>
+                <button class="action-btn danger confirm" on:click|stopPropagation={deletePackage} disabled={deleting}>
                     {deleting ? "..." : "YES"}
                 </button>
-                <button class="action-btn" on:click={() => (deleteConfirm = false)}>NO</button>
+                <button class="action-btn" on:click|stopPropagation={() => (deleteConfirm = false)}>NO</button>
             </div>
         {/if}
     </div>
@@ -154,31 +143,6 @@
     }
     .package-card.has-confirm {
         border-color: rgba(255, 68, 68, 0.3);
-    }
-    .card-status {
-        margin-bottom: 0.5rem;
-    }
-    .status-badge {
-        font-size: 0.5rem;
-        padding: 2px 8px;
-        border-radius: 4px;
-        letter-spacing: 1px;
-        font-weight: 600;
-    }
-    .status-badge.local {
-        background: rgba(255, 255, 255, 0.06);
-        color: #777;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    .status-badge.external {
-        background: rgba(255, 165, 0, 0.08);
-        color: #cca;
-        border: 1px solid rgba(255, 165, 0, 0.2);
-    }
-    .status-badge.published {
-        background: rgba(0, 255, 65, 0.08);
-        color: var(--color-primary);
-        border: 1px solid rgba(0, 255, 65, 0.2);
     }
     .card-name {
         font-size: 0.9rem;
@@ -267,7 +231,7 @@
     }
     .action-btn {
         background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1.5px solid rgba(255, 255, 255, 0.14);
         color: #aaa;
         padding: 0.3rem 0.6rem;
         font-size: 0.6rem;
@@ -277,20 +241,20 @@
         transition: all 0.15s;
     }
     .action-btn:hover {
-        border-color: rgba(0, 255, 65, 0.4);
+        border-color: rgba(0, 255, 65, 0.45);
         color: var(--color-primary);
         background: rgba(0, 255, 65, 0.05);
     }
     .action-btn.danger {
-        border-color: rgba(255, 68, 68, 0.2);
+        border-color: rgba(255, 68, 68, 0.25);
         color: #c66;
     }
     .action-btn.danger:hover {
-        border-color: rgba(255, 68, 68, 0.5);
+        border-color: rgba(255, 68, 68, 0.55);
         color: #ff5555;
     }
     .action-btn.confirm {
-        border-color: rgba(255, 68, 68, 0.4);
+        border-color: rgba(255, 68, 68, 0.45);
         color: #ff5555;
         background: rgba(255, 68, 68, 0.08);
     }
@@ -298,8 +262,33 @@
         opacity: 0.4;
         cursor: not-allowed;
     }
-    .confirm-row {
+    .actions-wrap {
+        position: relative;
+        margin-top: auto;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .card-actions {
         display: flex;
+        gap: 0.4rem;
+    }
+    .delete-overlay {
+        position: absolute;
+        inset: -0.25rem -0.25rem -0.25rem -0.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
         gap: 0.3rem;
+        background: rgba(30, 10, 10, 0.92);
+        border: 1px solid rgba(255, 68, 68, 0.25);
+        border-radius: 6px;
+        padding: 0 0.5rem;
+        backdrop-filter: blur(2px);
+    }
+    .delete-overlay-text {
+        color: #c66;
+        font-size: 0.55rem;
+        letter-spacing: 0.5px;
+        margin-right: 0.2rem;
     }
 </style>

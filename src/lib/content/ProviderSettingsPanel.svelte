@@ -101,20 +101,10 @@
     <h3 class="panel-title">SETTINGS</h3>
 
     <div class="notice-bar">
-        Configured publish providers are not enabled yet. This section allows you to select and configure IPFS providers for publishing content packages.
+        Publish providers are not enabled yet. Configure gateways and cache settings below.
     </div>
 
     <div class="provider-grid">
-        <div class="provider-card">
-            <div class="provider-header">
-                <span class="provider-name">Manual CID Import</span>
-                <span class="provider-status available">AVAILABLE</span>
-            </div>
-            <div class="provider-desc">
-                Import content by pasting a CID/hash. Creates a local package record for reference and library organization.
-            </div>
-        </div>
-
         <div class="provider-card disabled">
             <div class="provider-header">
                 <span class="provider-name">Installed Kubo (go-ipfs)</span>
@@ -191,19 +181,6 @@ https://ipfs.io/ipfs/"
             {#if clearMsg}
                 <div class="clear-msg">{clearMsg}</div>
             {/if}
-            {#if cacheStatus.entries.length > 0}
-                <div class="cache-entries">
-                    {#each cacheStatus.entries as entry}
-                        <div class="cache-entry-row">
-                            <span class="cache-entry-cid mono" title={entry.cid}>
-                                {entry.cid.length > 28 ? entry.cid.slice(0, 14) + "..." + entry.cid.slice(-14) : entry.cid}
-                            </span>
-                            <span class="cache-entry-type">{entry.content_type}</span>
-                            <span class="cache-entry-size">{formatSize(entry.size_bytes)}</span>
-                        </div>
-                    {/each}
-                </div>
-            {/if}
         </div>
     {/if}
 
@@ -242,17 +219,17 @@ https://ipfs.io/ipfs/"
     }
     .notice-bar {
         padding: 0.5rem 0.75rem;
-        background: rgba(255, 165, 0, 0.08);
-        border: 1px solid rgba(255, 165, 0, 0.2);
-        color: #cca;
+        background: rgba(255, 165, 0, 0.05);
+        border: 1px solid rgba(255, 165, 0, 0.15);
+        color: #bb9955;
         font-size: 0.65rem;
         border-radius: 4px;
-        margin-bottom: 1rem;
+        margin-bottom: 1.2rem;
         line-height: 1.4;
     }
     .provider-grid {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
         gap: 0.75rem;
         margin-bottom: 1.2rem;
     }
@@ -261,15 +238,15 @@ https://ipfs.io/ipfs/"
         border: 1px solid rgba(255, 255, 255, 0.06);
         border-left: 2px solid transparent;
         border-radius: 6px;
-        padding: 0.75rem 1rem;
+        padding: 0.85rem 1rem;
         transition: border-color 0.2s, box-shadow 0.2s;
     }
     .provider-card:hover {
         border-left-color: var(--color-primary);
-        box-shadow: 0 2px 12px rgba(0, 255, 65, 0.06);
+        box-shadow: 0 2px 16px rgba(0, 255, 65, 0.08);
     }
     .provider-card.disabled {
-        opacity: 0.75;
+        opacity: 0.6;
     }
     .provider-header {
         display: flex;
@@ -288,11 +265,6 @@ https://ipfs.io/ipfs/"
         border-radius: 4px;
         letter-spacing: 1px;
         font-weight: 600;
-    }
-    .provider-status.available {
-        background: rgba(0, 255, 65, 0.1);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        color: var(--color-primary);
     }
     .provider-status.planned {
         background: rgba(255, 255, 255, 0.04);
@@ -317,10 +289,11 @@ https://ipfs.io/ipfs/"
         text-transform: uppercase;
     }
     .gateway-section {
-        padding: 0.75rem;
-        margin-bottom: 0.8rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
         background: rgba(0, 0, 0, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.04);
+        border-left: 2px solid rgba(0, 255, 65, 0.3);
         border-radius: 6px;
     }
     .gateway-desc {
@@ -332,7 +305,7 @@ https://ipfs.io/ipfs/"
     .gateway-textarea {
         width: 100%;
         background: #000;
-        border: 1px solid #333;
+        border: 1px solid #2a2a2a;
         color: #0f0;
         padding: 0.5rem 0.7rem;
         border-radius: 4px;
@@ -361,26 +334,27 @@ https://ipfs.io/ipfs/"
         color: var(--color-primary);
     }
     .cache-section {
-        padding: 0.75rem;
-        margin-bottom: 0.8rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
         background: rgba(0, 0, 0, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.04);
+        border-left: 2px solid rgba(0, 150, 255, 0.3);
         border-radius: 6px;
     }
     .cache-stats {
-        display: flex;
-        gap: 0.75rem;
-        margin-bottom: 0.5rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 0.5rem;
+        margin-bottom: 0.6rem;
     }
     .cache-stat-row {
         display: flex;
         flex-direction: column;
-        gap: 0.15rem;
-        padding: 0.4rem 0.6rem;
-        background: rgba(0, 0, 0, 0.25);
+        gap: 0.2rem;
+        padding: 0.5rem 0.7rem;
+        background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.05);
         border-radius: 6px;
-        flex: 1;
         min-width: 0;
     }
     .cache-stat-label {
@@ -389,55 +363,17 @@ https://ipfs.io/ipfs/"
         letter-spacing: 0.5px;
     }
     .cache-stat-value {
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         color: #aaa;
     }
     .cache-actions {
         display: flex;
         gap: 0.4rem;
-        margin-bottom: 0.5rem;
     }
     .clear-msg {
         font-size: 0.6rem;
         color: var(--color-primary);
-        margin-bottom: 0.4rem;
-    }
-    .cache-entries {
-        display: flex;
-        flex-direction: column;
-        gap: 0.2rem;
-        max-height: 200px;
-        overflow-y: auto;
-    }
-    .cache-entry-row {
-        display: flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.25rem 0.5rem;
-        background: rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.03);
-        border-radius: 4px;
-        font-size: 0.55rem;
-        transition: border-color 0.15s;
-    }
-    .cache-entry-row:hover {
-        border-color: rgba(0, 255, 65, 0.1);
-    }
-    .cache-entry-cid {
-        color: #888;
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .cache-entry-type {
-        color: #666;
-        flex-shrink: 0;
-    }
-    .cache-entry-size {
-        color: #555;
-        flex-shrink: 0;
+        margin-top: 0.4rem;
     }
     .cyber-btn {
         background: rgba(0, 255, 65, 0.05);

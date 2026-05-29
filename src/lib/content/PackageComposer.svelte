@@ -4,6 +4,7 @@
     import { fade } from "svelte/transition";
 
     export let editPackage = null;
+    export let createFolder = null;
     const dispatch = createEventDispatcher();
 
     let name = "";
@@ -195,6 +196,7 @@
             tags: parseTags(tagsStr),
             body: body || "",
             files: fileInputs.length > 0 ? fileInputs : undefined,
+            folder: isEdit ? undefined : (createFolder || undefined),
         };
 
         try {
@@ -415,6 +417,7 @@
     .composer {
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(0, 255, 65, 0.12);
+        border-top: 2px solid rgba(0, 255, 65, 0.3);
         border-radius: 8px;
         padding: 0;
         max-width: 100%;
@@ -426,8 +429,9 @@
         color: var(--color-primary);
         letter-spacing: 2px;
         margin: 0;
-        padding: 1rem 1.5rem 0.8rem;
+        padding: 1rem 1.5rem 0.6rem;
         flex-shrink: 0;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.06);
     }
     .error-bar {
         padding: 0.4rem 0.8rem;
@@ -572,19 +576,21 @@
     .drop-zone {
         border: 1px dashed rgba(255, 255, 255, 0.12);
         border-radius: 6px;
-        padding: 1rem;
+        padding: 1.25rem 1rem;
         text-align: center;
         background: rgba(0, 0, 0, 0.2);
         margin-bottom: 0.5rem;
-        transition: border-color 0.2s;
+        transition: all 0.2s;
     }
     .drop-zone:hover {
-        border-color: rgba(0, 255, 65, 0.3);
+        border-color: rgba(0, 255, 65, 0.35);
+        background: rgba(0, 255, 65, 0.03);
     }
     .drop-message {
         font-size: 0.65rem;
-        color: #555;
-        margin-bottom: 0.5rem;
+        color: #666;
+        margin-bottom: 0.6rem;
+        letter-spacing: 0.5px;
     }
     .file-section-label {
         font-size: 0.55rem;

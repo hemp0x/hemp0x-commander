@@ -189,6 +189,14 @@ pub fn run() {
       content_library::content_library_get_file,
       content_library::content_library_import_cid,
       content_library::content_library_link_cid,
+      content_library::content_library_set_folder,
+      content_library::content_library_open_root_folder,
+      content_library::content_library_open_package_folder,
+      content_library::content_library_create_folder,
+      content_library::content_library_delete_folder,
+      content_library::content_library_list_folders,
+      content_library::content_library_duplicate,
+      content_library::content_library_move_packages,
 
       // IPFS Cache / Gateway Commands
       ipfs_cache::content_library_fetch_cid,

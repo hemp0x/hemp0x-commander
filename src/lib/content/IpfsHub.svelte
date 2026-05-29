@@ -47,9 +47,9 @@
                     <ContentLibraryPanel />
                 {:else if $ipfsHubSection === "cid-viewer"}
                     {#if openCid}
-                        <CidViewer loadCid={openCid} />
+                        <CidViewer loadCid={openCid} on:created={() => setSection("library")} />
                     {:else}
-                        <CidViewer />
+                        <CidViewer on:created={() => setSection("library")} />
                     {/if}
                 {:else if $ipfsHubSection === "providers"}
                     <ProviderSettingsPanel />

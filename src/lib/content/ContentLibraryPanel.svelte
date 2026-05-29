@@ -2,7 +2,7 @@
     import { createEventDispatcher, onMount } from "svelte";
     import { core } from "@tauri-apps/api";
     import { fly } from "svelte/transition";
-    import { contentLibrary, libraryLoading, activePanel, searchQuery, statusFilter, filteredPackages, sortByUpdatedDesc, ipfsHubSection } from "../stores/contentLibrary.js";
+    import { contentLibrary, libraryLoading, activePanel, searchQuery, statusFilter, currentFolder, filteredPackages, folderGroups, ipfsHubSection, packageSortMode } from "../stores/contentLibrary.js";
     import PackageCard from "./PackageCard.svelte";
     import PackageComposer from "./PackageComposer.svelte";
     import ContentRenderer from "./ContentRenderer.svelte";
@@ -25,9 +25,78 @@
     let publishError = "";
     let publishLinking = false;
     let attachmentPreviewFile = null;
+    let folderChangeValue = "";
+    let folderChanging = false;
+    let viewMode = "grid";
+    let backendFolders = [];
+    let newPackageFolder = null;
+    let deleteFolderConfirm = false;
+    let deleteFolderDeleting = false;
+    let creatingFolder = false;
+    let createFolderName = "";
+    let showCreateFolder = false;
+
+    // Multi-select
+    let selectMode = false;
+    let selectedIds = new Set();
+    let bulkDeleting = false;
+    let bulkMoving = false;
+
+    // Move popup
+    let showMovePopup = false;
+    let moveSearch = "";
+    let moveTargetFolder = "";
+
+    // Duplicate
+    let duplicatingId = null;
+
+    // Delete confirmation in list view
+    let deleteConfirmId = null;
+    let deleteDeletingId = null;
+
+    // Bulk delete confirmation
+    let bulkDeleteConfirm = false;
+
+    // Sort mode cycling
+    const SORT_MODES = [
+        { key: "alpha-asc", label: "A → Z" },
+        { key: "alpha-desc", label: "Z → A" },
+        { key: "updated-newest", label: "NEWEST" },
+        { key: "updated-oldest", label: "OLDEST" },
+    ];
+
+    function cycleSortMode() {
+        const idx = SORT_MODES.findIndex((m) => m.key === $packageSortMode);
+        const next = SORT_MODES[(idx + 1) % SORT_MODES.length];
+        $packageSortMode = next.key;
+    }
+
+    $: sortedFolders = (() => {
+        const all = [...backendFolders];
+        if ($packageSortMode === "alpha-asc") return all.sort((a, b) => a.localeCompare(b));
+        if ($packageSortMode === "alpha-desc") return all.sort((a, b) => b.localeCompare(a));
+        if ($packageSortMode === "updated-newest") {
+            return all.sort((a, b) => {
+                const da = folderLastUpdated(a) || "";
+                const db = folderLastUpdated(b) || "";
+                return db.localeCompare(da);
+            });
+        }
+        if ($packageSortMode === "updated-oldest") {
+            return all.sort((a, b) => {
+                const da = folderLastUpdated(a) || "";
+                const db = folderLastUpdated(b) || "";
+                return da.localeCompare(db);
+            });
+        }
+        return all;
+    })();
+
+    $: $currentFolder, (async () => { backendFolders = await core.invoke("content_library_list_folders"); })();
 
     onMount(async () => {
         await refresh();
+        try { backendFolders = await core.invoke("content_library_list_folders"); } catch {}
     });
 
     async function refresh() {
@@ -42,6 +111,7 @@
     }
 
     function showCreate() {
+        newPackageFolder = $currentFolder;
         $activePanel = "create";
         detailPackage = null;
         detailFull = null;
@@ -51,6 +121,136 @@
         $activePanel = "browse";
         detailPackage = null;
         detailFull = null;
+        newPackageFolder = null;
+        selectMode = false;
+        selectedIds = new Set();
+        bulkDeleteConfirm = false;
+    }
+
+    function enterFolder(folder) {
+        $currentFolder = folder;
+        selectMode = false;
+        selectedIds = new Set();
+        bulkDeleteConfirm = false;
+    }
+
+    function goToRoot() {
+        $currentFolder = null;
+        selectMode = false;
+        selectedIds = new Set();
+        bulkDeleteConfirm = false;
+    }
+
+    async function createNewFolder() {
+        const name = createFolderName.trim();
+        if (!name) return;
+        try {
+            await core.invoke("content_library_create_folder", { name });
+            backendFolders = await core.invoke("content_library_list_folders");
+            showCreateFolder = false;
+            createFolderName = "";
+            await refresh();
+        } catch (err) {
+            errorMsg = String(err);
+        }
+    }
+
+    async function deleteCurrentFolder() {
+        if ($currentFolder === null || $currentFolder === "") return;
+        deleteFolderDeleting = true;
+        try {
+            await core.invoke("content_library_delete_folder", { name: $currentFolder });
+            goToRoot();
+            await refresh();
+            backendFolders = await core.invoke("content_library_list_folders");
+        } catch (err) {
+            errorMsg = String(err);
+        }
+        deleteFolderDeleting = false;
+        deleteFolderConfirm = false;
+    }
+
+    function folderPackageCount(folderName) {
+        return $contentLibrary.filter((p) => {
+            if (!folderName) return !p.folder || !p.folder.trim();
+            return p.folder && p.folder.trim() === folderName;
+        }).length;
+    }
+
+    function folderLastUpdated(folderName) {
+        const pkgs = $contentLibrary.filter((p) => {
+            if (!folderName) return !p.folder || !p.folder.trim();
+            return p.folder && p.folder.trim() === folderName;
+        });
+        if (pkgs.length === 0) return null;
+        return pkgs.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0].updated_at;
+    }
+
+    function toggleSelect(pkg) {
+        if (!selectMode) return;
+        const next = new Set(selectedIds);
+        if (next.has(pkg.id)) {
+            next.delete(pkg.id);
+        } else {
+            next.add(pkg.id);
+        }
+        selectedIds = next;
+    }
+
+    function isSelected(pkg) {
+        return selectMode && selectedIds.has(pkg.id);
+    }
+
+    async function bulkDelete() {
+        if (selectedIds.size === 0) return;
+        bulkDeleting = true;
+        for (const id of selectedIds) {
+            try {
+                await core.invoke("content_library_delete", { packageId: id });
+            } catch (err) {
+                console.warn("Delete failed:", id, err);
+            }
+        }
+        selectedIds = new Set();
+        selectMode = false;
+        await refresh();
+        bulkDeleting = false;
+    }
+
+    async function bulkMove() {
+        if (selectedIds.size === 0 || !moveTargetFolder) return;
+        bulkMoving = true;
+        try {
+            await core.invoke("content_library_move_packages", {
+                packageIds: Array.from(selectedIds),
+                folder: moveTargetFolder,
+            });
+            selectedIds = new Set();
+            selectMode = false;
+            showMovePopup = false;
+            await refresh();
+        } catch (err) {
+            errorMsg = String(err);
+        }
+        bulkMoving = false;
+    }
+
+    async function duplicatePackage(pkg) {
+        duplicatingId = pkg.id;
+        try {
+            await core.invoke("content_library_duplicate", { packageId: pkg.id });
+            await refresh();
+        } catch (err) {
+            errorMsg = String(err);
+        }
+        duplicatingId = null;
+    }
+
+    function filteredMoveFolders() {
+        const q = moveSearch.trim().toLowerCase();
+        const all = ["", ...backendFolders];
+        if (!q) return all;
+        return all.filter((f) => (f || "unsorted").toLowerCase().includes(q));
     }
 
     async function showDetail(pkg) {
@@ -99,6 +299,7 @@
     function onPackageSaved() {
         showBrowse();
         refresh();
+        newPackageFolder = null;
     }
 
     function onPackageImported() {
@@ -242,22 +443,67 @@
         detailFetchState = "idle";
         detailFetchError = "";
     }
+
+    async function openPackageFolder() {
+        if (!detailPackage) return;
+        try {
+            await core.invoke("content_library_open_package_folder", { packageId: detailPackage.id });
+        } catch (err) {
+            errorMsg = String(err);
+        }
+    }
+
+    async function changePackageFolder() {
+        if (!detailFull || !folderChangeValue.trim()) return;
+        folderChanging = true;
+        try {
+            const result = await core.invoke("content_library_set_folder", {
+                packageId: detailFull.id,
+                folder: folderChangeValue.trim(),
+            });
+            detailFull = { ...detailFull, folder: result.folder };
+            detailPackage = { ...detailPackage, folder: result.folder };
+            await refresh();
+        } catch (err) {
+            errorMsg = String(err);
+        }
+        folderChanging = false;
+    }
 </script>
 
 <div class="content-library">
     <header class="library-header">
         <div class="header-left">
             <span class="header-title">CONTENT LIBRARY</span>
-            <span class="header-count mono">{$filteredPackages.length} packages</span>
+            {#if $activePanel === "browse" && $currentFolder !== null}
+                <span class="header-count mono">{$filteredPackages.length} packages</span>
+            {/if}
         </div>
         <div class="header-actions">
             {#if $activePanel === "browse"}
+                {#if $currentFolder === null}
+                    <button class="header-btn" on:click={() => { showCreateFolder = true; }}>
+                        + NEW FOLDER
+                    </button>
+                {/if}
                 <button class="header-btn create-btn" on:click={showCreate}>
                     + NEW PACKAGE
                 </button>
-                <button class="header-btn refresh-btn" on:click={refresh} disabled={$libraryLoading}>
-                    {$libraryLoading ? "LOADING..." : "REFRESH"}
-                </button>
+                {#if $currentFolder !== null && $currentFolder !== ""}
+                    {#if !deleteFolderConfirm}
+                        <button class="header-btn danger" on:click={() => (deleteFolderConfirm = true)}>
+                            DELETE FOLDER
+                        </button>
+                    {:else}
+                        <div class="confirm-bar inline" in:fly={{ y: 3, duration: 120 }}>
+                            <span class="confirm-text">This will delete the folder including all packages in the folder. Are you sure?</span>
+                            <button class="header-btn danger tiny" on:click={deleteCurrentFolder} disabled={deleteFolderDeleting}>
+                                {deleteFolderDeleting ? "..." : "YES"}
+                            </button>
+                            <button class="header-btn tiny" on:click={() => (deleteFolderConfirm = false)}>NO</button>
+                        </div>
+                    {/if}
+                {/if}
             {/if}
         </div>
     </header>
@@ -273,16 +519,7 @@
                 />
             </div>
             <div class="filter-btns">
-                <button class="filter-btn" class:active={$statusFilter === "all"} on:click={() => ($statusFilter = "all")}>
-                    ALL
-                </button>
-                <button class="filter-btn" class:active={$statusFilter === "local"} on:click={() => ($statusFilter = "local")}>
-                    LOCAL
-                </button>
-                <button class="filter-btn" class:active={$statusFilter === "external"} on:click={() => ($statusFilter = "external")}>
-                    EXTERNAL
-                </button>
-                <button class="filter-btn" class:active={$statusFilter === "published"} on:click={() => ($statusFilter = "published")}>
+                <button class="filter-btn" class:active={$statusFilter === "published"} on:click={() => ($statusFilter = $statusFilter === "published" ? "all" : "published")}>
                     PUBLISHED
                 </button>
             </div>
@@ -297,42 +534,190 @@
         {#if $activePanel === "browse"}
             {#if $libraryLoading}
                 <div class="empty-state">Loading packages...</div>
-            {:else if $filteredPackages.length === 0}
-                <div class="empty-state">
-                    <div class="empty-icon">◈</div>
-                    <div class="empty-text">
-                        {#if $searchQuery || $statusFilter !== "all"}
-                            No packages match your filters
-                        {:else}
-                            No packages in library
-                        {/if}
-                    </div>
-                    {#if !$searchQuery && $statusFilter === "all"}
-                        <button class="cyber-btn" on:click={showCreate}>CREATE YOUR FIRST PACKAGE</button>
-                    {:else}
-                        <button class="cyber-btn ghost" on:click={() => { $searchQuery = ""; $statusFilter = "all"; }}>
-                            CLEAR FILTERS
-                        </button>
-                    {/if}
-                </div>
             {:else}
-                <div class="package-grid">
-                    {#each $filteredPackages as pkg (pkg.id)}
-                        <div in:fly={{ y: 10, duration: 200 }}>
-                            <PackageCard {pkg} on:refresh={refresh} on:edit={() => { $activePanel = pkg.id; }} on:view={() => showDetail(pkg)} />
+                {#if $currentFolder === null}
+                    <!-- ROOT EXPLORER VIEW -->
+                    {#if showCreateFolder}
+                        <div class="create-folder-bar" in:fly={{ y: 5, duration: 150 }}>
+                            <input
+                                class="form-input mono"
+                                type="text"
+                                placeholder="Folder name"
+                                bind:value={createFolderName}
+                                on:keydown={(e) => e.key === 'Enter' && createNewFolder()}
+                            />
+                            <button class="cyber-btn small" on:click={createNewFolder}>CREATE</button>
+                            <button class="cyber-btn small ghost" on:click={() => { showCreateFolder = false; createFolderName = ""; }}>CANCEL</button>
                         </div>
-                    {/each}
-                </div>
+                    {/if}
+                    <div class="explorer-toolbar">
+                        <div class="toolbar-left"></div>
+                        <div class="toolbar-right">
+                            <button class="view-btn sort-btn-inline" on:click={cycleSortMode} title="Sort">
+                                SORT: {SORT_MODES.find(m => m.key === $packageSortMode)?.label || "NEWEST"}
+                            </button>
+                            <button class="view-btn" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view">
+                                GRID
+                            </button>
+                            <button class="view-btn" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view">
+                                LIST
+                            </button>
+                        </div>
+                    </div>
+                    {#if $contentLibrary.length === 0 && backendFolders.length === 0}
+                        <div class="empty-state">
+                            <div class="empty-icon">◈</div>
+                            <div class="empty-text">No packages in library</div>
+                            <button class="cyber-btn" on:click={showCreate}>CREATE YOUR FIRST PACKAGE</button>
+                        </div>
+                    {:else if viewMode === "grid"}
+                        <div class="folder-grid">
+                            <!-- Unsorted card -->
+                            {#if folderPackageCount("") > 0 || $searchQuery || $statusFilter !== "all"}
+                                <div class="folder-card" role="button" tabindex="0" on:click={() => enterFolder("")} on:keydown={(e) => e.key === 'Enter' && enterFolder("")} in:fly={{ y: 8, duration: 150 }}>
+                                    <span class="folder-card-icon">◈</span>
+                                    <span class="folder-card-name">Unsorted</span>
+                                    <span class="folder-card-count mono">{folderPackageCount("")} packages</span>
+                                    <span class="folder-card-date">{folderLastUpdated("") ? folderLastUpdated("").slice(0, 10) : ""}</span>
+                                </div>
+                            {/if}
+                            {#each sortedFolders as folderName}
+                                <div class="folder-card" role="button" tabindex="0" on:click={() => enterFolder(folderName)} on:keydown={(e) => e.key === 'Enter' && enterFolder(folderName)} in:fly={{ y: 8, duration: 150 }}>
+                                    <span class="folder-card-icon">📁</span>
+                                    <span class="folder-card-name">{folderName}</span>
+                                    <span class="folder-card-count mono">{folderPackageCount(folderName)} packages</span>
+                                    <span class="folder-card-date">{folderLastUpdated(folderName) ? folderLastUpdated(folderName).slice(0, 10) : ""}</span>
+                                </div>
+                            {/each}
+                        </div>
+                    {:else}
+                        <div class="folder-list">
+                            <!-- Unsorted row -->
+                            {#if folderPackageCount("") > 0 || $searchQuery || $statusFilter !== "all"}
+                                <div class="folder-row" role="button" tabindex="0" on:click={() => enterFolder("")} on:keydown={(e) => e.key === 'Enter' && enterFolder("")} in:fly={{ y: 8, duration: 150 }}>
+                                    <span class="row-icon">◈</span>
+                                    <span class="row-name">Unsorted</span>
+                                    <span class="row-count mono">{folderPackageCount("")} packages</span>
+                                    <span class="row-date">{folderLastUpdated("") ? folderLastUpdated("").slice(0, 10) : ""}</span>
+                                    <span class="row-arrow">→</span>
+                                </div>
+                            {/if}
+                            {#each sortedFolders as folderName}
+                                <div class="folder-row" role="button" tabindex="0" on:click={() => enterFolder(folderName)} on:keydown={(e) => e.key === 'Enter' && enterFolder(folderName)} in:fly={{ y: 8, duration: 150 }}>
+                                    <span class="row-icon">📁</span>
+                                    <span class="row-name">{folderName}</span>
+                                    <span class="row-count mono">{folderPackageCount(folderName)} packages</span>
+                                    <span class="row-date">{folderLastUpdated(folderName) ? folderLastUpdated(folderName).slice(0, 10) : ""}</span>
+                                    <span class="row-arrow">→</span>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                {:else}
+                    <!-- INSIDE FOLDER VIEW -->
+                    <div class="folder-breadcrumb">
+                        <div class="breadcrumb-left">
+                            <button class="breadcrumb-btn" on:click={goToRoot}>
+                                <span class="breadcrumb-arrow">←</span> CONTENT LIBRARY
+                            </button>
+                            <span class="breadcrumb-sep">/</span>
+                            <span class="breadcrumb-current">{$currentFolder === "" ? "Unsorted" : $currentFolder}</span>
+                        </div>
+                        <div class="breadcrumb-right">
+                            {#if !selectMode}
+                                <button class="view-btn select-btn" on:click={() => { selectMode = true; selectedIds = new Set(); }}>
+                                    SELECT
+                                </button>
+                            {:else}
+                                <button class="view-btn select-btn" on:click={() => { selectMode = false; selectedIds = new Set(); }}>
+                                    CANCEL
+                                </button>
+                            {/if}
+                            <button class="view-btn sort-btn-inline" on:click={cycleSortMode} title="Sort">
+                                SORT: {SORT_MODES.find(m => m.key === $packageSortMode)?.label || "NEWEST"}
+                            </button>
+                            <button class="view-btn" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view">
+                                GRID
+                            </button>
+                            <button class="view-btn" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view">
+                                LIST
+                            </button>
+                        </div>
+                    </div>
+                    {#if selectMode && selectedIds.size > 0}
+                        <div class="bulk-bar" in:fly={{ y: 5, duration: 150 }}>
+                            <span class="bulk-count">{selectedIds.size} selected</span>
+                            <div class="bulk-actions">
+                                <button class="cyber-btn small" on:click={() => { showMovePopup = true; moveSearch = ""; moveTargetFolder = ""; }}>MOVE</button>
+                                {#if !bulkDeleteConfirm}
+                                    <button class="cyber-btn small danger" on:click={() => { bulkDeleteConfirm = true; }}>DELETE</button>
+                                {:else}
+                                    <button class="cyber-btn small danger confirm" on:click={bulkDelete} disabled={bulkDeleting}>{bulkDeleting ? "..." : "YES"}</button>
+                                    <button class="cyber-btn small ghost" on:click={() => { bulkDeleteConfirm = false; }}>NO</button>
+                                {/if}
+                                <button class="cyber-btn small ghost" on:click={() => { selectMode = false; selectedIds = new Set(); bulkDeleteConfirm = false; }}>CANCEL</button>
+                            </div>
+                        </div>
+                    {/if}
+                    {#if $filteredPackages.length === 0}
+                        <div class="empty-state">
+                            <div class="empty-icon">◈</div>
+                            <div class="empty-text">No packages in this folder</div>
+                            <button class="cyber-btn" on:click={showCreate}>CREATE PACKAGE</button>
+                        </div>
+                    {:else if viewMode === "grid"}
+                        <div class="package-grid">
+                            {#each $filteredPackages as pkg (pkg.id)}
+                                <div class="grid-item" class:selected={isSelected(pkg)} in:fly={{ y: 8, duration: 150 }} on:click={() => { if (selectMode) { toggleSelect(pkg); } else { showDetail(pkg); } }} role="button" tabindex="0" on:keydown={(e) => { if (e.key === 'Enter') { if (selectMode) toggleSelect(pkg); else showDetail(pkg); } }}>
+                                    {#if selectMode}
+                                        <div class="select-overlay">
+                                            <span class="select-check">{isSelected(pkg) ? "◉" : "○"}</span>
+                                        </div>
+                                    {/if}
+                                    <PackageCard {pkg} on:refresh={refresh} on:edit={() => { $activePanel = pkg.id; }} on:view={() => showDetail(pkg)} on:duplicate={() => duplicatePackage(pkg)} />
+                                </div>
+                            {/each}
+                        </div>
+                    {:else}
+                        <div class="package-list">
+                            {#each $filteredPackages as pkg (pkg.id)}
+                                <div class="list-row" class:selected={isSelected(pkg)} role="button" tabindex="0" in:fly={{ y: 5, duration: 150 }} on:click={() => { if (selectMode) { toggleSelect(pkg); } else { showDetail(pkg); } }} on:keydown={(e) => { if (e.key === 'Enter') { if (selectMode) toggleSelect(pkg); else showDetail(pkg); } }}>
+                                    {#if selectMode}
+                                        <span class="list-check">{isSelected(pkg) ? "◉" : "○"}</span>
+                                    {:else}
+                                        <span class="list-icon">◈</span>
+                                    {/if}
+                                    <span class="list-name">{pkg.name}</span>
+                                    <span class="list-meta mono">v{pkg.version} · {pkg.file_count} file{pkg.file_count !== 1 ? "s" : ""} · {(pkg.updated_at || "").slice(0, 10)}</span>
+                                    {#if !selectMode}
+                                        <div class="list-actions">
+                                            <button class="action-btn tiny" on:click|stopPropagation={() => { $activePanel = pkg.id; }}>EDIT</button>
+                                            <button class="action-btn tiny" on:click|stopPropagation={() => showDetail(pkg)}>VIEW</button>
+                                            <button class="action-btn tiny" on:click|stopPropagation={() => duplicatePackage(pkg)} disabled={duplicatingId === pkg.id}>
+                                                {duplicatingId === pkg.id ? "..." : "DUP"}
+                                            </button>
+                                            {#if deleteConfirmId === pkg.id}
+                                                <button class="action-btn tiny danger confirm" on:click|stopPropagation={async () => { deleteDeletingId = pkg.id; try { await core.invoke("content_library_delete", { packageId: pkg.id }); deleteConfirmId = null; await refresh(); } catch (err) { errorMsg = String(err); } deleteDeletingId = null; }} disabled={deleteDeletingId === pkg.id}>
+                                                    {deleteDeletingId === pkg.id ? "..." : "YES"}
+                                                </button>
+                                                <button class="action-btn tiny" on:click|stopPropagation={() => { deleteConfirmId = null; }}>NO</button>
+                                            {:else}
+                                                <button class="action-btn tiny danger" on:click|stopPropagation={() => { deleteConfirmId = pkg.id; }}>DEL</button>
+                                            {/if}
+                                        </div>
+                                    {/if}
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                {/if}
             {/if}
         {:else if $activePanel === "create"}
-            <PackageComposer on:saved={onPackageSaved} on:cancel={showBrowse} />
+            <PackageComposer createFolder={newPackageFolder} on:saved={onPackageSaved} on:cancel={showBrowse} />
         {:else if $activePanel === "detail" && detailPackage}
             <div class="detail-panel" in:fly={{ y: 10, duration: 150 }}>
                 <div class="detail-header">
-                    <button class="header-btn" on:click={showBrowse}>BACK</button>
-                    <button class="header-btn" on:click={() => { $activePanel = detailPackage.id; }}>
-                        EDIT
-                    </button>
+                    <button class="header-btn back-btn" on:click={showBrowse}>← BACK TO LIBRARY</button>
                 </div>
 
                 <div class="detail-name-row">
@@ -364,6 +749,11 @@
                     <div class="detail-meta-item">
                         <span class="detail-meta-label">Updated</span>
                         <span class="detail-meta-value">{(detailPackage.updated_at || "").slice(0, 10)}</span>
+                    </div>
+                    <div class="detail-meta-item wide folder-meta">
+                        <span class="detail-meta-label">Folder</span>
+                        <span class="detail-meta-value">{detailFull && detailFull.folder ? detailFull.folder : "Unsorted"}</span>
+                        <button class="inline-btn" on:click={openPackageFolder}>OPEN SYSTEM FOLDER</button>
                     </div>
                     {#if detailFull && detailFull.cid}
                         <div class="detail-meta-item wide">
@@ -543,21 +933,39 @@
                     </div>
                 </div>
 
-                <div class="detail-actions">
-                    <button class="cyber-btn" on:click={() => { $activePanel = detailPackage.id; }}>
-                        EDIT PACKAGE
-                    </button>
-                    <button class="cyber-btn" on:click={togglePublishPanel}>
-                        PUBLISH / LINK
-                    </button>
-                    {#if detailPackage.cid}
-                        <button class="cyber-btn ghost" on:click={() => { $ipfsHubSection = "cid-viewer"; }}>
-                            VIEW IN CID VIEWER
+                <div class="detail-section">
+                    <div class="section-label">ACTIONS</div>
+                    <div class="detail-actions-minimal">
+                        <button class="cyber-btn" on:click={() => { $activePanel = detailPackage.id; }}>
+                            EDIT PACKAGE
                         </button>
+                        <button class="cyber-btn" on:click={togglePublishPanel}>
+                            PUBLISH / LINK
+                        </button>
+                        {#if detailPackage.cid}
+                            <button class="cyber-btn ghost" on:click={() => { $ipfsHubSection = "cid-viewer"; }}>
+                                VIEW IN CID VIEWER
+                            </button>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-label">FOLDER / GROUP</div>
+                    <div class="folder-change-row">
+                        <input
+                            class="form-input mono"
+                            type="text"
+                            placeholder="Folder name"
+                            bind:value={folderChangeValue}
+                        />
+                        <button class="cyber-btn small" on:click={changePackageFolder} disabled={folderChanging || !folderChangeValue.trim()}>
+                            {folderChanging ? "SAVING..." : "SET FOLDER"}
+                        </button>
+                    </div>
+                    {#if detailFull && detailFull.folder}
+                        <div class="folder-current">Current: {detailFull.folder}</div>
                     {/if}
-                    <button class="cyber-btn ghost" on:click={showBrowse}>
-                        BACK TO LIBRARY
-                    </button>
                 </div>
 
                 {#if showPublishPanel}
@@ -610,6 +1018,34 @@
                     <PackageComposer editPackage={pkg} on:saved={onPackageSaved} on:cancel={showBrowse} />
                 {/if}
             {/each}
+        {/if}
+
+        {#if showMovePopup}
+            <div class="move-popup-backdrop" role="button" tabindex="0" aria-label="Close move popup" on:click={() => { showMovePopup = false; }} on:keydown={(e) => e.key === 'Escape' && (showMovePopup = false)}>
+                <div class="move-popup" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation on:keydown={(e) => e.key === 'Escape' && (showMovePopup = false)}>
+                    <div class="move-popup-header">MOVE SELECTED PACKAGES</div>
+                    <div class="move-popup-search">
+                        <input
+                            class="form-input mono"
+                            type="text"
+                            placeholder="Search folders..."
+                            bind:value={moveSearch}
+                        />
+                    </div>
+                    <div class="move-popup-list">
+                        {#each filteredMoveFolders() as folderName}
+                            <div class="move-popup-row" class:active={moveTargetFolder === folderName} on:click={() => { moveTargetFolder = folderName; }} role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (moveTargetFolder = folderName)}>
+                                <span class="move-popup-icon">▸</span>
+                                <span class="move-popup-label">{folderName === "" ? "Unsorted" : folderName}</span>
+                            </div>
+                        {/each}
+                    </div>
+                    <div class="move-popup-actions">
+                        <button class="cyber-btn small" on:click={bulkMove} disabled={bulkMoving || !moveTargetFolder}>{bulkMoving ? "MOVING..." : "MOVE"}</button>
+                        <button class="cyber-btn small ghost" on:click={() => { showMovePopup = false; }}>CANCEL</button>
+                    </div>
+                </div>
+            </div>
         {/if}
     </div>
 </div>
@@ -726,6 +1162,291 @@
     .library-body {
         padding: 1rem 0;
     }
+    .explorer-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    .toolbar-left {
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+    }
+    .toolbar-right {
+        display: flex;
+        gap: 0.2rem;
+    }
+    .view-btn {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        color: #555;
+        padding: 0.25rem 0.55rem;
+        font-size: 0.55rem;
+        letter-spacing: 1px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .view-btn:hover {
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .view-btn.active {
+        background: rgba(0, 255, 65, 0.06);
+        border-color: rgba(0, 255, 65, 0.4);
+        color: var(--color-primary);
+    }
+    .select-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.55rem;
+        letter-spacing: 0.5px;
+    }
+    .sort-btn-inline {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.55rem;
+        letter-spacing: 0.5px;
+    }
+    .breadcrumb-right {
+        display: flex;
+        gap: 0.2rem;
+        align-items: center;
+    }
+    .confirm-bar.inline {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.15rem 0.4rem;
+        background: rgba(255, 68, 68, 0.06);
+        border: 1px solid rgba(255, 68, 68, 0.2);
+        border-radius: 4px;
+    }
+    .header-btn.tiny {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.55rem;
+    }
+    .create-folder-bar {
+        display: flex;
+        gap: 0.4rem;
+        align-items: center;
+        margin-bottom: 0.6rem;
+        flex-wrap: wrap;
+    }
+    .create-folder-bar .form-input {
+        flex: 1;
+        min-width: 160px;
+        background: #000;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 0.35rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .create-folder-bar .form-input:focus {
+        border-color: var(--color-primary);
+    }
+    .confirm-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .confirm-text {
+        font-size: 0.6rem;
+        color: #c66;
+        margin-right: 0.3rem;
+    }
+    .header-btn.danger {
+        background: rgba(255, 68, 68, 0.08);
+        border-color: rgba(255, 68, 68, 0.3);
+        color: #c66;
+    }
+    .header-btn.danger:hover {
+        background: rgba(255, 68, 68, 0.15);
+        border-color: #ff5555;
+        color: #ff5555;
+        box-shadow: 0 0 10px rgba(255, 68, 68, 0.15);
+    }
+    .folder-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+    .folder-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.55rem 0.8rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .folder-row:hover {
+        border-color: rgba(0, 255, 65, 0.25);
+        background: rgba(0, 255, 65, 0.04);
+    }
+    .row-icon {
+        font-size: 0.7rem;
+        color: var(--color-primary);
+        opacity: 0.8;
+        width: 20px;
+        text-align: center;
+    }
+    .row-name {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #ccc;
+        letter-spacing: 0.3px;
+        flex: 1;
+        min-width: 0;
+    }
+    .row-count {
+        font-size: 0.6rem;
+        color: #555;
+        flex-shrink: 0;
+    }
+    .row-date {
+        font-size: 0.55rem;
+        color: #444;
+        flex-shrink: 0;
+    }
+    .row-arrow {
+        font-size: 0.7rem;
+        color: #444;
+        flex-shrink: 0;
+    }
+    .folder-row:hover .row-arrow {
+        color: var(--color-primary);
+    }
+    .folder-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 0.75rem;
+    }
+    .folder-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 1rem 0.8rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+    }
+    .folder-card:hover {
+        border-color: rgba(0, 255, 65, 0.25);
+        background: rgba(0, 255, 65, 0.04);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    }
+    .folder-card-icon {
+        font-size: 1.4rem;
+        color: var(--color-primary);
+        opacity: 0.8;
+        margin-bottom: 0.2rem;
+    }
+    .folder-card-name {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #ccc;
+        letter-spacing: 0.3px;
+        word-break: break-word;
+    }
+    .folder-card-count {
+        font-size: 0.6rem;
+        color: #555;
+    }
+    .folder-card-date {
+        font-size: 0.55rem;
+        color: #444;
+    }
+    .folder-breadcrumb {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin-bottom: 0.6rem;
+        padding-bottom: 0.4rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        justify-content: space-between;
+        flex-wrap: wrap;
+    }
+    .breadcrumb-left {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .breadcrumb-btn {
+        background: transparent;
+        border: none;
+        color: #888;
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+        cursor: pointer;
+        padding: 0;
+        transition: color 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+    .breadcrumb-btn:hover {
+        color: var(--color-primary);
+    }
+    .breadcrumb-arrow {
+        font-size: 0.75rem;
+        color: inherit;
+    }
+    .breadcrumb-sep {
+        color: #444;
+        font-size: 0.65rem;
+    }
+    .breadcrumb-current {
+        color: #ccc;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+    .package-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+    .list-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.5rem 0.7rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .list-row:hover {
+        border-color: rgba(0, 255, 65, 0.25);
+        background: rgba(0, 255, 65, 0.04);
+    }
+    .list-name {
+        font-size: 0.8rem;
+        color: #ccc;
+        font-weight: 600;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .list-meta {
+        font-size: 0.6rem;
+        color: #555;
+        flex-shrink: 0;
+    }
     .package-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -758,15 +1479,52 @@
     .detail-panel {
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(0, 255, 65, 0.12);
+        border-top: 2px solid rgba(0, 255, 65, 0.3);
         border-radius: 8px;
         padding: 1.2rem;
         max-width: 100%;
     }
     .detail-header {
         display: flex;
-        gap: 0.5rem;
+        align-items: center;
         margin-bottom: 1rem;
-        padding-top: 0.25rem;
+        padding-bottom: 0.6rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .back-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+        font-size: 0.6rem;
+        letter-spacing: 1px;
+        padding: 0.3rem 0.7rem;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .back-btn:hover {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+    }
+    .detail-actions-minimal {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .folder-meta .inline-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #666;
+        font-size: 0.5rem;
+        padding: 2px 8px;
+        border-radius: 3px;
+        cursor: pointer;
+        margin-left: auto;
+        transition: all 0.15s;
+    }
+    .folder-meta .inline-btn:hover {
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
     }
     .detail-name-row {
         display: flex;
@@ -870,17 +1628,12 @@
         color: var(--color-primary);
         border-radius: 3px;
     }
-    .detail-actions {
-        display: flex;
-        gap: 0.5rem;
-        padding-top: 0.8rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-    }
     .detail-section {
         margin-top: 1rem;
-        padding: 0.75rem;
+        padding: 0.85rem 1rem;
         background: rgba(0, 0, 0, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.04);
+        border-left: 2px solid rgba(0, 255, 65, 0.25);
         border-radius: 6px;
     }
     .section-label {
@@ -1135,6 +1888,32 @@
     .form-input:focus {
         border-color: var(--color-primary);
     }
+    .folder-change-row {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .folder-change-row .form-input {
+        flex: 1;
+        min-width: 120px;
+        background: #000;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 0.35rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .folder-change-row .form-input:focus {
+        border-color: var(--color-primary);
+    }
+    .folder-current {
+        font-size: 0.6rem;
+        color: #555;
+        margin-top: 0.3rem;
+    }
     select.form-input {
         cursor: pointer;
     }
@@ -1150,5 +1929,192 @@
     .clear-preview-btn:hover {
         border-color: #ff5555;
         color: #ff5555;
+    }
+    .grid-item {
+        position: relative;
+        cursor: pointer;
+    }
+    .grid-item.selected {
+        opacity: 0.85;
+    }
+    .grid-item.selected :global(.package-card) {
+        border-color: rgba(0, 255, 65, 0.5);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.15);
+    }
+    .select-overlay {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        z-index: 2;
+        pointer-events: none;
+    }
+    .select-check {
+        font-size: 0.85rem;
+        color: var(--color-primary);
+        text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+    }
+    .list-check {
+        font-size: 0.75rem;
+        color: var(--color-primary);
+        width: 20px;
+        text-align: center;
+        flex-shrink: 0;
+    }
+    .list-icon {
+        font-size: 0.6rem;
+        color: #555;
+        width: 20px;
+        text-align: center;
+        flex-shrink: 0;
+    }
+    .list-row.selected {
+        border-color: rgba(0, 255, 65, 0.4);
+        background: rgba(0, 255, 65, 0.06);
+    }
+    .list-actions {
+        display: flex;
+        gap: 0.25rem;
+        flex-shrink: 0;
+    }
+    .action-btn.tiny {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+        padding: 2px 6px;
+        font-size: 0.5rem;
+        letter-spacing: 0.5px;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .action-btn.tiny:hover {
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .action-btn.tiny.danger {
+        border-color: rgba(255, 68, 68, 0.15);
+        color: #c66;
+    }
+    .action-btn.tiny.danger:hover {
+        border-color: rgba(255, 68, 68, 0.4);
+        color: #ff5555;
+    }
+    .action-btn.tiny.confirm {
+        border-color: rgba(255, 68, 68, 0.4);
+        color: #ff5555;
+        background: rgba(255, 68, 68, 0.08);
+    }
+    .bulk-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.4rem 0.6rem;
+        margin-bottom: 0.6rem;
+        background: rgba(0, 255, 65, 0.04);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 6px;
+    }
+    .bulk-count {
+        font-size: 0.65rem;
+        color: var(--color-primary);
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+    .bulk-actions {
+        display: flex;
+        gap: 0.4rem;
+    }
+    .move-popup-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .move-popup {
+        background: rgba(10, 10, 10, 0.95);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 8px;
+        padding: 1rem;
+        width: 320px;
+        max-width: 90vw;
+    }
+    .move-popup-header {
+        font-size: 0.7rem;
+        color: var(--color-primary);
+        letter-spacing: 1.5px;
+        margin-bottom: 0.6rem;
+        font-weight: 600;
+    }
+    .move-popup-search {
+        margin-bottom: 0.5rem;
+    }
+    .move-popup-search .form-input {
+        width: 100%;
+        background: #000;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 0.35rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .move-popup-search .form-input:focus {
+        border-color: var(--color-primary);
+    }
+    .move-popup-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        max-height: 220px;
+        overflow-y: auto;
+        margin-bottom: 0.6rem;
+    }
+    .move-popup-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.4rem 0.5rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .move-popup-row:hover {
+        border-color: rgba(0, 255, 65, 0.25);
+        background: rgba(0, 255, 65, 0.04);
+    }
+    .move-popup-row.active {
+        border-color: rgba(0, 255, 65, 0.4);
+        background: rgba(0, 255, 65, 0.08);
+    }
+    .move-popup-icon {
+        font-size: 0.6rem;
+        color: var(--color-primary);
+        opacity: 0.7;
+    }
+    .move-popup-label {
+        font-size: 0.7rem;
+        color: #ccc;
+    }
+    .move-popup-actions {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: flex-end;
+    }
+    .cyber-btn.danger {
+        background: rgba(255, 68, 68, 0.08);
+        border-color: rgba(255, 68, 68, 0.3);
+        color: #c66;
+    }
+    .cyber-btn.danger:hover {
+        background: rgba(255, 68, 68, 0.15);
+        border-color: #ff5555;
+        color: #ff5555;
+        box-shadow: 0 0 10px rgba(255, 68, 68, 0.15);
     }
 </style>

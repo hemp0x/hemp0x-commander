@@ -12,6 +12,10 @@
     let cid = "";
     let packageIdToLoad = null;
 
+    // Create package from fetched CID
+    let creatingPackage = false;
+    let createPackageMsg = "";
+
     // Gateway consent
     let consentGiven = false;
     let gatewayIndex = 0;
@@ -138,12 +142,39 @@
         })();
     }
 
+    async function createPackageFromCid() {
+        if (!cid.trim()) return;
+        creatingPackage = true;
+        createPackageMsg = "";
+        try {
+            const result = await core.invoke("content_library_import_cid", {
+                input: {
+                    cid: cid.trim(),
+                    name: null,
+                    description: null,
+                    tags: null,
+                },
+            });
+            createPackageMsg = `Created package: ${result.name}`;
+            dispatch("created", result);
+        } catch (err) {
+            const msg = String(err);
+            if (msg.includes("already imported")) {
+                createPackageMsg = "This CID is already in your library.";
+            } else {
+                createPackageMsg = "Failed: " + msg;
+            }
+        }
+        creatingPackage = false;
+    }
+
     function goToCid() {
         cid = cidInput.trim();
         consentGiven = false;
         fetchState = "idle";
         fetchResult = null;
         fetchError = "";
+        createPackageMsg = "";
     }
 
     function handleKeydown(e) {
@@ -251,9 +282,6 @@
                 <div class="meta-item">
                     <span class="meta-label">CID</span>
                     <span class="meta-value mono">{fetchResult.cid.length > 24 ? fetchResult.cid.slice(0, 12) + "..." + fetchResult.cid.slice(-12) : fetchResult.cid}</span>
-                    <button class="copy-btn" on:click={async () => { try { await navigator.clipboard.writeText(fetchResult.cid); } catch {} }}>
-                        COPY
-                    </button>
                 </div>
                 <div class="meta-item">
                     <span class="meta-label">TYPE</span>
@@ -287,12 +315,19 @@
             />
 
             <div class="content-actions">
+                <button class="cyber-btn small" on:click={createPackageFromCid} disabled={creatingPackage}>
+                    {creatingPackage ? "CREATING..." : "+ CREATE PACKAGE"}
+                </button>
                 {#if fetchState === "cached"}
-                    <button class="cyber-btn ghost" on:click={doRefresh}>REFRESH</button>
+                    <button class="cyber-btn ghost small" on:click={doRefresh}>REFRESH</button>
                 {:else}
-                    <button class="cyber-btn ghost" on:click={doRefresh}>RE-FETCH</button>
+                    <button class="cyber-btn ghost small" on:click={doRefresh}>RE-FETCH</button>
                 {/if}
+                <button class="copy-btn small" on:click={async () => { try { await navigator.clipboard.writeText(fetchResult.cid); } catch {} }}>COPY CID</button>
             </div>
+            {#if createPackageMsg}
+                <div class="create-msg">{createPackageMsg}</div>
+            {/if}
         </div>
     {/if}
 
@@ -317,9 +352,6 @@
     .viewer-header {
         padding-top: 0.25rem;
         margin-bottom: 0.8rem;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .viewer-title {
@@ -330,9 +362,6 @@
     }
     .cid-form {
         margin-bottom: 0.8rem;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .form-group {
@@ -384,9 +413,6 @@
         background: rgba(0, 0, 0, 0.25);
         border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 6px;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .ready-meta {
@@ -451,6 +477,11 @@
         box-shadow: none;
         background: rgba(255, 255, 255, 0.05);
     }
+    .cyber-btn.small {
+        padding: 0.3rem 0.7rem;
+        font-size: 0.6rem;
+        letter-spacing: 0.5px;
+    }
 
     /* Consent panel */
     .consent-panel {
@@ -459,9 +490,6 @@
         border-radius: 6px;
         padding: 0.8rem;
         margin-bottom: 0.8rem;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .consent-header {
@@ -503,9 +531,6 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 6px;
         color: #aaa;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .fetching-icon {
@@ -525,9 +550,9 @@
     /* Fetched content */
     .fetched-content {
         margin-top: 0.6rem;
-        padding: 0.75rem;
-        background: rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.04);
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 8px;
     }
     .content-meta-bar {
@@ -535,7 +560,7 @@
         flex-wrap: wrap;
         gap: 0.5rem;
         margin-bottom: 0.75rem;
-        justify-content: center;
+        justify-content: flex-start;
     }
     .meta-item {
         display: flex;
@@ -568,22 +593,29 @@
         border-color: rgba(0, 255, 65, 0.3);
         color: var(--color-primary);
     }
+    .copy-btn.small {
+        font-size: 0.55rem;
+        padding: 3px 8px;
+    }
     .content-actions {
         display: flex;
         gap: 0.5rem;
         margin-top: 0.75rem;
         padding-top: 0.6rem;
         border-top: 1px solid rgba(255, 255, 255, 0.06);
-        justify-content: center;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+    .create-msg {
+        margin-top: 0.5rem;
+        font-size: 0.65rem;
+        color: var(--color-primary);
     }
 
     /* Empty hint */
     .empty-hint {
         text-align: center;
         padding: 3rem 1rem;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
         width: 100%;
     }
     .hint-icon {

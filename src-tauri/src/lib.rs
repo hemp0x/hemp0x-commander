@@ -5,6 +5,7 @@ pub mod modules;
 use modules::commands;
 use modules::content_library;
 use modules::ipfs_cache;
+use modules::provider_settings;
 use modules::process;
 use modules::files;
 use modules::runtime;
@@ -187,6 +188,7 @@ pub fn run() {
       content_library::content_library_delete,
       content_library::content_library_get_file,
       content_library::content_library_import_cid,
+      content_library::content_library_link_cid,
 
       // IPFS Cache / Gateway Commands
       ipfs_cache::content_library_fetch_cid,
@@ -197,6 +199,14 @@ pub fn run() {
       ipfs_cache::content_library_clear_cache,
       ipfs_cache::content_library_get_cache_dir,
       ipfs_cache::content_library_default_gateways,
+      ipfs_cache::content_library_save_cached,
+      ipfs_cache::content_library_open_cached_file,
+      ipfs_cache::content_library_open_cache_folder,
+      ipfs_cache::content_library_write_to_path,
+
+      // Provider Settings Commands
+      provider_settings::ipfs_get_provider_settings,
+      provider_settings::ipfs_update_provider_settings,
 
       // Stratum Commands
       stratum::start_stratum_server,

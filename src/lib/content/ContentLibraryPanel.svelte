@@ -19,6 +19,12 @@
     let detailFetchError = "";
     let detailConsentGiven = false;
     let detailAttachments = [];
+    let showPublishPanel = false;
+    let publishCid = "";
+    let publishProvider = "manual";
+    let publishError = "";
+    let publishLinking = false;
+    let attachmentPreviewFile = null;
 
     onMount(async () => {
         await refresh();
@@ -195,6 +201,46 @@
                 detailFetchError = String(err);
             }
         })();
+    }
+
+    function togglePublishPanel() {
+        showPublishPanel = !showPublishPanel;
+        publishCid = detailFull && detailFull.cid ? detailFull.cid : "";
+        publishProvider = (detailFull && detailFull.provider) ? detailFull.provider : "manual";
+        publishError = "";
+    }
+
+    async function doLinkCid() {
+        publishError = "";
+        publishLinking = true;
+        try {
+            const result = await core.invoke("content_library_link_cid", {
+                input: {
+                    package_id: detailFull.id,
+                    cid: publishCid.trim(),
+                    provider: publishProvider,
+                },
+            });
+            detailFull = result;
+            detailPackage = {
+                ...detailPackage,
+                cid: result.cid,
+                status: result.status,
+                version: result.version,
+                updated_at: result.updated_at,
+            };
+            showPublishPanel = false;
+        } catch (err) {
+            publishError = String(err);
+        }
+        publishLinking = false;
+    }
+
+    function clearAttachmentPreview() {
+        attachmentPreviewFile = null;
+        detailFetchResult = null;
+        detailFetchState = "idle";
+        detailFetchError = "";
     }
 </script>
 
@@ -401,7 +447,12 @@
                 {#if detailFetchResult && (detailFetchState === "fetched" || detailFetchState === "cached")}
                     <div class="detail-fetched-section">
                         <div class="section-label">
-                            FETCHED CONTENT
+                            {#if attachmentPreviewFile}
+                                Previewing attachment: <span class="mono">{attachmentPreviewFile.path}</span>
+                                <button class="clear-preview-btn" on:click={clearAttachmentPreview}>CLEAR</button>
+                            {:else}
+                                FETCHED CONTENT
+                            {/if}
                             <span class="section-badge" style="color:{detailFetchState === 'cached' ? '#cca' : 'var(--color-primary)'};">
                                 {detailFetchState === "cached" ? "CACHED" : "FRESH"}
                             </span>
@@ -456,6 +507,7 @@
                                                     content_base64: result.content_base64,
                                                 };
                                                 detailFetchState = "cached";
+                                                attachmentPreviewFile = file;
                                             } catch (e) {
                                                 detailFetchError = String(e);
                                                 detailFetchState = "error";
@@ -500,6 +552,9 @@
                     <button class="cyber-btn" on:click={() => { $activePanel = detailPackage.id; }}>
                         EDIT PACKAGE
                     </button>
+                    <button class="cyber-btn" on:click={togglePublishPanel}>
+                        PUBLISH / LINK
+                    </button>
                     {#if detailPackage.cid}
                         <button class="cyber-btn ghost" on:click={() => { $ipfsHubSection = "cid-viewer"; }}>
                             VIEW IN CID VIEWER
@@ -509,6 +564,50 @@
                         BACK TO LIBRARY
                     </button>
                 </div>
+
+                {#if showPublishPanel}
+                    <div class="publish-panel" in:fly={{ y: 10, duration: 150 }}>
+                        <div class="section-label">PUBLISH / LINK PACKAGE</div>
+                        {#if (detailFull && detailFull.status === "published")}
+                            <div class="publish-info">
+                                This package is already published/linked with CID.
+                            </div>
+                        {:else}
+                            <div class="publish-desc">
+                                Link a CID to this package to mark it as published. Use the CID Viewer to fetch and verify content, then enter the CID here.
+                            </div>
+                            <div class="publish-form">
+                                <div class="form-group">
+                                    <label class="form-label" for="publish-cid">CID</label>
+                                    <input id="publish-cid" class="form-input mono" type="text" bind:value={publishCid} placeholder="Qm... or bafy..." />
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="publish-provider">PROVIDER</label>
+                                    <select id="publish-provider" class="form-input mono" bind:value={publishProvider}>
+                                        <option value="manual">Manual CID Link</option>
+                                        <option value="pinata" disabled>Pinata (coming soon)</option>
+                                        <option value="web3.storage" disabled>web3.storage (coming soon)</option>
+                                        <option value="installed_kubo" disabled>Installed Kubo (planned)</option>
+                                    </select>
+                                </div>
+                                {#if publishError}
+                                    <div class="error-bar" style="margin-bottom:0.5rem;">{publishError}</div>
+                                {/if}
+                                <div class="publish-actions">
+                                    <button class="cyber-btn small" on:click={doLinkCid} disabled={publishLinking || !publishCid.trim()}>
+                                        {publishLinking ? "LINKING..." : "LINK CID"}
+                                    </button>
+                                    <button class="cyber-btn small ghost" on:click={() => { showPublishPanel = false; publishError = ""; }}>
+                                        CANCEL
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="publish-note">
+                                Future: API-key providers (Pinata, web3.storage) and local Kubo publishing will be available after credential storage review.
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
             </div>
         {:else}
             {#each $contentLibrary as pkg (pkg.id)}
@@ -669,7 +768,7 @@
         border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 8px;
         padding: 1.2rem;
-        max-width: 800px;
+        max-width: 100%;
     }
     .detail-header {
         display: flex;
@@ -967,5 +1066,78 @@
     .cyber-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
+    }
+    .publish-panel {
+        margin-top: 1rem;
+        padding: 0.8rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 165, 0, 0.15);
+        border-radius: 6px;
+    }
+    .publish-info {
+        font-size: 0.65rem;
+        color: var(--color-primary);
+    }
+    .publish-desc {
+        font-size: 0.65rem;
+        color: #aaa;
+        margin-bottom: 0.75rem;
+        line-height: 1.4;
+    }
+    .publish-form {
+        margin-bottom: 0.5rem;
+    }
+    .publish-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+    }
+    .publish-note {
+        margin-top: 0.6rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 0.55rem;
+        color: #555;
+        line-height: 1.4;
+    }
+    .form-group {
+        margin-bottom: 0.5rem;
+    }
+    .form-label {
+        display: block;
+        font-size: 0.6rem;
+        letter-spacing: 1px;
+        color: #555;
+        margin-bottom: 0.25rem;
+    }
+    .form-input {
+        width: 100%;
+        background: #000;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 0.4rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .form-input:focus {
+        border-color: var(--color-primary);
+    }
+    select.form-input {
+        cursor: pointer;
+    }
+    .clear-preview-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 68, 68, 0.2);
+        color: #c66;
+        font-size: 0.5rem;
+        padding: 1px 5px;
+        border-radius: 3px;
+        cursor: pointer;
+    }
+    .clear-preview-btn:hover {
+        border-color: #ff5555;
+        color: #ff5555;
     }
 </style>

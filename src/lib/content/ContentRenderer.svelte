@@ -1,9 +1,12 @@
 <script>
     import { onDestroy } from "svelte";
+    import { core } from "@tauri-apps/api";
+    import { save } from "@tauri-apps/plugin-dialog";
 
     export let contentBase64 = "";
     export let contentType = "text/plain";
     export let sizeBytes = 0;
+    export let cid = "";
 
     let dataUrl = "";
     let textContent = "";
@@ -12,6 +15,8 @@
     let errorMsg = "";
     let decoded = false;
     let previousDataUrl = "";
+    let statusMsg = "";
+    let statusType = "";
 
     $: if (contentBase64) {
         decodeContent();
@@ -103,25 +108,58 @@
         return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     }
 
-    function openInBrowser() {
-        if (dataUrl) {
-            window.open(dataUrl, "_blank", "noopener,noreferrer");
+    async function saveFile() {
+        statusMsg = "";
+        statusType = "";
+        if (!contentBase64) return;
+
+        const extension = contentType.includes("/") ? contentType.split("/")[1].split(";")[0] : "bin";
+        const defaultName = `content.${extension || "bin"}`;
+
+        try {
+            const filePath = await save({
+                defaultPath: defaultName,
+                title: "Save Content",
+            });
+            if (!filePath) return;
+
+            if (cid) {
+                try {
+                    await core.invoke("content_library_save_cached", { cid, destination: filePath });
+                    statusMsg = "Saved";
+                    statusType = "ok";
+                    return;
+                } catch (_) {}
+            }
+
+            await core.invoke("content_library_write_to_path", {
+                contentBase64,
+                destination: filePath,
+            });
+            statusMsg = "Saved";
+            statusType = "ok";
+        } catch (err) {
+            statusMsg = "Save failed: " + String(err);
+            statusType = "error";
         }
     }
 
-    function saveFile() {
-        if (!contentBase64) return;
-        const bytes = Uint8Array.from(atob(contentBase64), (c) => c.charCodeAt(0));
-        const blob = new Blob([bytes], { type: contentType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        const extension = contentType.includes("/") ? contentType.split("/")[1].split(";")[0] : "bin";
-        a.download = `content.${extension || "bin"}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+    async function openExternal() {
+        statusMsg = "";
+        statusType = "";
+        if (cid) {
+            try {
+                await core.invoke("content_library_open_cached_file", { cid });
+                statusMsg = "Opened";
+                statusType = "ok";
+            } catch (err) {
+                statusMsg = "Open failed: " + String(err);
+                statusType = "error";
+            }
+        } else {
+            statusMsg = "Open external is available for cached CID content.";
+            statusType = "error";
+        }
     }
 
     onDestroy(() => {
@@ -130,6 +168,12 @@
 </script>
 
 <div class="content-renderer">
+    {#if statusMsg}
+        <div class="status-bar" class:status-ok={statusType === "ok"} class:status-error={statusType === "error"}>
+            {statusMsg}
+        </div>
+    {/if}
+
     {#if hasError}
         <div class="renderer-error">
             <span class="error-icon">x</span>
@@ -139,7 +183,7 @@
         <div class="render-image">
             <img src={dataUrl} alt="Content" on:error={() => { hasError = true; errorMsg = "Image failed to load"; }} />
             <div class="image-controls">
-                <button class="renderer-btn" on:click={openInBrowser}>OPEN EXTERNAL</button>
+                <button class="renderer-btn" on:click={openExternal} disabled={!cid}>OPEN EXTERNAL</button>
                 <button class="renderer-btn" on:click={saveFile}>SAVE</button>
             </div>
         </div>
@@ -169,7 +213,7 @@
             </div>
             <div class="binary-controls">
                 <button class="renderer-btn" on:click={saveFile}>SAVE FILE</button>
-                <button class="renderer-btn" on:click={openInBrowser} disabled={!dataUrl}>
+                <button class="renderer-btn" on:click={openExternal} disabled={!cid}>
                     OPEN EXTERNAL
                 </button>
             </div>
@@ -191,6 +235,9 @@
             </div>
             <div class="binary-controls">
                 <button class="renderer-btn" on:click={saveFile}>SAVE FILE</button>
+                {#if cid}
+                    <button class="renderer-btn" on:click={openExternal}>OPEN EXTERNAL</button>
+                {/if}
             </div>
             <div class="binary-note">
                 This content type cannot be previewed. Save and open with a compatible application.
@@ -209,6 +256,22 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 6px;
         padding: 0.6rem;
+    }
+    .status-bar {
+        padding: 0.3rem 0.6rem;
+        font-size: 0.6rem;
+        border-radius: 4px;
+        margin-bottom: 0.4rem;
+    }
+    .status-ok {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+    }
+    .status-error {
+        background: rgba(255, 68, 68, 0.08);
+        border: 1px solid rgba(255, 68, 68, 0.2);
+        color: #ff6666;
     }
     .renderer-error {
         display: flex;

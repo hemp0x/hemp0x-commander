@@ -7,12 +7,31 @@
     let clearing = false;
     let clearMsg = "";
 
+    let providerSettings = null;
+    let settingsEdited = false;
+    let settingsSaving = false;
+    let settingsMsg = "";
+    let settingsError = "";
+    let gatewayInput = "";
+
     async function loadStatus() {
         try {
             cacheStatus = await core.invoke("content_library_cache_status");
             cacheDir = await core.invoke("content_library_get_cache_dir");
         } catch {
             cacheStatus = null;
+        }
+    }
+
+    async function loadProviderSettings() {
+        try {
+            providerSettings = await core.invoke("ipfs_get_provider_settings");
+            gatewayInput = (providerSettings.gateways.viewing_gateways || []).join("\n");
+        } catch {
+            providerSettings = {
+                selected_publish_provider: "manual",
+                gateways: { viewing_gateways: [] },
+            };
         }
     }
 
@@ -36,9 +55,45 @@
         clearing = false;
     }
 
+    async function openCacheFolder() {
+        try {
+            await core.invoke("content_library_open_cache_folder");
+        } catch {}
+    }
+
+    function onGatewayInput() {
+        settingsEdited = true;
+    }
+
+    async function saveSettings() {
+        settingsSaving = true;
+        settingsError = "";
+        settingsMsg = "";
+        try {
+            const gateways = gatewayInput
+                .split("\n")
+                .map((g) => g.trim())
+                .filter((g) => g.length > 0);
+
+            const updated = {
+                selected_publish_provider: providerSettings.selected_publish_provider,
+                gateways: { viewing_gateways: gateways },
+            };
+
+            providerSettings = await core.invoke("ipfs_update_provider_settings", { settings: updated });
+            gatewayInput = (providerSettings.gateways.viewing_gateways || []).join("\n");
+            settingsEdited = false;
+            settingsMsg = "Settings saved.";
+        } catch (err) {
+            settingsError = String(err);
+        }
+        settingsSaving = false;
+    }
+
     import { onMount } from "svelte";
     onMount(() => {
         loadStatus();
+        loadProviderSettings();
     });
 </script>
 
@@ -46,20 +101,17 @@
     <h3 class="panel-title">PROVIDER SETTINGS</h3>
 
     <div class="notice-bar">
-        Configured publish providers are not enabled yet. This section will allow you to select and configure IPFS providers for publishing content packages.
+        Configured publish providers are not enabled yet. This section allows you to select and configure IPFS providers for publishing content packages.
     </div>
 
     <div class="provider-grid">
-        <div class="provider-card disabled">
+        <div class="provider-card">
             <div class="provider-header">
                 <span class="provider-name">Manual CID Import</span>
                 <span class="provider-status available">AVAILABLE</span>
             </div>
             <div class="provider-desc">
                 Import content by pasting a CID/hash. Creates a local package record for reference and library organization.
-            </div>
-            <div class="provider-detail">
-                Use the CID Viewer section to import CIDs manually.
             </div>
         </div>
 
@@ -71,9 +123,6 @@
             <div class="provider-desc">
                 Connect to a locally running Kubo/ipfs daemon for full IPFS node functionality including publishing and pinning.
             </div>
-            <div class="provider-detail">
-                Requires Kubo installed and running. Will be available after v2.1+ prototype evaluation.
-            </div>
         </div>
 
         <div class="provider-card disabled">
@@ -84,9 +133,32 @@
             <div class="provider-desc">
                 Upload and pin content through third-party pinning services using API keys.
             </div>
-            <div class="provider-detail">
-                API-key management will be available after security review of credential storage.
-            </div>
+        </div>
+    </div>
+
+    <div class="gateway-section">
+        <h4 class="section-subtitle">VIEWING GATEWAYS</h4>
+        <div class="gateway-desc">
+            Public gateways used for CID fetching in the CID Viewer. One gateway per line. At least one is required.
+        </div>
+        <textarea
+            class="gateway-textarea mono"
+            bind:value={gatewayInput}
+            on:input={onGatewayInput}
+            rows="4"
+            placeholder="https://dweb.link/ipfs/
+https://ipfs.io/ipfs/"
+        ></textarea>
+        <div class="settings-actions">
+            <button class="cyber-btn small" on:click={saveSettings} disabled={settingsSaving || !settingsEdited}>
+                {settingsSaving ? "SAVING..." : "SAVE GATEWAYS"}
+            </button>
+            {#if settingsError}
+                <span class="settings-error">{settingsError}</span>
+            {/if}
+            {#if settingsMsg}
+                <span class="settings-msg">{settingsMsg}</span>
+            {/if}
         </div>
     </div>
 
@@ -110,6 +182,9 @@
             <div class="cache-actions">
                 <button class="cyber-btn ghost small" on:click={clearCache} disabled={clearing || cacheStatus.entry_count === 0}>
                     {clearing ? "CLEARING..." : "CLEAR CACHE"}
+                </button>
+                <button class="cyber-btn ghost small" on:click={openCacheFolder}>
+                    OPEN FOLDER
                 </button>
                 <button class="cyber-btn ghost small" on:click={loadStatus}>REFRESH</button>
             </div>
@@ -157,7 +232,7 @@
         border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 8px;
         padding: 1rem 1.2rem;
-        max-width: 700px;
+        max-width: 100%;
     }
     .panel-title {
         font-size: 0.8rem;
@@ -224,10 +299,6 @@
         line-height: 1.4;
         margin-bottom: 0.25rem;
     }
-    .provider-detail {
-        font-size: 0.6rem;
-        color: #555;
-    }
     .privacy-section {
         padding: 0.8rem 0;
         border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -238,6 +309,48 @@
         letter-spacing: 1px;
         margin: 0 0 0.6rem 0;
         text-transform: uppercase;
+    }
+    .gateway-section {
+        padding: 0.6rem 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        margin-bottom: 0.8rem;
+    }
+    .gateway-desc {
+        font-size: 0.6rem;
+        color: #888;
+        margin-bottom: 0.5rem;
+        line-height: 1.4;
+    }
+    .gateway-textarea {
+        width: 100%;
+        background: #000;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 0.5rem 0.7rem;
+        border-radius: 4px;
+        font-size: 0.65rem;
+        outline: none;
+        resize: vertical;
+        box-sizing: border-box;
+        line-height: 1.6;
+    }
+    .gateway-textarea:focus {
+        border-color: var(--color-primary);
+    }
+    .settings-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .settings-error {
+        font-size: 0.55rem;
+        color: #ff6666;
+    }
+    .settings-msg {
+        font-size: 0.55rem;
+        color: var(--color-primary);
     }
     .cache-section {
         padding: 0.6rem 0;

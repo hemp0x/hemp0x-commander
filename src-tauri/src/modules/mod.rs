@@ -4,6 +4,7 @@ pub mod files;
 pub mod commands;
 pub mod content_library;
 pub mod ipfs_cache;
+pub mod provider_settings;
 pub mod process;
 pub mod runtime;
 pub mod rpc;

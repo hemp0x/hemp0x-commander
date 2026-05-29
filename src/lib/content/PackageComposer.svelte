@@ -416,16 +416,19 @@
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 8px;
-        padding: 1.2rem 1.5rem;
-        max-width: 900px;
-        max-height: calc(100vh - 250px);
-        overflow-y: auto;
+        padding: 0;
+        max-width: 100%;
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 220px);
     }
     .composer-title {
         font-size: 0.85rem;
         color: var(--color-primary);
         letter-spacing: 2px;
-        margin: 0 0 1.2rem 0;
+        margin: 0;
+        padding: 1rem 1.5rem 0.8rem;
+        flex-shrink: 0;
     }
     .error-bar {
         padding: 0.4rem 0.8rem;
@@ -434,12 +437,17 @@
         color: #ff6666;
         font-size: 0.75rem;
         border-radius: 4px;
-        margin-bottom: 1rem;
+        margin: 0 1.5rem 0.6rem;
         font-family: var(--font-mono);
+        flex-shrink: 0;
     }
     .composer-grid {
         display: flex;
         gap: 1.5rem;
+        padding: 0 1.5rem;
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
     }
     .form-col {
         flex: 1;
@@ -648,7 +656,10 @@
     .form-actions {
         display: flex;
         gap: 0.75rem;
-        margin-top: 1.25rem;
+        padding: 0.75rem 1.5rem;
+        border-top: 1px solid rgba(0, 255, 65, 0.08);
+        background: rgba(0, 0, 0, 0.2);
+        flex-shrink: 0;
     }
     .cyber-btn {
         background: rgba(0, 255, 65, 0.05);

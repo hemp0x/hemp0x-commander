@@ -22,6 +22,8 @@
     let fetchError = "";
     let cacheExists = false;
     let cacheStatus = null;
+    let gatewayOptions = [];
+    let pendingGatewayAction = "fetch";
 
     // For imported CID packages
     export let loadPackageId = null;
@@ -60,11 +62,12 @@
         }
     }
 
-    function askConsent() {
+    function askConsent(action = "fetch") {
         if (!cid.trim()) {
             fetchError = "Enter a CID to fetch.";
             return;
         }
+        pendingGatewayAction = action;
         fetchError = "";
         fetchState = "consenting";
     }
@@ -72,7 +75,11 @@
     function grantConsent() {
         consentGiven = true;
         fetchState = "idle";
-        doFetch();
+        if (pendingGatewayAction === "refresh") {
+            doRefresh();
+        } else {
+            doFetch();
+        }
     }
 
     function denyConsent() {
@@ -115,6 +122,7 @@
                 });
                 fetchState = "fetched";
                 cacheExists = true;
+                await loadCacheStatus();
             } catch (err) {
                 fetchState = "error";
                 fetchError = String(err);
@@ -133,6 +141,7 @@
                 });
                 fetchState = "fetched";
                 cacheExists = true;
+                await loadCacheStatus();
             } catch (err) {
                 fetchState = "error";
                 fetchError = String(err);
@@ -156,6 +165,13 @@
 
     onMount(() => {
         loadCacheStatus();
+        core.invoke("content_library_default_gateways")
+            .then((gateways) => {
+                gatewayOptions = Array.isArray(gateways) && gateways.length ? gateways : [];
+            })
+            .catch(() => {
+                gatewayOptions = [];
+            });
     });
 </script>
 
@@ -197,8 +213,13 @@
                 <div class="form-group">
                     <label class="form-label mono" for="cid-viewer-gateway">GATEWAY</label>
                     <select id="cid-viewer-gateway" class="form-input mono" bind:value={gatewayIndex}>
-                        <option value={0}>dweb.link (default)</option>
-                        <option value={1}>ipfs.io</option>
+                        {#if gatewayOptions.length}
+                            {#each gatewayOptions as gateway, idx}
+                                <option value={idx}>{gateway.replace(/^https?:\/\//, "").replace(/\/ipfs\/?$/, "")}{idx === 0 ? " (default)" : ""}</option>
+                            {/each}
+                        {:else}
+                            <option value={0}>dweb.link (default)</option>
+                        {/if}
                     </select>
                 </div>
             </div>
@@ -221,9 +242,9 @@
             <div class="ready-actions">
                 {#if cacheExists}
                     <button class="cyber-btn" on:click={loadCached}>OPEN CACHED</button>
-                    <button class="cyber-btn ghost" on:click={askConsent}>REFRESH FROM GATEWAY</button>
+                    <button class="cyber-btn ghost" on:click={() => askConsent("refresh")}>REFRESH FROM GATEWAY</button>
                 {:else}
-                    <button class="cyber-btn" on:click={askConsent}>FETCH FROM GATEWAY</button>
+                    <button class="cyber-btn" on:click={() => askConsent("fetch")}>FETCH FROM GATEWAY</button>
                 {/if}
             </div>
         </div>
@@ -274,6 +295,7 @@
                 contentBase64={fetchResult.content_base64}
                 contentType={fetchResult.content_type}
                 sizeBytes={fetchResult.size_bytes}
+                cid={fetchResult.cid}
             />
 
             <div class="content-actions">
@@ -292,9 +314,6 @@
             <div class="hint-text">
                 Enter an IPFS CID and click VIEW to fetch and preview content from public gateways.
             </div>
-            <div class="hint-note">
-                Content will be cached locally. First gateway request requires confirmation.
-            </div>
         </div>
     {/if}
 
@@ -303,6 +322,17 @@
             <span class="cache-label">CACHE</span>
             <span class="cache-stat">{cacheStatus.entry_count} entries</span>
             <span class="cache-stat">{cacheStatus.total_size_bytes < 1024 ? cacheStatus.total_size_bytes + " B" : cacheStatus.total_size_bytes < 1048576 ? (cacheStatus.total_size_bytes / 1024).toFixed(0) + " KB" : (cacheStatus.total_size_bytes / 1048576).toFixed(1) + " MB"}</span>
+            <div class="cache-actions">
+                <button class="cache-action-btn" on:click={async () => {
+                    try { await core.invoke("content_library_clear_cache"); cacheExists = false; fetchResult = null; fetchState = "idle"; await loadCacheStatus(); }
+                    catch (e) { fetchError = String(e); fetchState = "error"; }
+                }}>CLEAR</button>
+                <button class="cache-action-btn" on:click={async () => {
+                    try { await core.invoke("content_library_open_cache_folder"); }
+                    catch (e) { fetchError = String(e); fetchState = "error"; }
+                }}>FOLDER</button>
+                <button class="cache-action-btn" on:click={loadCacheStatus}>REFRESH</button>
+            </div>
         </div>
     {/if}
 </div>
@@ -567,11 +597,6 @@
         margin: 0 auto 0.4rem;
         line-height: 1.4;
     }
-    .hint-note {
-        font-size: 0.6rem;
-        color: #555;
-    }
-
     /* Cache status bar */
     .cache-status-bar {
         display: flex;

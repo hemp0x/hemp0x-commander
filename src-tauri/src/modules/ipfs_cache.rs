@@ -2,12 +2,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::io::Read;
 use std::time::Duration;
+use std::process::Command;
 
 use chrono::Utc;
 use serde::{Serialize, Deserialize};
 
 use crate::modules::files::data_dir;
 use crate::modules::content_library::validate_import_cid;
+use crate::modules::provider_settings;
 
 const DEFAULT_GATEWAYS: &[&str] = &[
     "https://dweb.link/ipfs/",
@@ -226,8 +228,8 @@ pub fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> R
         return Err("Content is already cached. Use refresh to re-fetch.".to_string());
     }
 
+    let gateways = provider_settings::viewing_gateways();
     let idx = gateway_index.unwrap_or(0);
-    let gateways = DEFAULT_GATEWAYS;
     if idx >= gateways.len() {
         return Err(format!("Invalid gateway index (max {})", gateways.len().saturating_sub(1)));
     }
@@ -235,7 +237,7 @@ pub fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> R
     let mut last_error = String::new();
     for offset in 0..gateways.len() {
         let gidx = (idx + offset) % gateways.len();
-        let gw = gateways[gidx];
+        let gw = gateways[gidx].as_str();
         match fetch_from_gateway(&cid, gw) {
             Ok((content_type, data)) => {
                 let final_type = guess_content_type_priority(&content_type, &data, &cid);
@@ -378,7 +380,127 @@ pub fn content_library_get_cache_dir() -> Result<String, String> {
 
 #[tauri::command]
 pub fn content_library_default_gateways() -> Result<Vec<String>, String> {
-    Ok(DEFAULT_GATEWAYS.iter().map(|s| s.to_string()).collect())
+    let gateways = provider_settings::viewing_gateways();
+    if gateways.is_empty() {
+        Ok(DEFAULT_GATEWAYS.iter().map(|s| s.to_string()).collect())
+    } else {
+        Ok(gateways)
+    }
+}
+
+#[tauri::command]
+pub fn content_library_save_cached(cid: String, destination: String) -> Result<String, String> {
+    let cid = cid.trim().to_string();
+    validate_import_cid(&cid)?;
+
+    let content_path = cid_content_path(&cid)?;
+    if !content_path.exists() {
+        return Err("Content not cached. Fetch first.".to_string());
+    }
+
+    let dest = PathBuf::from(destination.trim());
+    if dest.exists() {
+        return Err("Destination file already exists. Choose a different path.".to_string());
+    }
+    if let Some(parent) = dest.parent() {
+        if !parent.exists() {
+            return Err("Destination directory does not exist.".to_string());
+        }
+    }
+
+    fs::copy(&content_path, &dest).map_err(|e| format!("Save failed: {}", e))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn content_library_open_cached_file(cid: String) -> Result<String, String> {
+    let cid = cid.trim().to_string();
+    validate_import_cid(&cid)?;
+
+    let content_path = cid_content_path(&cid)?;
+    if !content_path.exists() {
+        return Err("Content not cached. Fetch first.".to_string());
+    }
+
+    let path_str = content_path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/c", "start", "", &path_str])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok(path_str)
+}
+
+#[tauri::command]
+pub fn content_library_open_cache_folder() -> Result<String, String> {
+    let dir = cache_dir()?;
+    let dir_str = dir.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&dir_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(dir_str)
+}
+
+#[tauri::command]
+pub fn content_library_write_to_path(content_base64: String, destination: String) -> Result<String, String> {
+    let dest = PathBuf::from(destination.trim());
+    if dest.exists() {
+        return Err("Destination file already exists.".to_string());
+    }
+    if let Some(parent) = dest.parent() {
+        if !parent.exists() {
+            return Err("Destination directory does not exist.".to_string());
+        }
+    }
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let data = STANDARD.decode(content_base64.as_bytes())
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    fs::write(&dest, &data).map_err(|e| format!("Write failed: {}", e))?;
+    Ok(dest.to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------

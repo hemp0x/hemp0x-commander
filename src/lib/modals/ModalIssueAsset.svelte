@@ -1,6 +1,8 @@
 <script>
     import { fly, fade } from "svelte/transition";
     import { createEventDispatcher } from "svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;
@@ -86,14 +88,15 @@
                 </div>
 
                 <div class="form-group full-width">
-                    <label for="root-ipfs">IPFS HASH (Optional)</label>
-                    <input
-                        id="root-ipfs"
-                        type="text"
-                        class="glass-input mono"
-                        placeholder="Qm..."
-                        bind:value={ipfs}
-                    />
+                    <div class="field-label-row">
+                        <label for="root-ipfs">IPFS HASH (Optional)</label>
+                        <HelpHitbox title="Root Asset Metadata">
+                            <p>Root assets are top-level asset names on the chain.</p>
+                            <p>Ownership of a root asset controls future sub-assets and metadata/reissue behavior.</p>
+                            <p>Metadata should be a published CID or hash reference. Create and publish the package in Content Library first, then select it here.</p>
+                        </HelpHitbox>
+                    </div>
+                    <IpfsHashField id="root-ipfs" bind:value={ipfs} />
                 </div>
 
                 <!-- Footer Row: Checkbox Left, Button Right -->
@@ -198,6 +201,11 @@
         color: #666;
         letter-spacing: 1.5px;
         text-transform: uppercase;
+    }
+    .field-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
     .static-value {
         padding: 0.7rem 1rem;

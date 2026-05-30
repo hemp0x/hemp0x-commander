@@ -63,6 +63,7 @@
     let reissueAsset = "";
     let reissueQty = "0";
     let reissueReissuable = true;
+    let reissueNewIpfs = "";
 
     // Confirm Modal
     let confirmOpen = false;
@@ -469,6 +470,7 @@
                 name: reissueAsset,
                 qty: String(reissueQty),
                 reissuable: reissueReissuable,
+                newIpfs: reissueNewIpfs || "",
             });
             confirmType = "REISSUE";
             status = "";
@@ -572,12 +574,13 @@
                         changeAddress: "",
                         reissuable: previewData.reissuable,
                         newUnits: null,
-                        newIpfs: "",
+                        newIpfs: previewData.ipfs_hash || "",
                     })
                     .catch((e) => {
                         throw "Reissue failed: " + e;
                     });
                 status = `Reissued! TXID: ${txid.slice(0, 16)}...`;
+                reissueNewIpfs = "";
             } else if (confirmType === "NFT MINT") {
                 const tags = previewData.tags.map(t => t.split("#")[1] || t);
                 const ipfsHashes = previewData.ipfs_hash
@@ -981,10 +984,15 @@
         isOpen={reissueModalOpen}
         {nodeOnline}
         assets={myAssets}
+        currentIpfs={assetMetadata?.ipfs_hash || ""}
         bind:name={reissueAsset}
         bind:qty={reissueQty}
         bind:reissuable={reissueReissuable}
-        on:close={() => (reissueModalOpen = false)}
+        bind:newIpfs={reissueNewIpfs}
+        on:close={() => {
+            reissueModalOpen = false;
+            reissueNewIpfs = "";
+        }}
         on:reissue={() => {
             initiateReissue();
             reissueModalOpen = false;

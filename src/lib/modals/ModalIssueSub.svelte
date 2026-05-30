@@ -1,6 +1,8 @@
 <script>
     import { fly, fade } from "svelte/transition";
     import { createEventDispatcher } from "svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;
@@ -95,14 +97,15 @@
                 </div>
 
                 <div class="form-group full-width">
-                    <label for="sub-ipfs">IPFS HASH (Optional)</label>
-                    <input
-                        id="sub-ipfs"
-                        type="text"
-                        class="glass-input mono"
-                        placeholder="Qm..."
-                        bind:value={ipfs}
-                    />
+                    <div class="field-label-row">
+                        <label for="sub-ipfs">IPFS HASH (Optional)</label>
+                        <HelpHitbox title="Sub-Asset Metadata">
+                            <p>Sub-assets live under a parent asset namespace.</p>
+                            <p>Useful for collections, editions, categories, and structured asset trees.</p>
+                            <p>Metadata should be a CID/hash reference. Publish or link the package first, then select it here.</p>
+                        </HelpHitbox>
+                    </div>
+                    <IpfsHashField id="sub-ipfs" bind:value={ipfs} />
                 </div>
 
                 <!-- Footer Row: Checkbox Left, Button Right -->
@@ -206,6 +209,11 @@
         color: #666;
         letter-spacing: 1.5px;
         text-transform: uppercase;
+    }
+    .field-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
     .static-value {
         padding: 0.7rem 1rem;

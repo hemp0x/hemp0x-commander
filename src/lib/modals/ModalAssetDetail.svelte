@@ -6,6 +6,8 @@
     import "../../components.css";
     import Tooltip from "../ui/Tooltip.svelte";
     import IpfsReference from "../ui/IpfsReference.svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
     import ModalAlert from "./ModalAlert.svelte";
     import { addNotification } from "../stores/notifications.js";
 
@@ -508,14 +510,14 @@
 
                                     <div class="compose-body">
                                         <div class="compose-field">
-                                            <label for="compose-ipfs">IPFS Hash</label>
-                                            <input
-                                                id="compose-ipfs"
-                                                type="text"
-                                                bind:value={composeIpfsHash}
-                                                placeholder="Qm..."
-                                                disabled={composeBroadcasting || composeSent || composePreview}
-                                            />
+                                            <div class="compose-label-row">
+                                                <label for="compose-ipfs">MESSAGE CID / HASH</label>
+                                                <HelpHitbox title="Asset Messages">
+                                                    <p>Asset messages store a CID or hash reference on-chain, not the full content.</p>
+                                                    <p>Create a text package in Content Library, publish or link it to a CID, then select that CID here.</p>
+                                                </HelpHitbox>
+                                            </div>
+                                            <IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || composeSent || !!composePreview} />
                                         </div>
                                         <div class="compose-field">
                                             <label for="compose-expire">Expire Time (UTC timestamp, optional)</label>
@@ -524,7 +526,7 @@
                                                 type="text"
                                                 bind:value={composeExpireTime}
                                                 placeholder="e.g. 1737500000"
-                                                disabled={composeBroadcasting || composeSent || composePreview}
+                                                disabled={composeBroadcasting || composeSent || !!composePreview}
                                             />
                                         </div>
 
@@ -1020,6 +1022,11 @@
         display: flex;
         flex-direction: column;
         gap: 0.2rem;
+    }
+    .compose-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
     .compose-field label {
         font-size: 0.55rem;

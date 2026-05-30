@@ -196,7 +196,7 @@ impl Default for AppSettings {
   }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct IssuePreview {
   pub operation_type: String,
   pub asset_name: String,

@@ -1,15 +1,19 @@
 <script>
     import { fly, fade } from "svelte/transition";
     import { createEventDispatcher } from "svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;
     export let nodeOnline = false;
     export let assets = [];
+    export let currentIpfs = "";
 
     // Bindable fields
     export let name = "";
     export let qty = "1";
+    export let newIpfs = "";
     export let reissuable = true;
 
     function close() {
@@ -19,6 +23,8 @@
     function reissue() {
         dispatch("reissue");
     }
+
+    $: selectedAsset = assets.find((a) => a.name === name);
 </script>
 
 {#if isOpen}
@@ -60,8 +66,23 @@
                     <span class="label-text">COST</span>
                     <div class="static-value">0.05 HEMP</div>
                 </div>
+
+                {#if currentIpfs}
+                    <div class="form-group full-width">
+                        <span class="label-text">CURRENT IPFS METADATA</span>
+                        <div class="current-ipfs mono">{currentIpfs}</div>
+                    </div>
+                {/if}
+
                 <div class="form-group full-width">
-                    <label for="reissue-qty">ADD QUANTITY</label>
+                    <div class="field-label-row">
+                        <label for="reissue-qty">ADD QUANTITY</label>
+                        <HelpHitbox title="Reissue Behavior">
+                            <p>Reissue increases the total supply of an existing asset.</p>
+                            <p>Set quantity to zero to update metadata (IPFS) without increasing supply.</p>
+                            <p>Unchecking "Keep Reissuable" permanently locks the supply. This cannot be undone.</p>
+                        </HelpHitbox>
+                    </div>
                     <input
                         id="reissue-qty"
                         type="number"
@@ -69,6 +90,17 @@
                         placeholder="0"
                         bind:value={qty}
                     />
+                </div>
+
+                <div class="form-group full-width">
+                    <div class="field-label-row">
+                        <label for="reissue-new-ipfs">NEW IPFS HASH (Optional)</label>
+                        <HelpHitbox title="Update Metadata">
+                            <p>Leave empty to keep the current metadata unchanged.</p>
+                            <p>To update metadata, enter a CID or use the Content Library picker. The quantity must be zero for a pure metadata update.</p>
+                        </HelpHitbox>
+                    </div>
+                    <IpfsHashField id="reissue-new-ipfs" bind:value={newIpfs} />
                 </div>
 
                 <!-- Footer for Reissue: Checkbox Left, Button Right -->
@@ -173,6 +205,11 @@
         letter-spacing: 1.5px;
         text-transform: uppercase;
     }
+    .field-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
     .static-value {
         padding: 0.7rem 1rem;
         background: rgba(255, 255, 255, 0.03);
@@ -181,6 +218,17 @@
         color: #888;
         font-size: 0.85rem;
         font-family: var(--font-mono);
+    }
+    .current-ipfs {
+        padding: 0.6rem 0.8rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: #888;
+        font-size: 0.75rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .glass-input {
         background: rgba(0, 0, 0, 0.5);

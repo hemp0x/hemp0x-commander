@@ -1,6 +1,8 @@
 <script>
     import { fly, fade } from "svelte/transition";
     import { createEventDispatcher } from "svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;
@@ -67,14 +69,15 @@
                 </div>
 
                 <div class="form-group wide">
-                    <label for="nft-ipfs">IPFS HASH (Optional)</label>
-                    <input
-                        id="nft-ipfs"
-                        type="text"
-                        class="glass-input mono"
-                        placeholder="Qm..."
-                        bind:value={ipfs}
-                    />
+                    <div class="field-label-row">
+                        <label for="nft-ipfs">IPFS HASH (Optional)</label>
+                        <HelpHitbox title="Unique Asset / NFT Metadata">
+                            <p>Unique assets (NFTs) are one-of-one units under a parent asset.</p>
+                            <p>Useful for collectibles, certificates, licenses, and media metadata.</p>
+                            <p>Metadata should be a CID/hash reference. Create and publish the package first, then select it here.</p>
+                        </HelpHitbox>
+                    </div>
+                    <IpfsHashField id="nft-ipfs" bind:value={ipfs} />
                 </div>
 
                 <!-- NFT Footer: Button Right aligned -->
@@ -176,6 +179,11 @@
         color: #666;
         letter-spacing: 1.5px;
         text-transform: uppercase;
+    }
+    .field-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
     .static-value {
         padding: 0.7rem 1rem;

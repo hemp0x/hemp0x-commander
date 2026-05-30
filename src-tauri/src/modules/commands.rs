@@ -2527,20 +2527,28 @@ pub fn preview_issue_unique_asset(
   })
 }
 
-#[tauri::command]
-pub fn preview_reissue_asset(
-  name: String,
-  qty: String,
+fn build_reissue_preview(
+  name: &str,
+  qty_val: f64,
+  units: u8,
   reissuable: bool,
+  new_ipfs: &str,
 ) -> Result<IssuePreview, String> {
-  ensure_config()?;
-  let name = name.trim().to_string();
-  validate_asset_name(&name)?;
-  let qty_val = parse_non_negative_amount(&qty)?;
-  let units = get_asset_units(&name)?;
   let mut warnings = Vec::new();
+  let mut ipfs_hash = None;
+  let trimmed_ipfs = new_ipfs.trim().to_string();
+  if !trimmed_ipfs.is_empty() {
+    if let Err(e) = validate_ipfs_reference(&trimmed_ipfs) {
+      return Err(format!("Invalid IPFS hash: {e}"));
+    }
+    ipfs_hash = Some(trimmed_ipfs.clone());
+  }
   if qty_val == 0.0 {
-    warnings.push("Reissue amount is zero — no new supply will be created, but metadata/IPFS or reissuable flag may be updated.".to_string());
+    if ipfs_hash.is_some() {
+      warnings.push("Quantity is zero and a new IPFS hash is set — this will be a metadata update without increasing supply.".to_string());
+    } else {
+      warnings.push("Reissue amount is zero — no new supply will be created, but metadata/IPFS or reissuable flag may be updated.".to_string());
+    }
   }
   if !reissuable {
     warnings.push("Disabling reissuability is IRREVERSIBLE. The asset supply will be permanently locked.".to_string());
@@ -2558,11 +2566,11 @@ pub fn preview_reissue_asset(
   );
   Ok(IssuePreview {
     operation_type: "reissue".to_string(),
-    asset_name: name,
+    asset_name: name.to_string(),
     qty: Some(format!("{}", qty_val)),
     units: Some(units),
     reissuable: Some(reissuable),
-    ipfs_hash: None,
+    ipfs_hash,
     parent_asset: None,
     tags: None,
     is_irreversible,
@@ -2570,6 +2578,21 @@ pub fn preview_reissue_asset(
     summary,
     validated: true,
   })
+}
+
+#[tauri::command]
+pub fn preview_reissue_asset(
+  name: String,
+  qty: String,
+  reissuable: bool,
+  new_ipfs: String,
+) -> Result<IssuePreview, String> {
+  ensure_config()?;
+  let name = name.trim().to_string();
+  validate_asset_name(&name)?;
+  let qty_val = parse_non_negative_amount(&qty)?;
+  let units = get_asset_units(&name)?;
+  build_reissue_preview(&name, qty_val, units, reissuable, &new_ipfs)
 }
 
 #[tauri::command]
@@ -3842,7 +3865,7 @@ mod tests {
     validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
     message_authority_asset_name,
     parse_message_entry, parse_channel_name_list, parse_messaging_info,
-    validate_ipfs_reference, build_ipfs_gateway_url,
+    validate_ipfs_reference, build_ipfs_gateway_url, build_reissue_preview,
     validate_raw_tx_hex, validate_tx_input, normalize_raw_tx_outputs,
   };
 
@@ -3927,6 +3950,30 @@ mod tests {
         "QmHash",
       ]
     );
+  }
+
+  // --- Reissue Preview Tests ---
+
+  #[test]
+  fn reissue_preview_empty_ipfs_preserves_old_behavior() {
+    let preview = build_reissue_preview("TOKEN", 0.0, 0, true, "").unwrap();
+    assert_eq!(preview.ipfs_hash, None);
+    assert_eq!(preview.qty, Some("0".to_string()));
+    assert!(preview.warnings.iter().any(|w| w.contains("no new supply will be created")));
+  }
+
+  #[test]
+  fn reissue_preview_valid_ipfs_includes_it() {
+    let preview = build_reissue_preview("TOKEN", 0.0, 0, true, "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26").unwrap();
+    assert_eq!(preview.ipfs_hash, Some("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string()));
+    assert!(preview.warnings.iter().any(|w| w.contains("metadata update without increasing supply")));
+  }
+
+  #[test]
+  fn reissue_preview_invalid_ipfs_is_rejected() {
+    let result = build_reissue_preview("TOKEN", 0.0, 0, true, "bad hash with spaces");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Invalid IPFS hash"));
   }
 
   // --- Asset Transfer Preview Tests ---

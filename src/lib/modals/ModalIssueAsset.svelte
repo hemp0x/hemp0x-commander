@@ -7,6 +7,7 @@
 
     export let isOpen = false;
     export let nodeOnline = false;
+    export let inline = false;
 
     // Bindable fields
     export let name = "";
@@ -24,232 +25,301 @@
     }
 </script>
 
-{#if isOpen}
-    <div
-        class="modal-overlay"
-        transition:fade={{ duration: 150 }}
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        role="button"
-        tabindex="0"
-    >
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div
-            class="form-panel glass-modal"
-            on:click|stopPropagation
-            transition:fly={{ y: 20 }}
-        >
-            <div class="form-header compact">
-                <button class="back-btn" on:click={close} title="Close">
-                    ← BACK
-                </button>
-                <span class="form-title">CREATE ROOT ASSET</span>
+{#snippet panelContent()}
+    <div class="modal-header">
+        <h3>Create Root Asset</h3>
+        <button class="close-btn" on:click={close}>&times;</button>
+    </div>
+
+    <div class="modal-body">
+        {#if !nodeOnline}
+            <div class="offline-banner">
+                Node offline or unavailable. Asset creation requires an active RPC connection.
             </div>
-
-            <div class="form-grid compact-grid">
-                <div class="form-group wide">
-                    <label for="root-name">ASSET NAME</label>
-                    <input
-                        id="root-name"
-                        type="text"
-                        class="glass-input"
-                        placeholder="MY_TOKEN"
-                        bind:value={name}
-                    />
+        {:else}
+            <div class="panel-body">
+                <div class="panel-title-row">
+                    <h4>Issue New Root Asset</h4>
+                    <HelpHitbox title="Root Assets">
+                        <p>Root assets are top-level asset names on the chain.</p>
+                        <p>Ownership of a root asset controls future sub-assets and metadata/reissue behavior.</p>
+                        <p>Metadata should be a published CID or hash reference. Create and publish the package in Content Library first, then select it here.</p>
+                    </HelpHitbox>
                 </div>
 
-                <div class="form-group narrow">
-                    <span class="label-text">COST</span>
-                    <div class="static-value">0.25 HEMP</div>
+                <div class="field-row">
+                    <div class="field-group flex-grow">
+                        <label for="root-name">Asset Name</label>
+                        <input
+                            id="root-name"
+                            type="text"
+                            class="cyber-input"
+                            placeholder="MY_TOKEN"
+                            bind:value={name}
+                        />
+                    </div>
+                    <div class="field-group narrow-inline">
+                        <span class="field-label">Cost</span>
+                        <div class="read-only-field">0.25 HEMP</div>
+                    </div>
                 </div>
 
-                <div class="form-group wide">
-                    <label for="root-qty">QUANTITY</label>
-                    <input
-                        id="root-qty"
-                        type="number"
-                        class="glass-input mono"
-                        placeholder="1"
-                        bind:value={qty}
-                    />
+                <div class="field-row">
+                    <div class="field-group flex-grow">
+                        <label for="root-qty">Quantity</label>
+                        <input
+                            id="root-qty"
+                            type="number"
+                            class="cyber-input mono"
+                            placeholder="1"
+                            bind:value={qty}
+                        />
+                    </div>
+                    <div class="field-group narrow-inline">
+                        <label for="root-units">Decimals</label>
+                        <input
+                            id="root-units"
+                            type="number"
+                            class="cyber-input mono"
+                            min="0"
+                            max="8"
+                            bind:value={units}
+                        />
+                    </div>
                 </div>
 
-                <div class="form-group narrow">
-                    <label for="root-units">DECIMALS</label>
-                    <input
-                        id="root-units"
-                        type="number"
-                        class="glass-input mono"
-                        min="0"
-                        max="8"
-                        bind:value={units}
-                    />
-                </div>
-
-                <div class="form-group full-width">
-                    <div class="field-label-row">
-                        <label for="root-ipfs">IPFS HASH (Optional)</label>
-                        <HelpHitbox title="Root Asset Metadata">
-                            <p>Root assets are top-level asset names on the chain.</p>
-                            <p>Ownership of a root asset controls future sub-assets and metadata/reissue behavior.</p>
-                            <p>Metadata should be a published CID or hash reference. Create and publish the package in Content Library first, then select it here.</p>
-                        </HelpHitbox>
+                <div class="field-group">
+                    <div class="label-row">
+                        <label for="root-ipfs">IPFS Metadata (Optional)</label>
                     </div>
                     <IpfsHashField id="root-ipfs" bind:value={ipfs} />
                 </div>
 
-                <!-- Footer Row: Checkbox Left, Button Right -->
-                <div class="form-group full-width action-row">
-                    <label class="checkbox-wrap">
+                <div class="panel-actions align-center">
+                    <label class="confirm-check">
                         <input type="checkbox" bind:checked={reissuable} />
                         <span class="checkbox-visual"></span>
-                        <span class="checkbox-text">REISSUABLE</span>
+                        <span class="check-label">Reissuable</span>
                     </label>
-
                     <button
-                        class="neon-btn"
+                        class="cyber-btn"
                         on:click={create}
                         disabled={!nodeOnline || !name}
                     >
-                        <span class="btn-glow"></span>
                         CREATE ASSET
                     </button>
                 </div>
             </div>
-        </div>
+        {/if}
     </div>
+{/snippet}
+
+{#if isOpen}
+    {#if inline}
+        <div class="create-panel" in:fade={{ duration: 150 }}>
+            {@render panelContent()}
+        </div>
+    {:else}
+        <div
+            class="modal-backdrop"
+            role="button"
+            tabindex="0"
+            on:click={close}
+            on:keydown={(e) => e.key === "Escape" && close()}
+            transition:fade={{ duration: 200 }}
+        >
+            <div
+                class="modal glass-panel"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+                on:click|stopPropagation
+                on:keydown={() => {}}
+                transition:fly={{ y: 20, duration: 200 }}
+            >
+                {@render panelContent()}
+            </div>
+        </div>
+    {/if}
 {/if}
 
 <style>
-    /* ═══════════════ LOCAL MODAL STYLES ═══════════════ */
-    .glass-modal {
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 8px;
-        box-shadow:
-            0 0 80px rgba(0, 0, 0, 0.8),
-            0 0 40px rgba(0, 255, 65, 0.1);
-        overflow: hidden;
-    }
-    .form-panel {
-        max-width: 700px;
-        margin: 0 auto;
-        padding: 2rem;
-        width: 100%; /* Fix width */
-    }
-    .form-header.compact {
-        padding: 0.8rem 1.5rem;
-    }
-    .form-header {
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
         display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 0.5rem;
+        padding-bottom: 1.5rem;
+        z-index: 200000;
+        backdrop-filter: blur(5px);
+    }
+    .modal {
+        width: 560px;
+        max-width: 92vw;
+        max-height: calc(100vh - 2rem);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: rgba(10, 15, 12, 0.98);
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
         align-items: center;
-        gap: 1rem;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        margin-bottom: 0.75rem;
+        padding: 0.5rem 1rem 0.65rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
     }
-    .back-btn {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #888;
-        padding: 0.4rem 0.8rem;
-        font-size: 0.7rem;
-        font-weight: 500;
+    .modal-header h3 {
+        margin: 0;
+        color: var(--color-primary);
+        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        font-size: 0.9rem;
         letter-spacing: 1px;
-        border-radius: 6px;
+    }
+    .close-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem -0.4rem -0.35rem 0;
     }
-    .back-btn:hover {
-        color: var(--color-primary);
-        border-color: var(--color-primary);
-        background: rgba(0, 255, 65, 0.05);
+    .close-btn:hover { color: #fff; }
+
+    .modal-body {
+        padding: 0.6rem 0.9rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
-    .form-title {
-        color: var(--color-primary);
-        font-size: 0.85rem;
-        font-weight: 600;
-        letter-spacing: 1.5px;
+    .modal-body::-webkit-scrollbar {
+        width: 8px;
     }
-    .form-grid.compact-grid {
-        gap: 0.8rem 1.2rem;
-        padding: 0 1.5rem 1.5rem;
+    .modal-body::-webkit-scrollbar-track {
+        background: transparent;
     }
-    .form-grid {
-        display: grid;
-        grid-template-columns: repeat(12, 1fr);
-        gap: 1rem 1.5rem;
+    .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
     }
-    .form-group {
+    .modal-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+
+    .panel-body {
         display: flex;
         flex-direction: column;
         gap: 0.4rem;
+        padding-bottom: 1.2rem;
     }
-    .form-group.full-width {
-        grid-column: span 12;
+    .panel-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
     }
-    .form-group.wide {
-        grid-column: span 8;
+    .panel-title-row h4 {
+        margin: 0;
+        color: var(--color-primary);
+        font-size: 0.85rem;
+        letter-spacing: 1px;
     }
-    .form-group.narrow {
-        grid-column: span 4;
+
+    .field-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
     }
+
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .field-group.narrow-inline {
+        max-width: 140px;
+    }
+    .field-group.flex-grow {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .label-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .label-row label {
+        margin-bottom: 0;
+    }
+
     label,
-    .label-text {
-        font-size: 0.6rem;
-        color: #666;
-        letter-spacing: 1.5px;
-        text-transform: uppercase;
+    .field-label {
+        color: #888;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.15rem;
     }
-    .field-label-row {
+
+    .cyber-input {
+        width: 100%;
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        color: #fff;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        box-sizing: border-box;
+        outline: none;
+        transition: all 0.2s;
+    }
+    .cyber-input:focus {
+        border-color: var(--color-primary);
+    }
+    .cyber-input::placeholder {
+        color: #555;
+    }
+
+    .read-only-field {
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: #888;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .confirm-check {
         display: flex;
         align-items: center;
         gap: 0.5rem;
-    }
-    .static-value {
-        padding: 0.7rem 1rem;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid transparent;
-        border-radius: 8px;
-        color: #888;
-        font-size: 0.85rem;
-        font-family: var(--font-mono);
-    }
-    .glass-input {
-        background: rgba(0, 0, 0, 0.5);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #fff;
-        padding: 0.7rem 1rem;
-        font-size: 0.85rem;
-        border-radius: 8px;
-        outline: none;
-        width: 100%;
-        transition: all 0.2s;
-        backdrop-filter: blur(5px);
-    }
-    .glass-input:focus {
-        border-color: var(--color-primary);
-        box-shadow:
-            0 0 20px rgba(0, 255, 65, 0.15),
-            inset 0 0 20px rgba(0, 255, 65, 0.03);
-    }
-    .action-row {
-        display: flex !important;
-        flex-direction: row !important;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 0.5rem;
-        gap: 1rem;
-    }
-    .checkbox-wrap {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
+        color: #ddd;
+        font-size: 0.8rem;
         cursor: pointer;
-        padding: 0.5rem 0;
     }
-    .checkbox-wrap input {
+    .confirm-check input {
         display: none;
     }
     .checkbox-visual {
@@ -259,13 +329,14 @@
         border-radius: 4px;
         transition: all 0.15s;
         position: relative;
+        flex-shrink: 0;
     }
-    .checkbox-wrap input:checked + .checkbox-visual {
+    .confirm-check input:checked + .checkbox-visual {
         background: var(--color-primary);
         border-color: var(--color-primary);
         box-shadow: 0 0 10px var(--color-primary);
     }
-    .checkbox-wrap input:checked + .checkbox-visual::after {
+    .confirm-check input:checked + .checkbox-visual::after {
         content: "✓";
         position: absolute;
         top: -1px;
@@ -274,64 +345,63 @@
         color: #000;
         font-weight: bold;
     }
-    .checkbox-text {
+    .check-label {
         font-size: 0.65rem;
         color: #888;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
     }
-    .checkbox-wrap input:checked ~ .checkbox-text {
+    .confirm-check input:checked ~ .check-label {
         color: #fff;
     }
 
-    /* Buttons */
-    .neon-btn {
-        position: relative;
-        background: linear-gradient(
-            180deg,
-            rgba(0, 255, 65, 0.15) 0%,
-            rgba(0, 255, 65, 0.05) 100%
-        );
-        border: 1px solid var(--color-primary);
+    .panel-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 0.25rem;
+    }
+    .panel-actions.align-center {
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 0.5rem;
+    }
+
+    .cyber-btn {
+        padding: 0.5rem 1rem;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         color: var(--color-primary);
-        padding: 0.8rem 2rem;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 2px;
-        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        border-radius: 6px;
         cursor: pointer;
+        letter-spacing: 1px;
         transition: all 0.2s;
-        overflow: hidden;
     }
-    .neon-btn:hover:not(:disabled) {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow:
-            0 0 20px var(--color-primary),
-            0 0 30px rgba(0, 255, 65, 0.3);
-        transform: translateY(-1px);
+    .cyber-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
     }
-    .neon-btn:disabled {
+    .cyber-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
     }
-    .btn-glow {
-        position: absolute;
-        inset: -50%;
-        background: conic-gradient(
-            transparent,
-            transparent,
-            transparent,
-            rgba(0, 255, 65, 0.2)
-        );
-        animation: spin 4s linear infinite;
-        opacity: 0;
+
+    .offline-banner {
+        text-align: center;
+        padding: 2rem;
+        color: #ff5555;
+        font-size: 0.85rem;
+        border: 1px solid rgba(255, 0, 0, 0.2);
+        border-radius: 8px;
+        background: rgba(255, 0, 0, 0.05);
     }
-    .neon-btn:hover .btn-glow {
-        opacity: 1;
-    }
-    @keyframes spin {
-        100% {
-            transform: rotate(360deg);
-        }
+
+    /* Inline panel mode */
+    .create-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 </style>

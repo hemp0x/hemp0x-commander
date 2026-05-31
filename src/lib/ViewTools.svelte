@@ -19,10 +19,19 @@
   import IpfsHub from "./content/IpfsHub.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
   import { addToastNotification } from "./stores/notifications.js";
+  import { cidViewerTarget, ipfsHubSection } from "./stores/contentLibrary.js";
 
   let activeSubTab = "CONSOLE";
   let networkMode = "mainnet";
   let tauriReady = false;
+  let ipfsOpenCid = null;
+  let lastCidTarget = null;
+  $: if ($cidViewerTarget && $cidViewerTarget !== lastCidTarget) {
+      lastCidTarget = $cidViewerTarget;
+      activeSubTab = "IPFS";
+      ipfsHubSection.set("cid-viewer");
+      ipfsOpenCid = $cidViewerTarget;
+  }
 
   let toastMsg = "";
   let toastType = "info"; // info, error, success
@@ -801,7 +810,7 @@
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
           {:else if activeSubTab === "IPFS"}
-            <IpfsHub />
+            <IpfsHub openCid={ipfsOpenCid} />
           {/if}
         </div>
       {/key}

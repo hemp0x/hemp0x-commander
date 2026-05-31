@@ -43,6 +43,9 @@
     let selectedGovAsset = null;
     let advancedModalOpen = false;
 
+    // Back navigation: remember last detail asset when opening action panels
+    let lastDetailAsset = null;
+
     // Browse Modal
     let browseModalOpen = false;
     let browsePattern = "";
@@ -333,6 +336,15 @@
 
     async function openDetail(asset) {
         selectedDetail = asset;
+        // Close all other panels when opening detail
+        advancedModalOpen = false;
+        createModalOpen = false;
+        browseModalOpen = false;
+        transferModalOpen = false;
+        reissueModalOpen = false;
+        subModalOpen = false;
+        nftModalOpen = false;
+        govModalOpen = false;
         assetMetadata = null;
         metadataLoading = true;
 
@@ -378,9 +390,23 @@
     }
 
     function goToTransfer(assetName) {
+        lastDetailAsset = selectedDetail;
         selectedAsset = assetName;
-        // selectedDetail = null; // Keep detail open behind it
-        transferModalOpen = true; // Open as Modal
+        selectedDetail = null; // Close detail, open transfer inline
+        transferModalOpen = true;
+    }
+
+    function goToReissue(asset) {
+        lastDetailAsset = selectedDetail;
+        reissueAsset = asset.name;
+        selectedDetail = null;
+        reissueModalOpen = true;
+    }
+
+    function returnToDetail() {
+        const asset = lastDetailAsset;
+        lastDetailAsset = null;
+        if (asset) openDetail(asset);
     }
 
     function initiateTransfer() {
@@ -661,6 +687,7 @@
     }
 
     function goToSubAsset(parentName) {
+        lastDetailAsset = selectedDetail;
         issueParent = parentName;
         issueType = "sub";
         issueName = "";
@@ -668,24 +695,29 @@
         issueUnits = 0;
         issueReissue = true;
         issueIpfs = "";
-        subModalOpen = true; // Open as Modal
+        selectedDetail = null;
+        subModalOpen = true;
     }
 
     function goToNft(parentName) {
+        lastDetailAsset = selectedDetail;
         issueParent = parentName;
         issueType = "nft";
         nftTag = "";
         issueIpfs = "";
-        nftModalOpen = true; // Open as Modal
+        selectedDetail = null;
+        nftModalOpen = true;
     }
 
     async function openGovernance(asset) {
+        lastDetailAsset = selectedDetail;
         // We need full asset data (units, ipfs, etc) for governance
         try {
             const details = await core.invoke("get_asset_data", {
                 name: asset.name,
             });
             selectedGovAsset = { ...asset, ...details }; // Merge list info with full details
+            selectedDetail = null;
             govModalOpen = true;
         } catch (e) {
             console.error("Failed to load details for governance", e);
@@ -698,14 +730,28 @@
         <!-- HEADER -->
         <header class="panel-header">
             <div class="header-left">
-                <span class="header-title">◈ MY ASSETS</span>
+                <button
+                    type="button"
+                    class="header-title"
+                    class:active={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                    on:click={() => { advancedModalOpen = false; createModalOpen = false; browseModalOpen = false; selectedDetail = null; transferModalOpen = false; reissueModalOpen = false; subModalOpen = false; nftModalOpen = false; govModalOpen = false; }}
+                >
+                    ◈ MY ASSETS
+                </button>
             </div>
             <div class="header-options">
                 <Tooltip
                     text={showHidden ? "Hide hidden" : "Show hidden assets"}
                 >
-                    <label class="toggle-hidden">
-                        <input type="checkbox" bind:checked={showHidden} />
+                    <label
+                        class="toggle-hidden"
+                        class:disabled={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                    >
+                        <input
+                            type="checkbox"
+                            bind:checked={showHidden}
+                            disabled={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                        />
                         <img
                             src={showHidden ? eyeOpen : eyeClosed}
                             alt="Visibility"
@@ -718,14 +764,15 @@
                 <button
                     class="header-btn refresh-btn"
                     on:click={refreshAssets}
-                    disabled={!nodeOnline}
+                    disabled={!nodeOnline || advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
                     title="Refresh Asset List"
                 >
                     <span class="btn-icon">↻</span> REFRESH
                 </button>
                 <button
                     class="header-btn create-btn"
-                    on:click={() => (createModalOpen = true)}
+                    class:active={createModalOpen}
+                    on:click={() => { createModalOpen = !createModalOpen; advancedModalOpen = false; browseModalOpen = false; }}
                     disabled={!nodeOnline}
                     title="Create New Root Asset"
                 >
@@ -733,7 +780,8 @@
                 </button>
                 <button
                     class="header-btn browse-btn"
-                    on:click={() => (browseModalOpen = true)}
+                    class:active={browseModalOpen}
+                    on:click={() => { browseModalOpen = !browseModalOpen; advancedModalOpen = false; createModalOpen = false; }}
                     disabled={!nodeOnline}
                     title="Browse Network Assets"
                 >
@@ -741,7 +789,8 @@
                 </button>
                 <button
                     class="header-btn advanced-btn"
-                    on:click={() => (advancedModalOpen = true)}
+                    class:active={advancedModalOpen}
+                    on:click={() => { advancedModalOpen = !advancedModalOpen; createModalOpen = false; browseModalOpen = false; }}
                     disabled={!nodeOnline}
                     title="Advanced Asset Controls"
                 >
@@ -758,14 +807,144 @@
 
         <!-- CONTENT -->
         <div class="content-area">
-            <div class="tab-content">
-                <!-- ═══════════════ MY ASSETS ═══════════════ -->
-                <div
-                    class="asset-grid"
-                    on:dragover={handleDragOver}
-                    on:drop={handleDragEnd}
-                    role="group"
-                >
+            <div class="tab-content" class:panel-open={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}>
+                {#if advancedModalOpen}
+                    <ModalAssetAdvanced
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        assets={groupedAssets}
+                        on:close={() => (advancedModalOpen = false)}
+                    />
+                {:else if createModalOpen}
+                    <ModalIssueAsset
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        bind:name={issueName}
+                        bind:qty={issueQty}
+                        bind:units={issueUnits}
+                        bind:ipfs={issueIpfs}
+                        bind:reissuable={issueReissue}
+                        on:close={() => (createModalOpen = false)}
+                        on:create={() => {
+                            issueType = "root";
+                            initiateIssue();
+                            createModalOpen = false;
+                        }}
+                    />
+                {:else if browseModalOpen}
+                    <ModalBrowse
+                        inline
+                        isOpen={true}
+                        on:close={() => (browseModalOpen = false)}
+                    />
+                {:else if selectedDetail}
+                    <ModalAssetDetail
+                        inline
+                        asset={selectedDetail}
+                        metadata={assetMetadata}
+                        loading={metadataLoading}
+                        {slideDirection}
+                        hasMultipleAssets={groupedAssets.length > 1}
+                        on:close={closeDetail}
+                        on:prev={navigatePrev}
+                        on:next={navigateNext}
+                        on:transfer={(e) => goToTransfer(e.detail.name)}
+                        on:reissue={(e) => goToReissue(e.detail)}
+                        on:createSub={(e) => goToSubAsset(e.detail.name)}
+                        on:createNft={(e) => goToNft(e.detail.name)}
+                        on:gov={(e) => openGovernance(e.detail)}
+                    />
+                {:else if transferModalOpen}
+                    <ModalTransfer
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        assets={groupedAssets}
+                        showBack={lastDetailAsset !== null}
+                        bind:selectedAsset
+                        bind:toAddress={transferTo}
+                        bind:amount={transferAmt}
+                        on:close={() => (transferModalOpen = false)}
+                        on:back={() => { transferModalOpen = false; returnToDetail(); }}
+                        on:transfer={() => {
+                            initiateTransfer();
+                            transferModalOpen = false;
+                        }}
+                    />
+                {:else if reissueModalOpen}
+                    <ModalReissue
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        assets={groupedAssets.filter((a) => a.hasOwner)}
+                        currentIpfs={assetMetadata?.ipfs_hash || ""}
+                        currentSupply={assetMetadata?.amount || 0}
+                        showBack={lastDetailAsset !== null}
+                        bind:name={reissueAsset}
+                        bind:qty={reissueQty}
+                        bind:newIpfs={reissueNewIpfs}
+                        bind:reissuable={reissueReissuable}
+                        on:close={() => (reissueModalOpen = false)}
+                        on:back={() => { reissueModalOpen = false; returnToDetail(); }}
+                        on:reissue={() => {
+                            initiateReissue();
+                            reissueModalOpen = false;
+                        }}
+                    />
+                {:else if subModalOpen}
+                    <ModalIssueSub
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        parentName={issueParent}
+                        showBack={lastDetailAsset !== null}
+                        bind:name={issueName}
+                        bind:qty={issueQty}
+                        bind:units={issueUnits}
+                        bind:ipfs={issueIpfs}
+                        bind:reissuable={issueReissue}
+                        on:close={() => (subModalOpen = false)}
+                        on:back={() => { subModalOpen = false; returnToDetail(); }}
+                        on:create={() => {
+                            initiateIssue();
+                            subModalOpen = false;
+                        }}
+                    />
+                {:else if nftModalOpen}
+                    <ModalIssueNFT
+                        inline
+                        isOpen={true}
+                        {nodeOnline}
+                        parentName={issueParent}
+                        showBack={lastDetailAsset !== null}
+                        bind:tag={nftTag}
+                        bind:ipfs={issueIpfs}
+                        on:close={() => (nftModalOpen = false)}
+                        on:back={() => { nftModalOpen = false; returnToDetail(); }}
+                        on:create={() => {
+                            initiateNft();
+                            nftModalOpen = false;
+                        }}
+                    />
+                {:else if govModalOpen}
+                    <ModalAssetGovernance
+                        inline
+                        isOpen={true}
+                        asset={selectedGovAsset}
+                        showBack={lastDetailAsset !== null}
+                        on:close={() => (govModalOpen = false)}
+                        on:back={() => { govModalOpen = false; returnToDetail(); }}
+                    />
+                {:else}
+                    <!-- ═══════════════ MY ASSETS ═══════════════ -->
+                    <div
+                        class="asset-grid"
+                        on:dragover={handleDragOver}
+                        on:drop={handleDragEnd}
+                        role="group"
+                    >
                     {#each groupedAssets as asset (asset.name)}
                         <div
                             class="asset-card glass-card"
@@ -874,6 +1053,7 @@
                         </div>
                     {/if}
                 </div>
+                {/if}
             </div>
         </div>
 
@@ -889,134 +1069,6 @@
             </div>
         {/if}
     </div>
-
-    <!-- ═══════════════ ASSET DETAIL MODAL ═══════════════ -->
-    <!-- ═══════════════ ASSET DETAIL MODAL ═══════════════ -->
-    <ModalAssetDetail
-        asset={selectedDetail}
-        metadata={assetMetadata}
-        loading={metadataLoading}
-        {slideDirection}
-        hasMultipleAssets={groupedAssets.length > 1}
-        on:close={closeDetail}
-        on:prev={navigatePrev}
-        on:next={navigateNext}
-        on:transfer={(e) => goToTransfer(e.detail.name)}
-        on:reissue={(e) => {
-            reissueAsset = e.detail.name;
-            reissueModalOpen = true;
-        }}
-        on:createSub={(e) => goToSubAsset(e.detail.name)}
-        on:createNft={(e) => goToNft(e.detail.name)}
-        on:gov={(e) => openGovernance(e.detail)}
-    />
-
-    <!-- ═══════════════ CREATE MODAL (ROOT) ═══════════════ -->
-    <!-- ═══════════════ CREATE MODAL (ROOT) ═══════════════ -->
-    <ModalIssueAsset
-        isOpen={createModalOpen}
-        {nodeOnline}
-        bind:name={issueName}
-        bind:qty={issueQty}
-        bind:units={issueUnits}
-        bind:ipfs={issueIpfs}
-        bind:reissuable={issueReissue}
-        on:close={() => (createModalOpen = false)}
-        on:create={() => {
-            issueType = "root";
-            initiateIssue();
-            createModalOpen = false;
-        }}
-    />
-
-    <!-- ═══════════════ SUB-ASSET MODAL ═══════════════ -->
-    <!-- ═══════════════ SUB-ASSET MODAL ═══════════════ -->
-    <ModalIssueSub
-        isOpen={subModalOpen}
-        {nodeOnline}
-        parentName={issueParent}
-        bind:name={issueName}
-        bind:qty={issueQty}
-        bind:units={issueUnits}
-        bind:ipfs={issueIpfs}
-        bind:reissuable={issueReissue}
-        on:close={() => (subModalOpen = false)}
-        on:create={() => {
-            initiateIssue();
-            subModalOpen = false;
-        }}
-    />
-
-    <!-- ═══════════════ NFT MODAL ═══════════════ -->
-    <!-- ═══════════════ NFT MODAL ═══════════════ -->
-    <ModalIssueNFT
-        isOpen={nftModalOpen}
-        {nodeOnline}
-        parentName={issueParent}
-        bind:tag={nftTag}
-        bind:ipfs={issueIpfs}
-        on:close={() => (nftModalOpen = false)}
-        on:create={() => {
-            initiateNft();
-            nftModalOpen = false;
-        }}
-    />
-
-    <!-- ═══════════════ TRANSFER MODAL ═══════════════ -->
-    <!-- ═══════════════ TRANSFER MODAL ═══════════════ -->
-    <ModalTransfer
-        isOpen={transferModalOpen}
-        {nodeOnline}
-        assets={myAssets}
-        bind:selectedAsset
-        bind:toAddress={transferTo}
-        bind:amount={transferAmt}
-        on:close={() => (transferModalOpen = false)}
-        on:transfer={() => {
-            initiateTransfer();
-            transferModalOpen = false;
-        }}
-    />
-
-    <!-- ═══════════════ REISSUE MODAL ═══════════════ -->
-    <!-- ═══════════════ REISSUE MODAL ═══════════════ -->
-    <ModalReissue
-        isOpen={reissueModalOpen}
-        {nodeOnline}
-        assets={myAssets}
-        currentIpfs={assetMetadata?.ipfs_hash || ""}
-        bind:name={reissueAsset}
-        bind:qty={reissueQty}
-        bind:reissuable={reissueReissuable}
-        bind:newIpfs={reissueNewIpfs}
-        on:close={() => {
-            reissueModalOpen = false;
-            reissueNewIpfs = "";
-        }}
-        on:reissue={() => {
-            initiateReissue();
-            reissueModalOpen = false;
-        }}
-    />
-
-    <!-- ═══════════════ BROWSE MODAL ═══════════════ -->
-    <!-- ═══════════════ BROWSE MODAL ═══════════════ -->
-    <ModalBrowse
-        isOpen={browseModalOpen}
-        on:close={() => (browseModalOpen = false)}
-    />
-
-    <ModalAssetGovernance
-        isOpen={govModalOpen}
-        asset={selectedGovAsset}
-        on:close={() => (govModalOpen = false)}
-    />
-
-    <ModalAssetAdvanced
-        isOpen={advancedModalOpen}
-        {nodeOnline}
-        on:close={() => (advancedModalOpen = false)}
-    />
 
     <!-- ═══════════════ CONFIRM MODAL ═══════════════ -->
     <!-- ═══════════════ CONFIRM MODAL ═══════════════ -->
@@ -1096,6 +1148,11 @@
     .toggle-hidden:hover {
         background: rgba(255, 255, 255, 0.1);
     }
+    .toggle-hidden.disabled {
+        cursor: not-allowed;
+        opacity: 0.4;
+        pointer-events: none;
+    }
     .toggle-hidden input {
         display: none;
     }
@@ -1109,11 +1166,27 @@
         opacity: 1;
     }
     .header-title {
+        background: transparent;
+        border: 0;
         font-size: 0.85rem;
         font-weight: 700;
         color: var(--color-primary);
         letter-spacing: 2px;
         text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        cursor: default;
+        user-select: none;
+        transition: all 0.2s;
+        padding: 0;
+    }
+    .header-title.active {
+        cursor: pointer;
+        text-shadow: 0 0 14px rgba(0, 255, 65, 0.5);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.4);
+        padding-bottom: 1px;
+    }
+    .header-title.active:hover {
+        color: #fff;
+        text-shadow: 0 0 18px rgba(0, 255, 65, 0.7);
     }
     .header-actions {
         display: flex;
@@ -1140,6 +1213,11 @@
         background: rgba(0, 255, 65, 0.15);
         border-color: var(--color-primary);
         box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+    }
+    .header-btn.active {
+        background: rgba(0, 255, 65, 0.2);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 12px rgba(0, 255, 65, 0.25);
     }
     .header-btn:disabled {
         opacity: 0.4;
@@ -1179,6 +1257,12 @@
         flex: 1;
         padding: 1.5rem;
         overflow-y: auto;
+    }
+    .tab-content.panel-open {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
     }
 
     /* ═══════════════ ASSET GRID (Card Layout) ═══════════════ */

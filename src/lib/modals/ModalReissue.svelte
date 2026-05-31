@@ -7,8 +7,11 @@
 
     export let isOpen = false;
     export let nodeOnline = false;
+    export let inline = false;
     export let assets = [];
     export let currentIpfs = "";
+    export let currentSupply = 0;
+    export let showBack = false;
 
     // Bindable fields
     export let name = "";
@@ -20,6 +23,10 @@
         dispatch("close");
     }
 
+    function goBack() {
+        dispatch("back");
+    }
+
     function reissue() {
         dispatch("reissue");
     }
@@ -27,256 +34,297 @@
     $: selectedAsset = assets.find((a) => a.name === name);
 </script>
 
-{#if isOpen}
-    <div
-        class="modal-overlay"
-        transition:fade={{ duration: 150 }}
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        role="button"
-        tabindex="0"
-    >
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div
-            class="form-panel glass-modal"
-            on:click|stopPropagation
-            transition:fly={{ y: 20 }}
-        >
-            <div class="form-header compact">
-                <button class="back-btn" on:click={close} title="Close">
-                    ← BACK
-                </button>
-                <span class="form-title">REISSUE {name}</span>
+{#snippet panelContent()}
+    <div class="modal-header">
+        {#if showBack}
+            <button class="back-btn" on:click={goBack} title="Back to Asset">←</button>
+        {/if}
+        <h3>Reissue {name}</h3>
+        <button class="close-btn" on:click={close}>&times;</button>
+    </div>
+
+    <div class="modal-body">
+        <div class="panel-body">
+            <div class="panel-title-row">
+                <h4>Reissue Asset</h4>
+                <HelpHitbox title="Reissue Behavior">
+                    <p>Reissue increases the total supply of an existing asset.</p>
+                    <p>Set quantity to zero to update metadata (IPFS) without increasing supply.</p>
+                    <p>Unchecking "Keep Reissuable" permanently locks the supply. This cannot be undone.</p>
+                </HelpHitbox>
             </div>
-            <div class="form-grid compact-grid">
-                <div class="form-group wide">
-                    <label for="reissue-asset">SELECT ASSET</label>
-                    <select
-                        id="reissue-asset"
-                        bind:value={name}
-                        class="glass-input"
-                    >
+
+            <div class="field-row">
+                <div class="field-group flex-grow">
+                    <label for="reissue-asset">Asset</label>
+                    <select id="reissue-asset" bind:value={name} class="cyber-input">
                         {#each assets as item}
                             <option value={item.name}>{item.name}</option>
                         {/each}
                     </select>
                 </div>
-                <div class="form-group narrow">
-                    <span class="label-text">COST</span>
-                    <div class="static-value">0.05 HEMP</div>
+                <div class="field-group narrow-inline">
+                    <span class="field-label">Cost</span>
+                    <div class="read-only-field">0.05 HEMP</div>
                 </div>
+            </div>
 
-                {#if currentIpfs}
-                    <div class="form-group full-width">
-                        <span class="label-text">CURRENT IPFS METADATA</span>
-                        <div class="current-ipfs mono">{currentIpfs}</div>
-                    </div>
-                {/if}
-
-                <div class="form-group full-width">
-                    <div class="field-label-row">
-                        <label for="reissue-qty">ADD QUANTITY</label>
-                        <HelpHitbox title="Reissue Behavior">
-                            <p>Reissue increases the total supply of an existing asset.</p>
-                            <p>Set quantity to zero to update metadata (IPFS) without increasing supply.</p>
-                            <p>Unchecking "Keep Reissuable" permanently locks the supply. This cannot be undone.</p>
-                        </HelpHitbox>
-                    </div>
-                    <input
-                        id="reissue-qty"
-                        type="number"
-                        class="glass-input mono"
-                        placeholder="0"
-                        bind:value={qty}
-                    />
+            {#if currentSupply > 0}
+                <div class="field-group">
+                    <span class="field-label">Current Total Supply</span>
+                    <div class="read-only-field">{currentSupply.toLocaleString()}</div>
                 </div>
+            {/if}
 
-                <div class="form-group full-width">
-                    <div class="field-label-row">
-                        <label for="reissue-new-ipfs">NEW IPFS HASH (Optional)</label>
-                        <HelpHitbox title="Update Metadata">
-                            <p>Leave empty to keep the current metadata unchanged.</p>
-                            <p>To update metadata, enter a CID or use the Content Library picker. The quantity must be zero for a pure metadata update.</p>
-                        </HelpHitbox>
-                    </div>
-                    <IpfsHashField id="reissue-new-ipfs" bind:value={newIpfs} />
+            {#if currentIpfs}
+                <div class="field-group">
+                    <span class="field-label">Current IPFS Metadata</span>
+                    <div class="read-only-field">{currentIpfs}</div>
                 </div>
+            {/if}
 
-                <!-- Footer for Reissue: Checkbox Left, Button Right -->
-                <div class="form-group full-width action-row">
-                    <label class="checkbox-wrap">
-                        <input type="checkbox" bind:checked={reissuable} />
-                        <span class="checkbox-visual"></span>
-                        <span class="checkbox-text">KEEP REISSUABLE</span>
-                    </label>
-                    <button
-                        class="neon-btn"
-                        on:click={reissue}
-                        disabled={!nodeOnline}
-                    >
-                        <span class="btn-glow"></span>
-                        REISSUE ASSET
-                    </button>
-                </div>
+            <div class="field-group">
+                <label for="reissue-qty">Add Quantity</label>
+                <input id="reissue-qty" type="number" class="cyber-input mono" placeholder="0" bind:value={qty} />
+            </div>
+
+            <div class="field-group">
+                <label for="reissue-new-ipfs">New IPFS Hash (Optional)</label>
+                <IpfsHashField id="reissue-new-ipfs" bind:value={newIpfs} />
+            </div>
+
+            <div class="panel-actions align-center">
+                <label class="confirm-check">
+                    <input type="checkbox" bind:checked={reissuable} />
+                    <span class="checkbox-visual"></span>
+                    <span class="check-label">Keep Reissuable</span>
+                </label>
+                <button class="cyber-btn" on:click={reissue} disabled={!nodeOnline}>
+                    REISSUE ASSET
+                </button>
             </div>
         </div>
     </div>
+{/snippet}
+
+{#if isOpen}
+    {#if inline}
+        <div class="reissue-panel" in:fade={{ duration: 150 }}>
+            {@render panelContent()}
+        </div>
+    {:else}
+        <div
+            class="modal-backdrop"
+            role="button"
+            tabindex="0"
+            on:click={close}
+            on:keydown={(e) => e.key === "Escape" && close()}
+            transition:fade={{ duration: 200 }}
+        >
+            <div
+                class="modal glass-panel"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+                on:click|stopPropagation
+                on:keydown={() => {}}
+                transition:fly={{ y: 20, duration: 200 }}
+            >
+                {@render panelContent()}
+            </div>
+        </div>
+    {/if}
 {/if}
 
 <style>
-    /* Local Style Copy */
-    .glass-modal {
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 8px;
-        box-shadow:
-            0 0 80px rgba(0, 0, 0, 0.8),
-            0 0 40px rgba(0, 255, 65, 0.1);
-        overflow: hidden;
-    }
-    .form-panel {
-        max-width: 700px;
-        margin: 0 auto;
-        padding: 2rem;
-        width: 100%;
-    }
-    .form-header.compact {
-        padding: 0.8rem 1.5rem;
-    }
-    .form-header {
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
         display: flex;
-        align-items: center;
-        gap: 1rem;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        margin-bottom: 0.75rem;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 0.5rem;
+        padding-bottom: 1.5rem;
+        z-index: 200000;
+        backdrop-filter: blur(5px);
     }
-    .back-btn {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #888;
-        padding: 0.4rem 0.8rem;
-        font-size: 0.7rem;
-        font-weight: 500;
+    .modal {
+        width: 560px;
+        max-width: 92vw;
+        max-height: calc(100vh - 2rem);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: rgba(10, 15, 12, 0.98);
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem 0.65rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
+    }
+    .modal-header h3 {
+        margin: 0;
+        color: var(--color-primary);
+        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        font-size: 0.9rem;
         letter-spacing: 1px;
-        border-radius: 6px;
+    }
+    .close-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem -0.4rem -0.35rem 0;
+    }
+    .close-btn:hover { color: #fff; }
+    .back-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem 0 -0.35rem -0.4rem;
     }
     .back-btn:hover {
         color: var(--color-primary);
-        border-color: var(--color-primary);
-        background: rgba(0, 255, 65, 0.05);
     }
-    .form-title {
-        color: var(--color-primary);
-        font-size: 0.85rem;
-        font-weight: 600;
-        letter-spacing: 1.5px;
+
+    .modal-body {
+        padding: 0.6rem 0.9rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
-    .form-grid.compact-grid {
-        gap: 0.8rem 1.2rem;
-        padding: 0 1.5rem 1.5rem;
+    .modal-body::-webkit-scrollbar {
+        width: 8px;
     }
-    .form-grid {
-        display: grid;
-        grid-template-columns: repeat(12, 1fr);
-        gap: 1rem 1.5rem;
+    .modal-body::-webkit-scrollbar-track {
+        background: transparent;
     }
-    .form-group {
+    .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .modal-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+
+    .panel-body {
         display: flex;
         flex-direction: column;
         gap: 0.4rem;
+        padding-bottom: 1.2rem;
     }
-    .form-group.full-width {
-        grid-column: span 12;
-    }
-    .form-group.wide {
-        grid-column: span 8;
-    }
-    .form-group.narrow {
-        grid-column: span 4;
-    }
-    .label-text,
-    label {
-        font-size: 0.6rem;
-        color: #666;
-        letter-spacing: 1.5px;
-        text-transform: uppercase;
-    }
-    .field-label-row {
+    .panel-title-row {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 0.5rem;
     }
-    .static-value {
-        padding: 0.7rem 1rem;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid transparent;
-        border-radius: 8px;
-        color: #888;
+    .panel-title-row h4 {
+        margin: 0;
+        color: var(--color-primary);
         font-size: 0.85rem;
-        font-family: var(--font-mono);
+        letter-spacing: 1px;
     }
-    .current-ipfs {
-        padding: 0.6rem 0.8rem;
-        background: rgba(0, 0, 0, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 6px;
+
+    .field-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .field-group.narrow-inline {
+        max-width: 140px;
+    }
+    .field-group.flex-grow {
+        flex: 1;
+        min-width: 0;
+    }
+
+    label,
+    .field-label {
         color: #888;
-        font-size: 0.75rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.15rem;
     }
-    .glass-input {
+
+    .cyber-input {
+        width: 100%;
+        padding: 0.45rem 0.6rem;
         background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
         color: #fff;
-        padding: 0.7rem 1rem;
-        font-size: 0.85rem;
-        border-radius: 8px;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        box-sizing: border-box;
         outline: none;
-        width: 100%;
         transition: all 0.2s;
-        backdrop-filter: blur(5px);
     }
-    .glass-input:focus {
+    .cyber-input:focus {
         border-color: var(--color-primary);
-        box-shadow:
-            0 0 20px rgba(0, 255, 65, 0.15),
-            inset 0 0 20px rgba(0, 255, 65, 0.03);
     }
-    select.glass-input {
+    select.cyber-input {
         cursor: pointer;
         appearance: none;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2300ff41'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
         background-repeat: no-repeat;
-        background-position: right 10px center;
-        background-size: 14px;
-        padding-right: 32px;
+        background-position: right 8px center;
+        background-size: 12px;
+        padding-right: 28px;
     }
-    select.glass-input option {
+    select.cyber-input option {
         background: #0a0a0a;
         color: #ccc;
     }
-    .action-row {
-        display: flex !important;
-        flex-direction: row !important;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 0.5rem;
-        gap: 1rem;
+
+    .read-only-field {
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: #888;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
-    .checkbox-wrap {
+
+    .confirm-check {
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.5rem;
+        color: #ddd;
+        font-size: 0.8rem;
         cursor: pointer;
-        padding: 0.5rem 0;
     }
-    .checkbox-wrap input {
+    .confirm-check input {
         display: none;
     }
     .checkbox-visual {
@@ -286,13 +334,14 @@
         border-radius: 4px;
         transition: all 0.15s;
         position: relative;
+        flex-shrink: 0;
     }
-    .checkbox-wrap input:checked + .checkbox-visual {
+    .confirm-check input:checked + .checkbox-visual {
         background: var(--color-primary);
         border-color: var(--color-primary);
         box-shadow: 0 0 10px var(--color-primary);
     }
-    .checkbox-wrap input:checked + .checkbox-visual::after {
+    .confirm-check input:checked + .checkbox-visual::after {
         content: "✓";
         position: absolute;
         top: -1px;
@@ -301,62 +350,51 @@
         color: #000;
         font-weight: bold;
     }
-    .checkbox-text {
+    .check-label {
         font-size: 0.65rem;
         color: #888;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
     }
-    .checkbox-wrap input:checked ~ .checkbox-text {
+    .confirm-check input:checked ~ .check-label {
         color: #fff;
     }
-    .neon-btn {
-        position: relative;
-        background: linear-gradient(
-            180deg,
-            rgba(0, 255, 65, 0.15) 0%,
-            rgba(0, 255, 65, 0.05) 100%
-        );
-        border: 1px solid var(--color-primary);
+
+    .panel-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 0.25rem;
+    }
+    .panel-actions.align-center {
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 0.5rem;
+    }
+    .cyber-btn {
+        padding: 0.5rem 1rem;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         color: var(--color-primary);
-        padding: 0.8rem 2rem;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 2px;
-        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        border-radius: 6px;
         cursor: pointer;
+        letter-spacing: 1px;
         transition: all 0.2s;
-        overflow: hidden;
     }
-    .neon-btn:hover:not(:disabled) {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow:
-            0 0 20px var(--color-primary),
-            0 0 30px rgba(0, 255, 65, 0.3);
-        transform: translateY(-1px);
+    .cyber-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
     }
-    .neon-btn:disabled {
+    .cyber-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
     }
-    .btn-glow {
-        position: absolute;
-        inset: -50%;
-        background: conic-gradient(
-            transparent,
-            transparent,
-            transparent,
-            rgba(0, 255, 65, 0.2)
-        );
-        animation: spin 4s linear infinite;
-        opacity: 0;
-    }
-    .neon-btn:hover .btn-glow {
-        opacity: 1;
-    }
-    @keyframes spin {
-        100% {
-            transform: rotate(360deg);
-        }
+
+    .reissue-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 </style>

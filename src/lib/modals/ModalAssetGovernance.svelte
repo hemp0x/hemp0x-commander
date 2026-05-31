@@ -4,15 +4,21 @@
     import { invoke } from "@tauri-apps/api/core";
     import "../../components.css";
     import ModalAlert from "./ModalAlert.svelte";
+    import AddressBookPicker from "../ui/AddressBookPicker.svelte";
 
     export let isOpen = false;
+    export let inline = false;
+    export let showBack = false;
     export let asset; // { name, balance, hasOwner, reissuable, ipfs_hash, ... }
 
     const dispatch = createEventDispatcher();
 
-    let activeTab = "transfer"; // transfer, lock, metadata
+    function goBack() {
+        dispatch("back");
+    }
+
+    let activeTab = "transfer"; // transfer, dividends, lock
     let newOwnerAddress = "";
-    let newIpfsHash = "";
 
     // Safety & Loading State
     let lockConfirmed = false;
@@ -79,7 +85,6 @@
     }
 
     $: if (isOpen && asset) {
-        newIpfsHash = asset?.ipfs_hash || "";
         lockConfirmed = false;
         isSubmitting = false;
         stopHold();
@@ -256,292 +261,203 @@
         }
     }
 
-    async function handleMetadata() {
-        isSubmitting = true;
-        try {
-            const units = asset?.units ?? 8;
-            const assetName = asset?.name || "";
-            const ipfs = newIpfsHash.trim();
-            const details = {
-                operation_type: "metadata_update",
-                asset_name: assetName,
-                ipfs_hash: ipfs,
-                current_units: units,
-            };
-            try {
-                const entry = await invoke("add_tx_journal_entry", {
-                    input: {
-                        status: "Previewed",
-                        operation_type: "metadata_update",
-                        summary: `Update metadata for ${assetName}${ipfs ? " with IPFS " + ipfs.substring(0, 16) + "..." : ""}`,
-                        txid: null,
-                        details,
-                    },
-                });
-                previewJournalId = entry.id;
-            } catch (journalErr) {
-                console.warn("Failed to record journal preview entry:", journalErr);
-                previewJournalId = null;
-            }
-            const txid = await invoke("update_asset_metadata", {
-                name: assetName,
-                ipfsHash: ipfs,
-                currentUnits: units,
-            });
-            if (previewJournalId) {
-                try {
-                    await invoke("update_tx_journal_entry", {
-                        id: previewJournalId,
-                        status: "Broadcasted",
-                        txid: txid,
-                        details: null,
-                    });
-                } catch (journalErr) {
-                    console.warn("Failed to update journal entry:", journalErr);
-                }
-            }
-            previewJournalId = null;
-            triggerAlert(
-                "Metadata Updated",
-                "Asset metadata has been updated on the blockchain.",
-                "success",
-                true,
-            );
-        } catch (e) {
-            if (previewJournalId) {
-                try {
-                    await invoke("update_tx_journal_entry", {
-                        id: previewJournalId,
-                        status: "Failed",
-                        txid: null,
-                        details: { error: String(e) },
-                    });
-                } catch (journalErr) {
-                    console.warn("Failed to record journal failure:", journalErr);
-                }
-                previewJournalId = null;
-            }
-            triggerAlert("Error", e.toString(), "error");
-        } finally {
-            isSubmitting = false;
-        }
-    }
 </script>
 
-{#if isOpen}
-    <div
-        class="modal-backdrop"
-        role="button"
-        tabindex="0"
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        transition:fade={{ duration: 200 }}
-    >
-        <div
-            class="modal glass-panel"
-            role="dialog"
-            aria-modal="true"
-            tabindex="-1"
-            on:click|stopPropagation
-            on:keydown={() => {}}
-            transition:scale={{ duration: 200, start: 0.95 }}
+{#snippet panelContent()}
+    <div class="modal-header">
+        {#if showBack}
+            <button class="back-btn" on:click={goBack} title="Back to Asset">←</button>
+        {/if}
+        <h3>{asset ? asset.name : ""}</h3>
+        <button class="close-btn" on:click={close}>&times;</button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button
+            class:active={activeTab === "transfer"}
+            on:click={() => (activeTab = "transfer")}
+            >Transfer Owner</button
         >
-            <div class="modal-header">
-                <h3>{asset ? asset.name : ""}</h3>
-                <button class="close-btn" on:click={close}>&times;</button>
-            </div>
+        <button
+            class:active={activeTab === "dividends"}
+            on:click={() => (activeTab = "dividends")}>Dividends</button
+        >
+        <button
+            class:active={activeTab === "lock"}
+            on:click={() => (activeTab = "lock")}
+            class="tab-danger">Lock Supply</button
+        >
+    </div>
 
-            <!-- Tabs -->
-            <div class="tabs">
-                <button
-                    class:active={activeTab === "transfer"}
-                    on:click={() => (activeTab = "transfer")}
-                    >Transfer Owner</button
-                >
-                <button
-                    class:active={activeTab === "dividends"}
-                    on:click={() => (activeTab = "dividends")}>Dividends</button
-                >
-                <button
-                    class:active={activeTab === "metadata"}
-                    on:click={() => (activeTab = "metadata")}>Metadata</button
-                >
-                <button
-                    class:active={activeTab === "lock"}
-                    on:click={() => (activeTab = "lock")}
-                    class="tab-danger">Lock Supply</button
-                >
-            </div>
+    <div class="modal-body">
+        <!-- Inline alerts removed in favor of ModalAlert -->
 
-            <div class="modal-body">
-                <!-- Inline alerts removed in favor of ModalAlert -->
+        {#if activeTab === "transfer"}
+            <div class="panel danger-zone">
+                <h4>Transfer Ownership</h4>
+                <p class="section-desc">
+                    Send the <strong
+                        >Administrator Token ({asset
+                            ? asset.name
+                            : ""}!)</strong
+                    > to another wallet.
+                </p>
+                <p class="warning-text">
+                    You will lose all control of this asset forever.
+                </p>
+                <AddressBookPicker
+                    id="owner-address"
+                    label="New Owner Address"
+                    bind:value={newOwnerAddress}
+                />
 
-                {#if activeTab === "transfer"}
-                    <div class="panel danger-zone">
-                        <h4>Transfer Ownership</h4>
-                        <p class="section-desc">
-                            Send the <strong
-                                >Administrator Token ({asset
-                                    ? asset.name
-                                    : ""}!)</strong
-                            > to another wallet.
-                        </p>
-                        <p class="warning-text">
-                            You will lose all control of this asset forever.
-                        </p>
-                        <label for="owner-address">New Owner Address</label>
-                        <input
-                            id="owner-address"
-                            type="text"
-                            bind:value={newOwnerAddress}
-                            placeholder="H..."
-                            class="cyber-input"
-                        />
+                <!-- Confirmation Check for Transfer -->
+                <label class="confirm-check">
+                    <input
+                        type="checkbox"
+                        bind:checked={lockConfirmed}
+                    />
+                    <span>I confirm I want to transfer ownership.</span>
+                </label>
 
-                        <!-- Confirmation Check for Transfer -->
-                        <label class="confirm-check">
-                            <input
-                                type="checkbox"
-                                bind:checked={lockConfirmed}
-                            />
-                            <span>I confirm I want to transfer ownership.</span>
-                        </label>
-
-                        <div class="actions">
-                            <button
-                                class="cyber-btn danger"
-                                on:mousedown={startHold}
-                                on:touchstart={startHold}
-                                on:mouseup={stopHold}
-                                on:touchend={stopHold}
-                                on:mouseleave={stopHold}
-                                disabled={!lockConfirmed ||
-                                    isSubmitting ||
-                                    !newOwnerAddress}
-                                style={isHolding
-                                    ? "transform: scale(0.98); opacity: 0.9;"
-                                    : ""}
-                            >
-                                {#if isSubmitting}
-                                    TRANSFERRING...
-                                {:else if isHolding}
-                                    HOLD TO TRANSFER ({lockHoldSeconds}s)...
-                                {:else}
-                                    HOLD 10s TO TRANSFER OWNERSHIP
-                                {/if}
-                            </button>
-                        </div>
-                    </div>
-                {:else if activeTab === "dividends"}
-                    <div class="panel">
-                        <p class="section-desc">
-                            Distribute dividends to all holders of <strong
-                                >{asset ? asset.name : ""}</strong
-                            >.
-                        </p>
-
-                        <div class="coming-soon">
-                            <p>Feature Coming Soon</p>
-                            <small
-                                >Snapshot and Payout logic requires backend
-                                update.</small
-                            >
-                        </div>
-                    </div>
-                {:else if activeTab === "metadata"}
-                    <div class="panel">
-                        <p class="section-desc">
-                            Update the IPFS hash associated with this asset.
-                        </p>
-                        <label for="ipfs-hash">New IPFS Hash / Data</label>
-                        <input
-                            id="ipfs-hash"
-                            type="text"
-                            bind:value={newIpfsHash}
-                            placeholder="Qm..."
-                            class="cyber-input"
-                        />
-                        <div class="actions">
-                            <button
-                                class="cyber-btn"
-                                on:click={handleMetadata}
-                                disabled={isSubmitting}
-                            >
-                                {isSubmitting
-                                    ? "Updating..."
-                                    : "Update Metadata"}
-                            </button>
-                        </div>
-                    </div>
-                {:else if activeTab === "lock"}
-                    <div class="panel danger-zone">
-                        <div class="warning-icon">⚠️</div>
-                        <h4>Danger Zone</h4>
-
-                        {#if asset?.reissuable === false}
-                            <p class="locked-msg">
-                                This asset is <strong>ALREADY LOCKED</strong>.
-                            </p>
-                            <p>
-                                The supply cannot be changed. This action is
-                                permanent and has already been taken.
-                            </p>
-
-                            <div class="actions">
-                                <button
-                                    class="cyber-btn danger"
-                                    disabled
-                                    style="opacity: 0.5; cursor: not-allowed;"
-                                >
-                                    SUPPLY LOCKED FOREVER
-                                </button>
-                            </div>
+                <div class="actions">
+                    <button
+                        class="cyber-btn danger"
+                        on:mousedown={startHold}
+                        on:touchstart={startHold}
+                        on:mouseup={stopHold}
+                        on:touchend={stopHold}
+                        on:mouseleave={stopHold}
+                        disabled={!lockConfirmed ||
+                            isSubmitting ||
+                            !newOwnerAddress}
+                        style={isHolding
+                            ? "transform: scale(0.98); opacity: 0.9;"
+                            : ""}
+                    >
+                        {#if isSubmitting}
+                            TRANSFERRING...
+                        {:else if isHolding}
+                            HOLD TO TRANSFER ({lockHoldSeconds}s)...
                         {:else}
-                            <p>
-                                This will <strong>PERMANENTLY LOCK</strong> the
-                                supply of {asset ? asset.name : ""}.
-                            </p>
-                            <p>
-                                No more tokens can ever be minted. This action
-                                cannot be undone.
-                            </p>
-
-                            <label class="confirm-check">
-                                <input
-                                    type="checkbox"
-                                    bind:checked={lockConfirmed}
-                                />
-                                <span>I understand this is permanent.</span>
-                            </label>
-
-                            <div class="actions">
-                                <button
-                                    class="cyber-btn danger"
-                                    on:mousedown={startHold}
-                                    on:touchstart={startHold}
-                                    on:mouseup={stopHold}
-                                    on:touchend={stopHold}
-                                    on:mouseleave={stopHold}
-                                    disabled={!lockConfirmed || isSubmitting}
-                                    style={isHolding
-                                        ? "transform: scale(0.98); opacity: 0.9;"
-                                        : ""}
-                                >
-                                    {#if isSubmitting}
-                                        LOCKING...
-                                    {:else if isHolding}
-                                        HOLD TO LOCK ({lockHoldSeconds}s)...
-                                    {:else}
-                                        HOLD 10s TO LOCK FOREVER
-                                    {/if}
-                                </button>
-                            </div>
+                            HOLD 10s TO TRANSFER OWNERSHIP
                         {/if}
+                    </button>
+                </div>
+            </div>
+        {:else if activeTab === "dividends"}
+            <div class="panel">
+                <p class="section-desc">
+                    Distribute dividends to all holders of <strong
+                        >{asset ? asset.name : ""}</strong
+                    >.
+                </p>
+
+                <div class="coming-soon">
+                    <p>Feature Coming Soon</p>
+                    <small
+                        >Snapshot and Payout logic requires backend
+                        update.</small
+                    >
+                </div>
+            </div>
+        {:else if activeTab === "lock"}
+            <div class="panel danger-zone">
+                <div class="warning-icon">⚠️</div>
+                <h4>Danger Zone</h4>
+
+                {#if asset?.reissuable === false}
+                    <p class="locked-msg">
+                        This asset is <strong>ALREADY LOCKED</strong>.
+                    </p>
+                    <p>
+                        The supply cannot be changed. This action is
+                        permanent and has already been taken.
+                    </p>
+
+                    <div class="actions">
+                        <button
+                            class="cyber-btn danger"
+                            disabled
+                            style="opacity: 0.5; cursor: not-allowed;"
+                        >
+                            SUPPLY LOCKED FOREVER
+                        </button>
+                    </div>
+                {:else}
+                    <p>
+                        This will <strong>PERMANENTLY LOCK</strong> the
+                        supply of {asset ? asset.name : ""}.
+                    </p>
+                    <p>
+                        No more tokens can ever be minted. This action
+                        cannot be undone.
+                    </p>
+
+                    <label class="confirm-check">
+                        <input
+                            type="checkbox"
+                            bind:checked={lockConfirmed}
+                        />
+                        <span>I understand this is permanent.</span>
+                    </label>
+
+                    <div class="actions">
+                        <button
+                            class="cyber-btn danger"
+                            on:mousedown={startHold}
+                            on:touchstart={startHold}
+                            on:mouseup={stopHold}
+                            on:touchend={stopHold}
+                            on:mouseleave={stopHold}
+                            disabled={!lockConfirmed || isSubmitting}
+                            style={isHolding
+                                ? "transform: scale(0.98); opacity: 0.9;"
+                                : ""}
+                        >
+                            {#if isSubmitting}
+                                LOCKING...
+                            {:else if isHolding}
+                                HOLD TO LOCK ({lockHoldSeconds}s)...
+                            {:else}
+                                HOLD 10s TO LOCK FOREVER
+                            {/if}
+                        </button>
                     </div>
                 {/if}
             </div>
-        </div>
+        {/if}
     </div>
+{/snippet}
+
+{#if isOpen}
+    {#if inline}
+        <div class="gov-panel" in:fade={{ duration: 150 }}>
+            {@render panelContent()}
+        </div>
+    {:else}
+        <div
+            class="modal-backdrop"
+            role="button"
+            tabindex="0"
+            on:click={close}
+            on:keydown={(e) => e.key === "Escape" && close()}
+            transition:fade={{ duration: 200 }}
+        >
+            <div
+                class="modal glass-panel"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+                on:click|stopPropagation
+                on:keydown={() => {}}
+                transition:scale={{ duration: 200, start: 0.95 }}
+            >
+                {@render panelContent()}
+            </div>
+        </div>
+    {/if}
 
     <!-- Alert Modal for Success/Error -->
     <ModalAlert
@@ -595,6 +511,20 @@
         text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
         font-size: 1.1rem;
     }
+    .back-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem 0 -0.35rem -0.4rem;
+    }
+    .back-btn:hover {
+        color: var(--color-primary);
+    }
     /* ... */
     .modal-body {
         padding: 1.25rem;
@@ -608,20 +538,6 @@
         font-size: 0.85rem;
         margin-bottom: 1rem;
         line-height: 1.3;
-    }
-    .cyber-input {
-        width: 100%;
-        padding: 0.6rem;
-        margin-bottom: 1rem;
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 4px;
-        color: #fff;
-        font-family: var(--font-mono);
-    }
-    .cyber-input:focus {
-        border-color: var(--color-primary);
-        outline: none;
     }
     .actions {
         display: flex;
@@ -685,5 +601,17 @@
         border: 1px dashed rgba(255, 255, 255, 0.2);
         border-radius: 8px;
         color: #aaa;
+    }
+
+    .gov-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .gov-panel .modal-body {
+        min-height: 0;
+        flex: 1 1 0%;
+        overflow-y: auto;
     }
 </style>

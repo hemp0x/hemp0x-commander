@@ -10,6 +10,7 @@
     import HelpHitbox from "../ui/HelpHitbox.svelte";
     import ModalAlert from "./ModalAlert.svelte";
     import { addNotification } from "../stores/notifications.js";
+    import { cidViewerTarget } from "../stores/contentLibrary.js";
 
     const dispatch = createEventDispatcher();
 
@@ -18,6 +19,7 @@
     export let loading = false;
     export let slideDirection = 0;
     export let hasMultipleAssets = false;
+    export let inline = false;
 
     let showAlert = false;
 
@@ -117,6 +119,11 @@
 
     function onReissue() {
         dispatch("reissue", asset);
+    }
+
+    function openCidViewer() {
+        if (!metadata?.ipfs_hash) return;
+        cidViewerTarget.set(metadata.ipfs_hash);
     }
 
     function onSubAsset() {
@@ -238,164 +245,174 @@
 </script>
 
 {#if asset}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div
-        class="modal-overlay"
-        transition:fade={{ duration: 150 }}
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        role="button"
-        tabindex="0"
-    >
-        <div class="modal-container">
-            <!-- Navigation Arrows -->
-            {#if hasMultipleAssets}
-                <button
-                    class="nav-arrow nav-prev"
-                    on:click|stopPropagation={prev}
-                    title="Previous Asset">«</button
-                >
-            {/if}
-
-            {#key asset.name}
-                <div
-                    class="detail-modal glass-modal"
-                    in:fly={{ x: slideDirection * 40, duration: 180 }}
-                    out:fly={{
-                        x: slideDirection * -40,
-                        duration: 120,
-                        opacity: 0,
-                    }}
-                    on:click|stopPropagation
-                >
-                    <button class="modal-close" on:click={close}>×</button>
-
-                    <div class="detail-header">
-                        <div class="detail-icon">◈</div>
-                        <div class="detail-title-group">
-                            <div class="detail-title" title={asset.name}>
-                                {#if asset.isSubAsset}
-                                    {asset.name.split("/").pop()}
-                                {:else}
-                                    {asset.name}
-                                {/if}
-                            </div>
-                            {#if asset.isSubAsset}
-                                <div class="detail-parent-path" title={asset.name}>
-                                    {asset.name.split("/").slice(0, -1).join(" / ")}
-                                </div>
-                            {/if}
-                        </div>
+    {#snippet panelContent()}
+        <div class="modal-header detail-header-bar">
+            <div class="header-nav-group">
+                {#if hasMultipleAssets}
+                    <button class="nav-arrow" on:click={prev} title="Previous Asset">«</button>
+                {/if}
+            </div>
+            <div class="detail-icon">◈</div>
+            <div class="detail-title-group">
+                <div class="detail-title" title={asset.name}>
+                    {#if asset.isSubAsset}
+                        {asset.name.split("/").pop()}
+                    {:else}
+                        {asset.name}
+                    {/if}
+                </div>
+                {#if asset.isSubAsset}
+                    <div class="detail-parent-path" title={asset.name}>
+                        {asset.name.split("/").slice(0, -1).join(" / ")}
                     </div>
+                {/if}
+            </div>
+            <div class="header-nav-group">
+                {#if hasMultipleAssets}
+                    <button class="nav-arrow" on:click={next} title="Next Asset">»</button>
+                {/if}
+            </div>
+            <button class="close-btn" on:click={close}>&times;</button>
+        </div>
 
-                    <div class="detail-body">
-                        <div class="detail-tabs">
-                            <button
-                                class="tab-btn"
-                                class:active={activeTab === "DETAILS"}
-                                on:click={() => (activeTab = "DETAILS")}
-                            >DETAILS</button>
-                            <button
-                                class="tab-btn"
-                                class:active={activeTab === "MESSAGES"}
-                                on:click={openMessagesTab}
-                            >MESSAGES</button>
-                        </div>
+        <div class="modal-body detail-body-scroll">
+            <div class="detail-tabs">
+                <button
+                    class="tab-btn"
+                    class:active={activeTab === "DETAILS"}
+                    on:click={() => (activeTab = "DETAILS")}
+                >DETAILS</button>
+                <button
+                    class="tab-btn"
+                    class:active={activeTab === "MESSAGES"}
+                    on:click={openMessagesTab}
+                >MESSAGES</button>
+            </div>
 
-                        {#if activeTab === "DETAILS"}
-                        <div class="detail-grid">
-                            <div class="detail-stat">
-                                <div class="stat-label">YOUR BALANCE</div>
-                                <div class="stat-value neon-text">
-                                    {formatBalance(asset.balance)}
-                                </div>
-                            </div>
-                            <div class="detail-stat">
-                                <div class="stat-label">TYPE</div>
-                                <div class="stat-value">
-                                    {asset.name.includes("#")
-                                            ? "NFT"
-                                            : asset.isSubAsset
-                                                ? "SUB-ASSET"
-                                                : asset.type || "TOKEN"}
-                                </div>
-                            </div>
-                            <div class="detail-stat">
-                                <div class="stat-label">STATUS</div>
-                                <div
-                                    class="stat-value"
-                                    class:owner-yes={asset.hasOwner}
-                                    class:clickable={asset.hasOwner}
-                                    role="button"
-                                    tabindex={asset.hasOwner ? 0 : -1}
-                                    title={asset.hasOwner
-                                        ? "Manage Governance"
-                                        : "Holder — no owner token"}
-                                    on:click={onGovernance}
-                                    on:keydown={(e) =>
-                                        e.key === "Enter" && onGovernance()}
-                                >
-                                    {asset.hasOwner ? "👑 OWNER" : "HOLDER"}
-                                </div>
-                            </div>
-                            <div class="detail-stat">
-                                <div class="stat-label">DECIMALS</div>
-                                <div class="stat-value">
-                                    {metadata?.units ?? asset.units ?? 0}
-                                </div>
-                            </div>
-                        </div>
+            {#if activeTab === "DETAILS"}
+            <div class="detail-grid">
+                <div class="detail-stat">
+                    <div class="stat-label">YOUR BALANCE</div>
+                    <div class="stat-value neon-text">
+                        {formatBalance(asset.balance)}
+                    </div>
+                </div>
+                <div class="detail-stat">
+                    <div class="stat-label">TYPE</div>
+                    <div class="stat-value">
+                        {asset.name.includes("#")
+                                ? "NFT"
+                                : asset.isSubAsset
+                                    ? "SUB-ASSET"
+                                    : asset.type || "TOKEN"}
+                    </div>
+                </div>
+                <div class="detail-stat">
+                    <div class="stat-label">STATUS</div>
+                    <div
+                        class="stat-value"
+                        class:owner-yes={asset.hasOwner}
+                        class:clickable={asset.hasOwner}
+                        role="button"
+                        tabindex={asset.hasOwner ? 0 : -1}
+                        title={asset.hasOwner
+                            ? "Manage Governance"
+                            : "Holder — no owner token"}
+                        on:click={onGovernance}
+                        on:keydown={(e) =>
+                            e.key === "Enter" && onGovernance()}
+                    >
+                        {asset.hasOwner ? "👑 OWNER" : "HOLDER"}
+                    </div>
+                </div>
+                <div class="detail-stat">
+                    <div class="stat-label">DECIMALS</div>
+                    <div class="stat-value">
+                        {metadata?.units ?? asset.units ?? 0}
+                    </div>
+                </div>
+            </div>
 
-                        <!-- Enhanced Metadata Section -->
-                        {#if loading}
-                            <div class="metadata-section">
-                                <div class="meta-loading">
-                                    Loading metadata...
+            <!-- Metadata Section -->
+            {#if loading}
+                <div class="metadata-section">
+                    <div class="meta-loading">
+                        Loading metadata...
+                    </div>
+                </div>
+            {:else if metadata}
+                <div class="metadata-section">
+                    <div class="meta-card">
+                                    <div class="meta-row">
+                                        <span class="meta-label">TOTAL SUPPLY</span>
+                                        <Tooltip text="Top 100 Holders (Coming Soon)">
+                                            <span
+                                                class="meta-value clickable"
+                                                role="button"
+                                                tabindex="0"
+                                                on:click={() => (showAlert = true)}
+                                                on:keydown={(e) =>
+                                                    e.key === "Enter" &&
+                                                    (showAlert = true)}
+                                            >{metadata.amount.toLocaleString()}</span>
+                                        </Tooltip>
+                                    </div>
+                                    <div class="meta-row">
+                                        <span class="meta-label">REISSUABLE</span>
+                                        <span class="meta-value" class:yes={metadata.reissuable}>
+                                            {metadata.reissuable ? "YES" : "NO"}
+                                        </span>
+                                    </div>
+                                    <div class="meta-row">
+                                        <span class="meta-label">CREATED AT BLOCK</span>
+                                        <span class="meta-value">{metadata.block_height.toLocaleString()}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        {:else if metadata}
-                            <div class="metadata-section">
-                                <div class="meta-row">
-                                    <span class="meta-label">TOTAL SUPPLY</span>
-                                    <Tooltip
-                                        text="Top 100 Holders (Coming Soon)"
-                                    >
-                                        <span
-                                            class="meta-value clickable"
-                                            role="button"
-                                            tabindex="0"
-                                            on:click={() => (showAlert = true)}
-                                            on:keydown={(e) =>
-                                                e.key === "Enter" &&
-                                                (showAlert = true)}
-                                            >{metadata.amount.toLocaleString()}</span
-                                        >
-                                    </Tooltip>
-                                </div>
-                                <div class="meta-row">
-                                    <span class="meta-label">REISSUABLE</span>
-                                    <span
-                                        class="meta-value"
-                                        class:yes={metadata.reissuable}
-                                    >
-                                        {metadata.reissuable ? "YES" : "NO"}
-                                    </span>
-                                </div>
+
                                 {#if metadata.has_ipfs && metadata.ipfs_hash}
-                                    <div class="meta-row ipfs-row">
-                                        <span class="meta-label">IPFS</span>
-                                        <IpfsReference hash={metadata.ipfs_hash} compact={true} />
+                                    <div class="meta-card ipfs-card">
+                                        <div class="ipfs-header">
+                                            <span class="meta-label">IPFS METADATA</span>
+                                            <div class="ipfs-header-actions">
+                                                {#if asset.hasOwner && metadata?.reissuable}
+                                                    <button
+                                                        class="meta-update-btn"
+                                                        on:click={onReissue}
+                                                        title="Update metadata via reissue"
+                                                    >
+                                                        <span class="action-icon">↻</span> UPDATE
+                                                    </button>
+                                                {/if}
+                                                <button
+                                                    class="meta-view-btn"
+                                                    on:click={openCidViewer}
+                                                    title="Open in CID viewer"
+                                                >
+                                                    <span class="action-icon">◉</span> VIEW
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="ipfs-value">
+                                            <IpfsReference hash={metadata.ipfs_hash} compact={false} />
+                                        </div>
+                                    </div>
+                                {:else}
+                                    <div class="meta-card ipfs-card empty">
+                                        <div class="ipfs-header">
+                                            <span class="meta-label">IPFS METADATA</span>
+                                            {#if asset.hasOwner && metadata?.reissuable}
+                                                <button
+                                                    class="meta-update-btn"
+                                                    on:click={onReissue}
+                                                    title="Add metadata via reissue"
+                                                >
+                                                    <span class="action-icon">+</span> ADD
+                                                </button>
+                                            {/if}
+                                        </div>
+                                        <div class="ipfs-placeholder">No metadata set</div>
                                     </div>
                                 {/if}
-                                <div class="meta-row">
-                                    <span class="meta-label"
-                                        >CREATED AT BLOCK</span
-                                    >
-                                    <span class="meta-value"
-                                        >{metadata.block_height.toLocaleString()}</span
-                                    >
-                                </div>
                             </div>
                         {/if}
 
@@ -406,17 +423,19 @@
                             >
                                 <span class="action-icon">→</span> TRANSFER
                             </button>
-                            <button
-                                class="action-btn"
-                                class:disabled={!metadata?.reissuable}
-                                on:click={onReissue}
-                                disabled={!metadata?.reissuable}
-                                title={!metadata?.reissuable
-                                    ? "Asset supply is locked"
-                                    : "Reissue Asset"}
-                            >
-                                <span class="action-icon">↻</span> REISSUE
-                            </button>
+                            {#if asset.hasOwner}
+                                <button
+                                    class="action-btn"
+                                    class:disabled={!metadata?.reissuable}
+                                    on:click={onReissue}
+                                    disabled={!metadata?.reissuable}
+                                    title={!metadata?.reissuable
+                                        ? "Asset supply is locked"
+                                        : "Reissue or update metadata"}
+                                >
+                                    <span class="action-icon">↻</span> REISSUE
+                                </button>
+                            {/if}
                         </div>
                         {#if asset.hasOwner && !asset.name.includes("#")}
                             <div class="detail-actions owner-actions">
@@ -592,28 +611,63 @@
                         {/if}
                         {/if}
                     </div>
+            {/snippet}
+
+            {#if inline}
+                <div class="detail-panel" in:fade={{ duration: 150 }}>
+                    {@render panelContent()}
                 </div>
-            {/key}
-
-            <!-- Right Arrow -->
-            {#if hasMultipleAssets}
-                <button
-                    class="nav-arrow nav-next"
-                    on:click|stopPropagation={next}
-                    title="Next Asset">»</button
+            {:else}
+                <div
+                    class="modal-overlay"
+                    transition:fade={{ duration: 150 }}
+                    on:click={close}
+                    on:keydown={(e) => e.key === "Escape" && close()}
+                    role="button"
+                    tabindex="0"
                 >
+                    <div class="modal-container">
+                        {#if hasMultipleAssets}
+                            <button
+                                class="nav-arrow nav-prev"
+                                on:click|stopPropagation={prev}
+                                title="Previous Asset">«</button
+                            >
+                        {/if}
+                        {#key asset.name}
+                            <div
+                                class="detail-modal glass-modal"
+                                in:fly={{ x: slideDirection * 40, duration: 180 }}
+                                out:fly={{ x: slideDirection * -40, duration: 120, opacity: 0 }}
+                                on:click|stopPropagation
+                                on:keydown|stopPropagation
+                                role="dialog"
+                                aria-modal="true"
+                                tabindex="-1"
+                            >
+                                <button class="modal-close" on:click={close}>×</button>
+                                {@render panelContent()}
+                            </div>
+                        {/key}
+                        {#if hasMultipleAssets}
+                            <button
+                                class="nav-arrow nav-next"
+                                on:click|stopPropagation={next}
+                                title="Next Asset">»</button
+                            >
+                        {/if}
+                    </div>
+                </div>
             {/if}
-        </div>
-    </div>
 
-    <!-- Alert Modal for Coming Soon features -->
-    <ModalAlert
-        isOpen={showAlert}
-        title="Coming Soon"
-        message="Top 100 Holders list requires 'assetindex=1' node configuration. This feature is deferred."
-        on:close={() => (showAlert = false)}
-    />
-{/if}
+            <!-- Alert Modal for Coming Soon features -->
+            <ModalAlert
+                isOpen={showAlert}
+                title="Coming Soon"
+                message="Top 100 Holders list requires 'assetindex=1' node configuration. This feature is deferred."
+                on:close={() => (showAlert = false)}
+            />
+        {/if}
 
 <style>
     /* Local Styles extracted from ViewAssets */
@@ -680,15 +734,6 @@
         color: #fff;
         background: rgba(255, 255, 255, 0.1);
     }
-    .detail-header {
-        padding: 1rem 2rem 0.8rem;
-        text-align: center;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.75rem;
-    }
     .detail-icon {
         font-size: 1.5rem;
         color: var(--color-primary);
@@ -713,9 +758,6 @@
         text-overflow: ellipsis;
         overflow: hidden;
         white-space: nowrap;
-    }
-    .detail-body {
-        padding: 1rem 1.5rem 1.5rem;
     }
     .detail-grid {
         display: grid;
@@ -774,6 +816,7 @@
     .detail-actions {
         display: flex;
         gap: 0.8rem;
+        margin: 0 2rem;
     }
     .owner-actions {
         margin-top: 0.8rem;
@@ -816,11 +859,16 @@
 
     /* Metadata */
     .metadata-section {
-        margin-top: 0.5rem;
-        padding: 0.5rem 0.75rem;
+        margin-top: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .meta-card {
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 8px;
+        padding: 0.6rem 0.75rem;
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 0.25rem 0.75rem;
@@ -850,6 +898,80 @@
     }
     .meta-value.yes {
         color: var(--color-primary);
+    }
+    .ipfs-card {
+        grid-template-columns: 1fr;
+        gap: 0.4rem;
+    }
+    .ipfs-card.empty {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+    }
+    .ipfs-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .ipfs-value {
+        font-size: 0.65rem;
+    }
+    .ipfs-value :global(.ipfs-ref) {
+        font-size: 0.65rem;
+    }
+    .ipfs-placeholder {
+        font-size: 0.65rem;
+        color: #555;
+        font-style: italic;
+    }
+    .meta-update-btn {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 6px;
+        padding: 0.25rem 0.5rem;
+        color: var(--color-primary);
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    .meta-update-btn:hover {
+        background: var(--color-primary);
+        color: #000;
+    }
+    .meta-update-btn .action-icon {
+        font-size: 0.7rem;
+    }
+    .ipfs-header-actions {
+        display: flex;
+        gap: 0.4rem;
+        align-items: center;
+    }
+    .meta-view-btn {
+        background: rgba(0, 255, 65, 0.05);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 6px;
+        padding: 0.25rem 0.5rem;
+        color: var(--color-primary);
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    .meta-view-btn:hover {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: var(--color-primary);
+    }
+    .meta-view-btn .action-icon {
+        font-size: 0.7rem;
     }
 
     /* Tabs */
@@ -1099,5 +1221,68 @@
     .compose-actions .action-btn {
         flex: none;
         padding: 0.4rem 0.8rem;
+    }
+
+    /* Inline panel mode */
+    .detail-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .detail-header-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 1rem 0.65rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
+        gap: 0.5rem;
+    }
+    .detail-header-bar .detail-icon {
+        font-size: 1.2rem;
+    }
+    .detail-header-bar .detail-title {
+        font-size: 0.9rem;
+        letter-spacing: 1px;
+    }
+    .detail-header-bar .detail-title-group {
+        flex: 1;
+        align-items: flex-start;
+    }
+    .detail-header-bar .header-nav-group {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    .detail-header-bar .nav-arrow {
+        font-size: 1rem;
+        padding: 0.2rem 0.4rem;
+        opacity: 0.6;
+    }
+    .detail-header-bar .nav-arrow:hover {
+        opacity: 1;
+    }
+    .detail-body-scroll {
+        padding: 0.6rem 0.9rem 1.2rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
+    }
+    .detail-body-scroll::-webkit-scrollbar {
+        width: 8px;
+    }
+    .detail-body-scroll::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .detail-body-scroll::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .detail-body-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
     }
 </style>

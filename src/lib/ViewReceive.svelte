@@ -272,9 +272,6 @@
         flex-direction: column;
         gap: 0.8rem;
         height: 100%;
-        max-height: calc(
-            100vh - 85px
-        ); /* Further relaxed to show 1-2 more lines (was 110px) */
         min-height: 0;
         overflow: hidden;
         box-sizing: border-box;
@@ -309,13 +306,19 @@
         min-height: 0; /* Ensure internal scrolling works */
     }
 
-    /* --- CYBER PANEL --- */
+    /* --- CYBER PANEL (asset-page style) --- */
     .cyber-panel {
-        background: rgba(8, 12, 10, 0.85);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+        background: linear-gradient(
+            180deg,
+            rgba(8, 14, 12, 0.95) 0%,
+            rgba(5, 10, 8, 0.98) 100%
+        );
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        box-shadow:
+            0 0 40px rgba(0, 0, 0, 0.5),
+            inset 0 0 30px rgba(0, 255, 65, 0.02);
         position: relative;
-        overflow: hidden; /* Ensure content is clipped */
+        overflow: hidden;
         display: flex;
         flex-direction: column;
     }
@@ -323,47 +326,49 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.8rem 1.2rem;
+        padding: 5px 1rem;
         background: rgba(0, 0, 0, 0.4);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         flex-shrink: 0;
     }
     .hud-title {
-        color: var(--color-muted);
+        color: var(--color-primary);
         font-size: 0.75rem;
         letter-spacing: 2px;
+        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
     }
     .hint {
         color: #555;
-        font-size: 0.65rem;
+        font-size: 0.6rem;
+        letter-spacing: 1px;
     }
 
     /* --- GENERATE BODY --- */
     .gen-body {
-        padding: 1.2rem;
+        padding: 0.8rem 1rem;
         display: flex;
         flex-direction: column;
-        gap: 0.8rem;
+        gap: 0.6rem;
     }
 
     @media (max-height: 700px) {
         .gen-body {
-            padding: 0.8rem 1rem;
-            gap: 0.6rem;
+            padding: 0.6rem 0.8rem;
+            gap: 0.5rem;
         }
         .panel-header {
-            padding: 0.5rem 1rem;
+            padding: 4px 0.8rem;
         }
         .input-glass {
-            padding: 0.5rem;
+            padding: 0.45rem 0.6rem;
         }
     }
     .field-label {
-        font-size: 0.7rem;
-        color: var(--color-muted);
-        margin-bottom: 0.4rem;
+        font-size: 0.65rem;
+        color: #888;
+        margin-bottom: 0.2rem;
         display: block;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
     }
     .input-wrapper {
         position: relative;
@@ -371,38 +376,41 @@
 
     .input-glass {
         width: 100%;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 255, 255, 0.1);
         color: #fff;
-        padding: 0.8rem 1rem;
-        border-radius: var(--radius-sm);
+        padding: 0.45rem 0.6rem;
+        border-radius: 6px;
         outline: none;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        transition: all 0.2s;
     }
     .input-glass:focus {
         border-color: var(--color-primary);
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.1);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
     }
 
     .controls-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-top: 0.5rem;
+        margin-top: 0.3rem;
     }
     .btn-group {
         display: flex;
-        gap: 1rem;
+        gap: 0.6rem;
     }
 
     /* Checkbox */
     .check-label {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        font-size: 0.75rem;
-        color: var(--color-muted);
+        gap: 0.4rem;
+        font-size: 0.7rem;
+        color: #888;
         cursor: pointer;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
     }
     .check-label input {
         display: none;
@@ -423,36 +431,38 @@
 
     /* Buttons */
     .btn-gen {
-        padding: 0.6rem 1.5rem;
-        font-size: 0.8rem;
-        font-weight: bold;
+        padding: 0.45rem 1rem;
+        font-size: 0.7rem;
+        font-weight: 600;
         letter-spacing: 1px;
         cursor: pointer;
         transition: all 0.2s;
+        border-radius: 6px;
     }
 
     .btn-gen.ghost {
         background: transparent;
         border: 1px solid rgba(255, 255, 255, 0.1);
-        color: var(--color-muted);
+        color: #888;
     }
     .btn-gen.ghost:hover {
         border-color: #fff;
         color: #fff;
     }
+    .btn-gen.cyber-btn {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        color: var(--color-primary);
+    }
+    .btn-gen.cyber-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+    }
     .btn-gen.disabled,
     .btn-gen:disabled {
-        background: rgba(100, 100, 100, 0.2);
-        border-color: #555;
-        color: #666;
+        opacity: 0.4;
         cursor: not-allowed;
-        box-shadow: none;
-    }
-    .btn-gen.disabled:hover,
-    .btn-gen:disabled:hover {
-        background: rgba(100, 100, 100, 0.2);
-        color: #666;
-        box-shadow: none;
     }
 
     /* --- ADDRESS LIST --- */
@@ -480,8 +490,8 @@
     }
     .scroll-body {
         flex: 1;
-        overflow-y: scroll;
-        min-height: 200px; /* Prevent collapse when empty */
+        overflow-y: auto;
+        min-height: 0;
         border-right: 1px solid rgba(255, 255, 255, 0.02);
     }
 

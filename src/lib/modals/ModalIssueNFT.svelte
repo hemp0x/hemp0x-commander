@@ -7,6 +7,8 @@
 
     export let isOpen = false;
     export let nodeOnline = false;
+    export let inline = false;
+    export let showBack = false;
 
     // Props
     export let parentName = "";
@@ -19,255 +21,292 @@
         dispatch("close");
     }
 
+    function goBack() {
+        dispatch("back");
+    }
+
     function create() {
         dispatch("create");
     }
 </script>
 
-{#if isOpen}
-    <div
-        class="modal-overlay"
-        transition:fade={{ duration: 150 }}
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        role="button"
-        tabindex="0"
-    >
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div
-            class="form-panel glass-modal"
-            on:click|stopPropagation
-            transition:fly={{ y: 20 }}
-        >
-            <div class="form-header compact">
-                <button class="back-btn" on:click={close} title="Close">
-                    ← BACK
-                </button>
-                <span class="form-title">MINT UNIQUE / NFT</span>
+{#snippet panelContent()}
+    <div class="modal-header">
+        {#if showBack}
+            <button class="back-btn" on:click={goBack} title="Back to Asset">←</button>
+        {/if}
+        <h3>Mint Unique / NFT</h3>
+        <button class="close-btn" on:click={close}>&times;</button>
+    </div>
+
+    <div class="modal-body">
+        <div class="panel-body">
+            <div class="panel-title-row">
+                <h4>Create Unique Asset under {parentName}</h4>
+                <HelpHitbox title="Unique Asset / NFT Metadata">
+                    <p>Unique assets (NFTs) are one-of-one units under a parent asset.</p>
+                    <p>Useful for collectibles, certificates, licenses, and media metadata.</p>
+                    <p>Metadata should be a CID/hash reference. Create and publish the package first, then select it here.</p>
+                </HelpHitbox>
             </div>
-            <div class="form-grid compact-grid">
-                <div class="form-group wide">
-                    <span class="label-text">PARENT ASSET</span>
-                    <div class="static-value">{parentName}</div>
-                </div>
 
-                <div class="form-group narrow">
-                    <span class="label-text">COST</span>
-                    <div class="static-value">0.01 HEMP</div>
+            <div class="field-row">
+                <div class="field-group flex-grow">
+                    <span class="field-label">Parent Asset</span>
+                    <div class="read-only-field">{parentName}</div>
                 </div>
+                <div class="field-group narrow-inline">
+                    <span class="field-label">Cost</span>
+                    <div class="read-only-field">0.01 HEMP</div>
+                </div>
+            </div>
 
-                <div class="form-group narrow">
-                    <label for="nft-tag">UNIQUE TAG</label>
-                    <input
-                        id="nft-tag"
-                        type="text"
-                        class="glass-input mono"
-                        placeholder="tag_name"
-                        bind:value={tag}
-                    />
-                </div>
+            <div class="field-group">
+                <label for="nft-tag">Unique Tag</label>
+                <input id="nft-tag" type="text" class="cyber-input mono" placeholder="tag_name" bind:value={tag} />
+            </div>
 
-                <div class="form-group wide">
-                    <div class="field-label-row">
-                        <label for="nft-ipfs">IPFS HASH (Optional)</label>
-                        <HelpHitbox title="Unique Asset / NFT Metadata">
-                            <p>Unique assets (NFTs) are one-of-one units under a parent asset.</p>
-                            <p>Useful for collectibles, certificates, licenses, and media metadata.</p>
-                            <p>Metadata should be a CID/hash reference. Create and publish the package first, then select it here.</p>
-                        </HelpHitbox>
-                    </div>
-                    <IpfsHashField id="nft-ipfs" bind:value={ipfs} />
-                </div>
+            <div class="field-group">
+                <label for="nft-ipfs">IPFS Metadata (Optional)</label>
+                <IpfsHashField id="nft-ipfs" bind:value={ipfs} />
+            </div>
 
-                <!-- NFT Footer: Button Right aligned -->
-                <div
-                    class="form-group full-width action-row"
-                    style="justify-content: flex-end;"
-                >
-                    <button
-                        class="neon-btn"
-                        on:click={create}
-                        disabled={!nodeOnline || !tag.trim()}
-                    >
-                        <span class="btn-glow"></span>
-                        MINT NFT
-                    </button>
-                </div>
+            <div class="panel-actions">
+                <button class="cyber-btn" on:click={create} disabled={!nodeOnline || !tag.trim()}>
+                    MINT NFT
+                </button>
             </div>
         </div>
     </div>
+{/snippet}
+
+{#if isOpen}
+    {#if inline}
+        <div class="nft-panel" in:fade={{ duration: 150 }}>
+            {@render panelContent()}
+        </div>
+    {:else}
+        <div
+            class="modal-backdrop"
+            role="button"
+            tabindex="0"
+            on:click={close}
+            on:keydown={(e) => e.key === "Escape" && close()}
+            transition:fade={{ duration: 200 }}
+        >
+            <div
+                class="modal glass-panel"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+                on:click|stopPropagation
+                on:keydown={() => {}}
+                transition:fly={{ y: 20, duration: 200 }}
+            >
+                {@render panelContent()}
+            </div>
+        </div>
+    {/if}
 {/if}
 
 <style>
-    /* Local Style Copy */
-    .glass-modal {
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 8px;
-        box-shadow:
-            0 0 80px rgba(0, 0, 0, 0.8),
-            0 0 40px rgba(0, 255, 65, 0.1);
-        overflow: hidden;
-    }
-    .form-panel {
-        max-width: 700px;
-        margin: 0 auto;
-        padding: 2rem;
-        width: 100%;
-    }
-    .form-header.compact {
-        padding: 0.8rem 1.5rem;
-    }
-    .form-header {
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
         display: flex;
-        align-items: center;
-        gap: 1rem;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        margin-bottom: 0.75rem;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 0.5rem;
+        padding-bottom: 1.5rem;
+        z-index: 200000;
+        backdrop-filter: blur(5px);
     }
-    .back-btn {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #888;
-        padding: 0.4rem 0.8rem;
-        font-size: 0.7rem;
-        font-weight: 500;
+    .modal {
+        width: 560px;
+        max-width: 92vw;
+        max-height: calc(100vh - 2rem);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: rgba(10, 15, 12, 0.98);
+    }
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem 0.65rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
+    }
+    .modal-header h3 {
+        margin: 0;
+        color: var(--color-primary);
+        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        font-size: 0.9rem;
         letter-spacing: 1px;
-        border-radius: 6px;
+    }
+    .close-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem -0.4rem -0.35rem 0;
+    }
+    .close-btn:hover { color: #fff; }
+    .back-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.2rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem 0 -0.35rem -0.4rem;
     }
     .back-btn:hover {
         color: var(--color-primary);
-        border-color: var(--color-primary);
-        background: rgba(0, 255, 65, 0.05);
     }
-    .form-title {
-        color: var(--color-primary);
-        font-size: 0.85rem;
-        font-weight: 600;
-        letter-spacing: 1.5px;
+
+    .modal-body {
+        padding: 0.6rem 0.9rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
-    .form-grid.compact-grid {
-        gap: 0.8rem 1.2rem;
-        padding: 0 1.5rem 1.5rem;
+    .modal-body::-webkit-scrollbar {
+        width: 8px;
     }
-    .form-grid {
-        display: grid;
-        grid-template-columns: repeat(12, 1fr);
-        gap: 1rem 1.5rem;
+    .modal-body::-webkit-scrollbar-track {
+        background: transparent;
     }
-    .form-group {
+    .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .modal-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+
+    .panel-body {
         display: flex;
         flex-direction: column;
         gap: 0.4rem;
+        padding-bottom: 1.2rem;
     }
-    .form-group.full-width {
-        grid-column: span 12;
-    }
-    .form-group.wide {
-        grid-column: span 8;
-    }
-    .form-group.narrow {
-        grid-column: span 4;
-    }
-    .label-text,
-    label {
-        font-size: 0.6rem;
-        color: #666;
-        letter-spacing: 1.5px;
-        text-transform: uppercase;
-    }
-    .field-label-row {
+    .panel-title-row {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 0.5rem;
     }
-    .static-value {
-        padding: 0.7rem 1rem;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid transparent;
-        border-radius: 8px;
-        color: #888;
+    .panel-title-row h4 {
+        margin: 0;
+        color: var(--color-primary);
         font-size: 0.85rem;
-        font-family: var(--font-mono);
+        letter-spacing: 1px;
     }
-    .glass-input {
+
+    .field-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .field-group.narrow-inline {
+        max-width: 140px;
+    }
+    .field-group.flex-grow {
+        flex: 1;
+        min-width: 0;
+    }
+
+    label,
+    .field-label {
+        color: #888;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.15rem;
+    }
+
+    .cyber-input {
+        width: 100%;
+        padding: 0.45rem 0.6rem;
         background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
         color: #fff;
-        padding: 0.7rem 1rem;
-        font-size: 0.85rem;
-        border-radius: 8px;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        box-sizing: border-box;
         outline: none;
-        width: 100%;
         transition: all 0.2s;
-        backdrop-filter: blur(5px);
     }
-    .glass-input:focus {
+    .cyber-input:focus {
         border-color: var(--color-primary);
-        box-shadow:
-            0 0 20px rgba(0, 255, 65, 0.15),
-            inset 0 0 20px rgba(0, 255, 65, 0.03);
     }
-    .action-row {
-        display: flex !important;
-        flex-direction: row !important;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 0.5rem;
-        gap: 1rem;
-    }
-    .neon-btn {
-        position: relative;
-        background: linear-gradient(
-            180deg,
-            rgba(0, 255, 65, 0.15) 0%,
-            rgba(0, 255, 65, 0.05) 100%
-        );
-        border: 1px solid var(--color-primary);
-        color: var(--color-primary);
-        padding: 0.8rem 2rem;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 2px;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.2s;
+
+    .read-only-field {
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: #888;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
         overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
-    .neon-btn:hover:not(:disabled) {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow:
-            0 0 20px var(--color-primary),
-            0 0 30px rgba(0, 255, 65, 0.3);
-        transform: translateY(-1px);
+
+    .panel-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 0.25rem;
     }
-    .neon-btn:disabled {
+    .cyber-btn {
+        padding: 0.5rem 1rem;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+        font-size: 0.7rem;
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+        letter-spacing: 1px;
+        transition: all 0.2s;
+    }
+    .cyber-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+    }
+    .cyber-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
     }
-    .btn-glow {
-        position: absolute;
-        inset: -50%;
-        background: conic-gradient(
-            transparent,
-            transparent,
-            transparent,
-            rgba(0, 255, 65, 0.2)
-        );
-        animation: spin 4s linear infinite;
-        opacity: 0;
-    }
-    .neon-btn:hover .btn-glow {
-        opacity: 1;
-    }
-    @keyframes spin {
-        100% {
-            transform: rotate(360deg);
-        }
+
+    .nft-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 </style>

@@ -21,10 +21,16 @@
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
+  import { cidViewerTarget } from "./lib/stores/contentLibrary.js";
   import { APP_VERSION } from "./lib/constants.js";
 
   // --- STATE ---
   let activeTab = "DASHBOARD"; // DASHBOARD, SEND, RECEIVE, ASSETS, TOOLS, ABOUT
+  let lastCidTarget = null;
+  $: if ($cidViewerTarget && $cidViewerTarget !== lastCidTarget) {
+      lastCidTarget = $cidViewerTarget;
+      activeTab = "TOOLS";
+  }
 
   // --- DATA (Populated from daemon) ---
   let nodeInfo = {

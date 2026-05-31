@@ -1529,10 +1529,78 @@
         overflow-x: hidden;
     }
 
-    /* --- ANIMATIONS --- */
-    /* --- ANIMATIONS (In app.css) --- */
-
     /* --- SHARED STYLES (In app.css) --- */
+
+    /* Override glass-slab to match asset page main-frame */
+    .glass-slab {
+        background: linear-gradient(
+            180deg,
+            rgba(8, 14, 12, 0.95) 0%,
+            rgba(5, 10, 8, 0.98) 100%
+        );
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow:
+            0 0 40px rgba(0, 0, 0, 0.5),
+            inset 0 0 30px rgba(0, 255, 65, 0.02);
+    }
+    .slab-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 5px 1rem;
+        background: rgba(0, 0, 0, 0.4);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
+        flex-shrink: 0;
+    }
+    .slab-body {
+        padding: 0.8rem 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+    .slab-footer {
+        padding: 0.6rem 1rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Compact send button matching asset page cyber-btn */
+    .btn-send-hero {
+        width: 100%;
+        padding: 0.6rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 2px;
+        font-family: var(--font-mono);
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.6rem;
+        box-shadow: none;
+    }
+    .btn-send-hero:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+    }
+    .btn-send-hero:disabled {
+        background: rgba(100, 100, 100, 0.1);
+        color: #666;
+        border-color: #444;
+        cursor: not-allowed;
+    }
+    .bracket {
+        font-weight: 300;
+        opacity: 0.5;
+    }
 
     /* --- HEADER (Specifics) --- */
 
@@ -1687,42 +1755,6 @@
         color: #ffbd2e;
         border-color: #ffbd2e;
         text-shadow: 0 0 5px #ffbd2e;
-    }
-
-    /* --- FOOTER --- */
-
-    .btn-send-hero {
-        width: 100%;
-        padding: 1rem;
-        font-size: 1.1rem;
-        font-weight: 700;
-        letter-spacing: 3px;
-        font-family: var(--font-mono);
-        color: #000;
-        background: #00dd38; /* Slightly dimmed green */
-        border: none;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.25);
-        cursor: pointer;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 1rem;
-    }
-    .btn-send-hero:hover:not(:disabled) {
-        box-shadow: 0 0 40px rgba(0, 255, 65, 0.5);
-        letter-spacing: 5px;
-    }
-    .bracket {
-        font-weight: 300;
-        opacity: 0.5;
-    }
-
-    .btn-send-hero:disabled {
-        background: #333;
-        color: #666;
-        box-shadow: none;
-        cursor: not-allowed;
     }
 
     .status-readout {
@@ -1976,81 +2008,68 @@
         box-shadow: 0 0 20px rgba(0, 255, 65, 0.4);
     }
 
-    /* === ADDRESS BOOK POPUP === */
+    /* === ADDRESS BOOK POPUP (asset-page style) === */
     .ab-overlay {
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        inset: 0;
         background: rgba(0, 0, 0, 0.85);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 99999;
         padding: 1rem;
-        padding-bottom: 15vh; /* Shifts modal up from center */
         animation: abFadeIn 0.2s ease-out;
     }
     @keyframes abFadeIn {
-        from {
-            opacity: 0;
-        }
-        to {
-            opacity: 1;
-        }
+        from { opacity: 0; }
+        to { opacity: 1; }
     }
     .ab-modal {
         background: rgba(10, 15, 12, 0.98);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         width: 100%;
-        max-width: 550px;
-        max-height: 70vh;
+        max-width: 520px;
+        max-height: 72vh;
         display: flex;
         flex-direction: column;
-        box-shadow: 0 0 40px rgba(0, 255, 65, 0.1);
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.7);
         animation: slideUp 0.25s ease-out;
     }
     @keyframes slideUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px) scale(0.98);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
+        from { opacity: 0; transform: translateY(20px) scale(0.98); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
     }
     .ab-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 1rem 1.2rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 0.5rem 1rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
     }
     .ab-header h3 {
         margin: 0;
         color: var(--color-primary);
-        font-size: 0.95rem;
+        font-size: 0.85rem;
         letter-spacing: 1px;
     }
     .ab-header-actions {
         display: flex;
-        gap: 0.8rem;
+        gap: 0.5rem;
         align-items: center;
     }
     .ab-add-btn {
-        background: transparent;
-        border: 1px solid var(--color-primary);
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
         color: var(--color-primary);
-        width: 28px;
-        height: 28px;
-        font-size: 1.2rem;
+        width: 26px;
+        height: 26px;
+        font-size: 1rem;
         line-height: 1;
-        border-radius: 4px;
+        border-radius: 6px;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.15s;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -2059,19 +2078,17 @@
         background: var(--color-primary);
         color: #000;
     }
-    .book-btn {
-        font-size: 1.1rem;
-    }
     .ab-clear-btn {
         background: transparent;
-        border: 1px solid rgba(255, 68, 68, 0.3);
+        border: 1px solid rgba(255, 68, 68, 0.25);
         color: #ff6666;
-        padding: 0.4rem 0.8rem;
-        font-size: 0.7rem;
-        border-radius: 4px;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.6rem;
+        border-radius: 6px;
         cursor: pointer;
         transition: all 0.2s;
         font-family: var(--font-mono);
+        letter-spacing: 0.5px;
     }
     .ab-clear-btn:hover {
         background: rgba(255, 68, 68, 0.1);
@@ -2080,25 +2097,27 @@
     .ab-list {
         flex: 1;
         overflow-y: auto;
-        padding: 0.5rem;
+        padding: 0.4rem;
     }
     .ab-empty {
         text-align: center;
         color: #555;
         padding: 2rem;
-        font-size: 0.85rem;
+        font-size: 0.8rem;
     }
     .ab-row {
         display: grid;
         grid-template-columns: 1fr 1.5fr auto auto;
-        gap: 0.5rem;
+        gap: 0.4rem;
         align-items: center;
-        padding: 0.6rem 0.8rem;
+        padding: 0.45rem 0.6rem;
         border-radius: 6px;
-        transition: background 0.15s;
+        transition: all 0.15s;
+        border: 1px solid transparent;
     }
     .ab-row:hover {
-        background: rgba(0, 255, 65, 0.03);
+        background: rgba(0, 255, 65, 0.04);
+        border-color: rgba(0, 255, 65, 0.1);
     }
     .ab-label-cell {
         overflow: hidden;
@@ -2107,15 +2126,16 @@
         background: none;
         border: none;
         color: #ccc;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         cursor: pointer;
-        padding: 0.3rem 0.5rem;
+        padding: 0.25rem 0.4rem;
         border-radius: 4px;
         width: 100%;
         text-align: left;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        transition: all 0.15s;
     }
     .ab-label:hover {
         background: rgba(255, 255, 255, 0.05);
@@ -2127,7 +2147,7 @@
         border: 1px solid var(--color-primary);
         color: #fff;
         padding: 0.3rem 0.5rem;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         border-radius: 4px;
         outline: none;
     }
@@ -2135,9 +2155,9 @@
         background: none;
         border: none;
         color: var(--color-primary);
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         cursor: pointer;
-        padding: 0.3rem 0.5rem;
+        padding: 0.25rem 0.4rem;
         border-radius: 4px;
         text-align: left;
         transition: all 0.15s;
@@ -2149,10 +2169,10 @@
         background: none;
         border: none;
         cursor: pointer;
-        font-size: 1rem;
+        font-size: 0.9rem;
         opacity: 0.5;
         transition: all 0.15s;
-        padding: 0.3rem;
+        padding: 0.25rem;
     }
     .ab-icon-btn:hover {
         opacity: 1;
@@ -2165,102 +2185,100 @@
         filter: drop-shadow(0 0 5px #ff4444);
     }
     .ab-icon-placeholder {
-        width: 1.6rem;
+        width: 1.4rem;
         display: inline-block;
     }
     .ab-footer {
         display: flex;
-        justify-content: space-between; /* Split left/right */
+        justify-content: space-between;
         align-items: center;
-        padding: 1rem 1.2rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 0.6rem 1rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-top: 1px solid rgba(0, 255, 65, 0.1);
     }
     .ab-footer-left,
     .ab-footer-right {
         display: flex;
-        gap: 0.8rem;
+        gap: 0.5rem;
     }
     .help-btn {
-        width: 30px;
+        width: 28px;
         padding-left: 0;
         padding-right: 0;
         text-align: center;
         border-radius: 50%;
     }
     .ab-btn {
-        background: transparent;
-        border: 1px solid var(--color-primary);
+        padding: 0.4rem 0.8rem;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
         color: var(--color-primary);
-        padding: 0.5rem 1rem;
-        font-size: 0.8rem;
+        font-size: 0.7rem;
+        font-weight: 600;
         font-family: var(--font-mono);
-        border-radius: 4px;
+        border-radius: 6px;
         cursor: pointer;
-        transition: all 0.2s;
+        letter-spacing: 0.5px;
+        transition: all 0.15s;
     }
     .ab-btn:hover {
-        background: var(--color-primary);
-        color: #000;
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
     }
     .ab-btn.ghost {
-        border-color: #555;
+        background: transparent;
+        border-color: rgba(255, 255, 255, 0.1);
         color: #888;
     }
     .ab-btn.ghost:hover {
         border-color: #fff;
         color: #fff;
-        background: transparent;
+        background: rgba(255, 255, 255, 0.05);
     }
 
     /* ADD ADDRESS FORM */
     .ab-add-form {
-        padding: 1rem 1.2rem;
+        padding: 0.6rem 1rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        background: rgba(0, 255, 65, 0.03);
+        background: rgba(0, 255, 65, 0.02);
         animation: slideDown 0.2s ease-out;
     }
     @keyframes slideDown {
-        from {
-            opacity: 0;
-            transform: translateY(-10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     .ab-form-row {
         display: flex;
         flex-direction: column;
-        gap: 0.3rem;
-        margin-bottom: 0.8rem;
+        gap: 0.2rem;
+        margin-bottom: 0.5rem;
     }
     .ab-form-row label {
-        color: #666;
-        font-size: 0.7rem;
-        letter-spacing: 1px;
+        color: #888;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
     }
     .ab-form-input {
         background: rgba(0, 0, 0, 0.5);
-        border: 1px solid rgba(0, 255, 65, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         color: #fff;
-        padding: 0.6rem 0.8rem;
-        font-size: 0.85rem;
-        border-radius: 4px;
+        padding: 0.45rem 0.6rem;
+        font-size: 0.8rem;
+        border-radius: 6px;
         outline: none;
-        transition: border-color 0.2s;
+        transition: all 0.2s;
+        font-family: var(--font-mono);
     }
     .ab-form-input:focus {
         border-color: var(--color-primary);
-        box-shadow: 0 0 8px rgba(0, 255, 65, 0.15);
     }
     .ab-form-input::placeholder {
-        color: #444;
+        color: #555;
     }
     .ab-form-actions {
         display: flex;
-        gap: 0.8rem;
-        margin-top: 0.5rem;
+        gap: 0.5rem;
+        margin-top: 0.3rem;
     }
 
     /* NEW STYLES */

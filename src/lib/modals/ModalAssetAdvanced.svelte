@@ -5,10 +5,16 @@
     import "../../components.css";
     import ModalAlert from "./ModalAlert.svelte";
     import ModalConfirm from "./ModalConfirm.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
+    import IpfsHashField from "../ui/IpfsHashField.svelte";
+    import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
+    import AssetPicker from "../ui/AssetPicker.svelte";
     import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
 
     export let isOpen = false;
     export let nodeOnline = false;
+    export let inline = false;
+    export let assets = []; // Array of owned assets for pickers
 
     const dispatch = createEventDispatcher();
 
@@ -36,7 +42,6 @@
     let tagAction = "add"; // add or remove
 
     // Tag Lookup State
-    let tagLookupAddr = "";
     let tagLookupResults = [];
     let tagLookupLoading = false;
 
@@ -64,6 +69,10 @@
     let rewardStatusData = null;
     let rewardStatusLoading = false;
 
+    // Wallet addresses
+    let walletAddresses = [];
+    let walletLoading = false;
+
     // Alerts
     let alertOpen = false;
     let alertTitle = "";
@@ -79,8 +88,46 @@
     let confirmPayload = null;
     let previewJournalId = null;
 
+    $: if (isOpen && nodeOnline) loadWalletAddresses();
+
     function close() {
         dispatch("close");
+    }
+
+    async function loadWalletAddresses() {
+        walletLoading = true;
+        try {
+            walletAddresses = await invoke("get_receive_addresses", { showChange: false });
+            // Default destinations when fields are empty and we have addresses
+            if (walletAddresses.length > 0) {
+                if (!qualifierDest) qualifierDest = walletAddresses[0].address;
+                if (!restrictedDest) restrictedDest = walletAddresses[0].address;
+                if (!tagAddr) tagAddr = walletAddresses[0].address;
+            }
+        } catch (err) {
+            console.warn("Failed to load wallet addresses:", err);
+            walletAddresses = [];
+        } finally {
+            walletLoading = false;
+        }
+    }
+
+    async function generateAddress(event) {
+        if (!nodeOnline) return;
+        try {
+            const newAddr = await invoke("new_address", {
+                label: event.detail?.label || "",
+            });
+            // Select the newly generated address and refresh the list
+            if (newAddr) {
+                qualifierDest = newAddr;
+                restrictedDest = newAddr;
+                tagAddr = newAddr;
+            }
+            await loadWalletAddresses();
+        } catch (err) {
+            triggerAlert("Generate Address Failed", String(err), "error");
+        }
     }
 
     function triggerAlert(title, message, type = "info") {
@@ -94,17 +141,19 @@
         qualifierName = "";
         qualifierQty = "1";
         qualifierIpfs = "";
-        qualifierDest = "";
+        qualifierDest = walletAddresses.length > 0 ? walletAddresses[0].address : "";
         restrictedName = "";
         restrictedQty = "1";
         restrictedVerifier = "";
-        restrictedDest = "";
+        restrictedDest = walletAddresses.length > 0 ? walletAddresses[0].address : "";
         restrictedUnits = 0;
         restrictedReissuable = true;
         restrictedIpfs = "";
         tagName = "";
-        tagAddr = "";
+        tagAddr = walletAddresses.length > 0 ? walletAddresses[0].address : "";
         tagAction = "add";
+        tagLookupResults = [];
+        tagLookupLoading = false;
         snapGetName = "";
         snapGetHeight = "";
         snapData = null;
@@ -250,11 +299,11 @@
     }
 
     async function lookupTags() {
-        if (!tagLookupAddr) return;
+        if (!tagAddr) return;
         tagLookupLoading = true;
         try {
             tagLookupResults = await invoke("list_tags_for_address", {
-                address: tagLookupAddr,
+                address: tagAddr,
             });
         } catch (err) {
             tagLookupResults = [];
@@ -544,24 +593,7 @@
     }
 </script>
 
-{#if isOpen}
-    <div
-        class="modal-backdrop"
-        role="button"
-        tabindex="0"
-        on:click={close}
-        on:keydown={(e) => e.key === "Escape" && close()}
-        transition:fade={{ duration: 200 }}
-    >
-        <div
-            class="modal glass-panel"
-            role="dialog"
-            aria-modal="true"
-            tabindex="-1"
-            on:click|stopPropagation
-            on:keydown={() => {}}
-            transition:scale={{ duration: 200, start: 0.95 }}
-        >
+{#snippet panelContent()}
             <div class="modal-header">
                 <h3>Advanced Asset Controls</h3>
                 <button class="close-btn" on:click={close}>&times;</button>
@@ -569,26 +601,21 @@
 
             <!-- Tabs -->
             <div class="tabs">
-                <button
-                    class:active={activeTab === "qualifier"}
-                    on:click={() => (activeTab = "qualifier")}>Qualifiers</button
-                >
-                <button
-                    class:active={activeTab === "restricted"}
-                    on:click={() => (activeTab = "restricted")}>Restricted</button
-                >
-                <button
-                    class:active={activeTab === "tags"}
-                    on:click={() => (activeTab = "tags")}>Tags</button
-                >
-                <button
-                    class:active={activeTab === "snapshot"}
-                    on:click={() => (activeTab = "snapshot")}>Snapshots</button
-                >
-                <button
-                    class:active={activeTab === "rewards"}
-                    on:click={() => (activeTab = "rewards")}>Rewards</button
-                >
+                <button class:active={activeTab === "qualifier"} on:click={() => (activeTab = "qualifier")}>
+                    Qualifiers
+                </button>
+                <button class:active={activeTab === "restricted"} on:click={() => (activeTab = "restricted")}>
+                    Restricted
+                </button>
+                <button class:active={activeTab === "tags"} on:click={() => (activeTab = "tags")}>
+                    Tags
+                </button>
+                <button class:active={activeTab === "snapshot"} on:click={() => (activeTab = "snapshot")}>
+                    Snapshots
+                </button>
+                <button class:active={activeTab === "rewards"} on:click={() => (activeTab = "rewards")}>
+                    Rewards
+                </button>
             </div>
 
             <div class="modal-body">
@@ -598,85 +625,186 @@
                     </div>
                 {:else}
                     {#if activeTab === "qualifier"}
-                        <div class="tab-panel">
-                            <h4>Issue Qualifier Asset</h4>
-                            <p class="section-desc">
-                                Qualifier assets are tag tokens (prefixed with #). Units are fixed at 0, non-reissuable, and amounts must be 1-10.
-                            </p>
-                            <label for="qualifier-name">Qualifier Name</label>
-                            <input id="qualifier-name" type="text" bind:value={qualifierName} placeholder="#TAG or just TAG" class="cyber-input" />
-                            <label for="qualifier-qty">Quantity (1-10)</label>
-                            <input id="qualifier-qty" type="text" bind:value={qualifierQty} placeholder="1" class="cyber-input" />
-                            <label for="qualifier-dest">Destination Address (optional)</label>
-                            <input id="qualifier-dest" type="text" bind:value={qualifierDest} placeholder="H..." class="cyber-input" />
-                            <label for="qualifier-ipfs">IPFS Hash (optional)</label>
-                            <input id="qualifier-ipfs" type="text" bind:value={qualifierIpfs} placeholder="Qm..." class="cyber-input" />
-                            <div class="actions">
+                        <div class="panel-body">
+                            <div class="panel-title-row">
+                                <h4>Issue Qualifier Asset</h4>
+                                <HelpHitbox title="Qualifier Assets">
+                                    <p>Qualifier assets are special tag tokens (prefixed with <code>#</code>) used by restricted assets to verify holders.</p>
+                                    <p><strong>Key facts:</strong></p>
+                                    <ul>
+                                        <li>Amount is fixed at creation and cannot be changed later.</li>
+                                        <li>Metadata (IPFS) cannot be changed after issue.</li>
+                                        <li>You can create and transfer up to 10 qualifier units / tag tokens.</li>
+                                        <li>Only the qualifier owner can add or remove tags from addresses.</li>
+                                        <li>Restricted assets reference qualifiers in their verifier string.</li>
+                                    </ul>
+                                </HelpHitbox>
+                            </div>
+
+                            <div class="info-banner">
+                                Qualifiers are permanent: quantity and metadata cannot be changed after creation. Choose carefully at issue time.
+                            </div>
+
+                            <div class="field-group">
+                                <label for="qualifier-name">Qualifier Name</label>
+                                <input id="qualifier-name" type="text" bind:value={qualifierName} placeholder="#TAG or just TAG" class="cyber-input" />
+                            </div>
+
+                            <div class="field-group">
+                                <label for="qualifier-qty">Quantity (1 – 10)</label>
+                                <input id="qualifier-qty" type="text" bind:value={qualifierQty} placeholder="1" class="cyber-input narrow" />
+                            </div>
+
+                            <WalletAddressPicker
+                                id="qualifier-dest"
+                                label="Destination Address"
+                                bind:value={qualifierDest}
+                                addresses={walletAddresses}
+                                {nodeOnline}
+                                on:generate={generateAddress}
+                            />
+
+                            <div class="field-group">
+                                <label for="qualifier-ipfs">IPFS Metadata</label>
+                                <IpfsHashField id="qualifier-ipfs" bind:value={qualifierIpfs} />
+                            </div>
+
+                            <div class="panel-actions">
                                 <button class="cyber-btn" on:click={previewQualifier} disabled={previewInProgress}>
-                                    {previewInProgress ? "Building Preview..." : "Preview Qualifier Issue"}
+                                    {previewInProgress ? "Building Preview..." : "Preview & Confirm"}
                                 </button>
                             </div>
                         </div>
                     {:else if activeTab === "restricted"}
-                        <div class="tab-panel">
-                            <h4>Issue Restricted Asset</h4>
-                            <p class="section-desc">
-                                Restricted assets (prefixed with $) enforce holder verification. Requires a verifier string using qualifier logic, e.g. <code>#KYC & !#AML</code>.
-                            </p>
-                            <label for="restricted-name">Asset Name</label>
-                            <input id="restricted-name" type="text" bind:value={restrictedName} placeholder="$ASSET or just ASSET" class="cyber-input" />
-                            <label for="restricted-qty">Quantity</label>
-                            <input id="restricted-qty" type="text" bind:value={restrictedQty} placeholder="1000" class="cyber-input" />
-                            <label for="restricted-verifier">Verifier String</label>
-                            <input id="restricted-verifier" type="text" bind:value={restrictedVerifier} placeholder="#KYC & !#AML" class="cyber-input" />
-                            <label for="restricted-dest">Destination Address (optional)</label>
-                            <input id="restricted-dest" type="text" bind:value={restrictedDest} placeholder="H..." class="cyber-input" />
-                            <label for="restricted-units">Units (0-8)</label>
-                            <input id="restricted-units" type="number" bind:value={restrictedUnits} min="0" max="8" class="cyber-input" />
-                            <label class="confirm-check">
-                                <input type="checkbox" bind:checked={restrictedReissuable} />
-                                <span>Reissuable</span>
-                            </label>
-                            <label for="restricted-ipfs">IPFS Hash (optional)</label>
-                            <input id="restricted-ipfs" type="text" bind:value={restrictedIpfs} placeholder="Qm..." class="cyber-input" />
-                            <div class="actions">
+                        <div class="panel-body">
+                            <div class="panel-title-row">
+                                <h4>Issue Restricted Asset</h4>
+                                <HelpHitbox title="Restricted Assets">
+                                    <p>Restricted assets (prefixed with <code>$</code>) enforce holder verification before transfers.</p>
+                                    <p><strong>How they work:</strong></p>
+                                    <ul>
+                                        <li>A <strong>verifier string</strong> defines which qualifiers an address must hold.</li>
+                                        <li>Example: <code>#KYC &amp; !#AML</code> means "must have #KYC and must NOT have #AML".</li>
+                                        <li>Only addresses that satisfy the verifier can receive or hold the asset.</li>
+                                        <li>Common use cases: compliance tokens, gated communities, licensed assets.</li>
+                                    </ul>
+                                </HelpHitbox>
+                            </div>
+
+                            <div class="field-group">
+                                <label for="restricted-name">Asset Name</label>
+                                <input id="restricted-name" type="text" bind:value={restrictedName} placeholder="$ASSET or just ASSET" class="cyber-input" />
+                            </div>
+
+                            <div class="field-group">
+                                <label for="restricted-qty">Quantity</label>
+                                <input id="restricted-qty" type="text" bind:value={restrictedQty} placeholder="1000" class="cyber-input" />
+                            </div>
+
+                            <div class="field-group">
+                                <div class="label-row">
+                                    <label for="restricted-verifier">Verifier String</label>
+                                    <HelpHitbox title="Verifier String">
+                                        <p>A logic expression using qualifier tags.</p>
+                                        <p><strong>Operators:</strong></p>
+                                        <ul>
+                                            <li><code>&amp;</code> — AND (must have both)</li>
+                                            <li><code>|</code> — OR (must have at least one)</li>
+                                            <li><code>!</code> — NOT (must not have)</li>
+                                        </ul>
+                                        <p>Example: <code>#KYC &amp; (!#AML | #COMPLIANT)</code></p>
+                                    </HelpHitbox>
+                                </div>
+                                <input id="restricted-verifier" type="text" bind:value={restrictedVerifier} placeholder="#KYC & !#AML" class="cyber-input" />
+                            </div>
+
+                            <WalletAddressPicker
+                                id="restricted-dest"
+                                label="Destination Address"
+                                bind:value={restrictedDest}
+                                addresses={walletAddresses}
+                                {nodeOnline}
+                                on:generate={generateAddress}
+                            />
+
+                            <div class="field-group narrow-inline">
+                                <label for="restricted-units">Units (0–8)</label>
+                                <input id="restricted-units" type="number" bind:value={restrictedUnits} min="0" max="8" class="cyber-input" />
+                            </div>
+
+                            <div class="field-group inline-check">
+                                <label class="confirm-check">
+                                    <input type="checkbox" bind:checked={restrictedReissuable} />
+                                    <span class="checkbox-visual"></span>
+                                    <span>Reissuable</span>
+                                </label>
+                            </div>
+
+                            <div class="field-group">
+                                <label for="restricted-ipfs">IPFS Metadata</label>
+                                <IpfsHashField id="restricted-ipfs" bind:value={restrictedIpfs} />
+                            </div>
+
+                            <div class="panel-actions">
                                 <button class="cyber-btn" on:click={previewRestricted} disabled={previewInProgress}>
-                                    {previewInProgress ? "Building Preview..." : "Preview Restricted Issue"}
+                                    {previewInProgress ? "Building Preview..." : "Preview & Confirm"}
                                 </button>
                             </div>
                         </div>
                     {:else if activeTab === "tags"}
-                        <div class="tab-panel">
-                            <h4>Manage Address Tags</h4>
-                            <p class="section-desc">
-                                Assign or remove qualifier tags from addresses. Requires ownership of the qualifier token.
-                            </p>
-                            <!-- Tag Action -->
-                            <div class="subsection">
+                        <div class="panel-body">
+                            <div class="panel-title-row">
+                                <h4>Tag Control</h4>
+                                <HelpHitbox title="Tag Control">
+                                    <p>Manage qualifier tags assigned to addresses. You must own the qualifier asset to add or remove its tags.</p>
+                                    <p><strong>Actions:</strong></p>
+                                    <ul>
+                                        <li><strong>Add tag</strong> — grant a qualifier to an address.</li>
+                                        <li><strong>Remove tag</strong> — revoke a qualifier from an address.</li>
+                                        <li><strong>List tags</strong> — check which qualifiers an address currently holds.</li>
+                                    </ul>
+                                </HelpHitbox>
+                            </div>
+
+                            <!-- Manage Tags -->
+                            <div class="subpanel">
                                 <h5>Add / Remove Tag</h5>
-                                <label for="tag-name">Tag Name</label>
-                                <input id="tag-name" type="text" bind:value={tagName} placeholder="#KYC" class="cyber-input" />
-                                <label for="tag-address">Address</label>
-                                <input id="tag-address" type="text" bind:value={tagAddr} placeholder="H..." class="cyber-input" />
-                                <div class="tag-action-row">
-                                    <label><input type="radio" bind:group={tagAction} value="add" /> Add Tag</label>
-                                    <label><input type="radio" bind:group={tagAction} value="remove" /> Remove Tag</label>
+                                <div class="field-group">
+                                    <label for="tag-name">Tag Name (Qualifier)</label>
+                                    <input id="tag-name" type="text" bind:value={tagName} placeholder="#KYC" class="cyber-input" />
                                 </div>
-                                <div class="actions">
+                                <WalletAddressPicker
+                                    id="tag-address"
+                                    label="Address"
+                                    bind:value={tagAddr}
+                                    addresses={walletAddresses}
+                                    {nodeOnline}
+                                    on:generate={generateAddress}
+                                />
+                                <div class="tag-toggle">
+                                    <button class="toggle-btn" class:active={tagAction === "add"} on:click={() => (tagAction = "add")}>Add Tag</button>
+                                    <button class="toggle-btn" class:active={tagAction === "remove"} on:click={() => (tagAction = "remove")}>Remove Tag</button>
+                                </div>
+                                <div class="panel-actions">
                                     <button class="cyber-btn warning" on:click={doTagAction} disabled={previewInProgress}>
-                                        {previewInProgress ? "Building Preview..." : `Preview Tag ${tagAction === "add" ? "Add" : "Remove"}`}
+                                        {previewInProgress ? "Building Preview..." : `Preview ${tagAction === "add" ? "Add" : "Remove"}`}
                                     </button>
                                 </div>
                             </div>
+
                             <!-- Tag Lookup -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Lookup Tags for Address</h5>
-                                <label for="tag-lookup-address">Address</label>
-                                <input id="tag-lookup-address" type="text" bind:value={tagLookupAddr} placeholder="H..." class="cyber-input" />
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={lookupTags} disabled={tagLookupLoading}>
-                                        {tagLookupLoading ? "Loading..." : "List Tags"}
-                                    </button>
+                                <div class="field-row">
+                                    <div class="field-group flex-grow">
+                                        <span class="field-label">Address</span>
+                                        <div class="read-only-field mono">{tagAddr || "—"}</div>
+                                    </div>
+                                    <div class="panel-actions left align-center">
+                                        <button class="cyber-btn small" on:click={lookupTags} disabled={tagLookupLoading}>
+                                            {tagLookupLoading ? "Loading..." : "List Tags"}
+                                        </button>
+                                    </div>
                                 </div>
                                 {#if tagLookupResults.length > 0}
                                     <div class="result-list">
@@ -688,13 +816,16 @@
                                     <p class="result-empty">No tags found for this address.</p>
                                 {/if}
                             </div>
+
                             <!-- Verifier Lookup -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Lookup Verifier String</h5>
-                                <label for="verifier-lookup-name">Restricted Asset Name</label>
-                                <input id="verifier-lookup-name" type="text" bind:value={verifierLookupName} placeholder="$ASSET" class="cyber-input" />
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={lookupVerifier} disabled={verifierLookupLoading}>
+                                <div class="field-group">
+                                    <label for="verifier-lookup-name">Restricted Asset Name</label>
+                                    <input id="verifier-lookup-name" type="text" bind:value={verifierLookupName} placeholder="$ASSET" class="cyber-input" />
+                                </div>
+                                <div class="panel-actions left">
+                                    <button class="cyber-btn small" on:click={lookupVerifier} disabled={verifierLookupLoading}>
                                         {verifierLookupLoading ? "Loading..." : "Get Verifier"}
                                     </button>
                                 </div>
@@ -704,29 +835,35 @@
                             </div>
                         </div>
                     {:else if activeTab === "snapshot"}
-                        <div class="tab-panel">
-                            <h4>Asset Snapshots</h4>
+                        <div class="panel-body">
+                            <div class="panel-title-row">
+                                <h4>Asset Snapshots</h4>
+                            </div>
                             <p class="section-desc">
                                 Request snapshots, list pending requests, and retrieve snapshot data. Requires <code>-assetindex</code> enabled on the node.
                             </p>
                             <!-- Request Snapshot -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Request Snapshot</h5>
-                                <label for="snapshot-request-asset">Asset Name</label>
-                                <input id="snapshot-request-asset" type="text" bind:value={snapAssetName} placeholder="ASSET_NAME" class="cyber-input" />
-                                <label for="snapshot-request-height">Block Height</label>
-                                <input id="snapshot-request-height" type="number" bind:value={snapBlockHeight} placeholder="Future block number" class="cyber-input" />
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={doSnapshotRequest}>
-                                        Request Snapshot
-                                    </button>
+                                <AssetPicker
+                                    id="snapshot-request-asset"
+                                    label="Asset Name"
+                                    bind:value={snapAssetName}
+                                    {assets}
+                                />
+                                <div class="field-group">
+                                    <label for="snapshot-request-height">Block Height</label>
+                                    <input id="snapshot-request-height" type="number" bind:value={snapBlockHeight} placeholder="Future block number" class="cyber-input" />
+                                </div>
+                                <div class="panel-actions left">
+                                    <button class="cyber-btn small" on:click={doSnapshotRequest}>Request Snapshot</button>
                                 </div>
                             </div>
                             <!-- List Snapshots -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Pending Snapshot Requests</h5>
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={listSnapshots} disabled={snapRequestsLoading}>
+                                <div class="panel-actions left">
+                                    <button class="cyber-btn small" on:click={listSnapshots} disabled={snapRequestsLoading}>
                                         {snapRequestsLoading ? "Loading..." : "List Requests"}
                                     </button>
                                 </div>
@@ -744,14 +881,20 @@
                                 {/if}
                             </div>
                             <!-- Get Snapshot -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Get Snapshot Data</h5>
-                                <label for="snapshot-get-asset">Asset Name</label>
-                                <input id="snapshot-get-asset" type="text" bind:value={snapGetName} placeholder="ASSET_NAME" class="cyber-input" />
-                                <label for="snapshot-get-height">Block Height</label>
-                                <input id="snapshot-get-height" type="number" bind:value={snapGetHeight} placeholder="Completed block number" class="cyber-input" />
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={getSnapshot} disabled={snapGetLoading}>
+                                <AssetPicker
+                                    id="snapshot-get-asset"
+                                    label="Asset Name"
+                                    bind:value={snapGetName}
+                                    {assets}
+                                />
+                                <div class="field-group">
+                                    <label for="snapshot-get-height">Block Height</label>
+                                    <input id="snapshot-get-height" type="number" bind:value={snapGetHeight} placeholder="Completed block number" class="cyber-input" />
+                                </div>
+                                <div class="panel-actions left">
+                                    <button class="cyber-btn small" on:click={getSnapshot} disabled={snapGetLoading}>
                                         {snapGetLoading ? "Loading..." : "Get Snapshot"}
                                     </button>
                                 </div>
@@ -774,39 +917,51 @@
                             </div>
                         </div>
                     {:else if activeTab === "rewards"}
-                        <div class="tab-panel">
-                            <h4>Rewards / Dividends Distribution</h4>
+                        <div class="panel-body">
+                            <div class="panel-title-row">
+                                <h4>Rewards / Dividends Distribution</h4>
+                            </div>
                             <p class="section-desc">
                                 Distribute rewards or dividends to all holders of an asset using a previously completed snapshot.
                                 Requires <code>-assetindex</code> enabled on the node and a completed snapshot at the target height.
                             </p>
                             <!-- Distribution Form -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Setup Distribution</h5>
-                                <label for="reward-ownership">Ownership Asset</label>
-                                <input id="reward-ownership" type="text" bind:value={rewardOwnershipAsset} placeholder="ASSET_NAME whose holders receive rewards" class="cyber-input" />
-                                <label for="reward-height">Snapshot Block Height</label>
-                                <input id="reward-height" type="number" bind:value={rewardSnapshotHeight} placeholder="Completed snapshot block number" class="cyber-input" />
-                                <label for="reward-dist-asset">Distribution Asset</label>
-                                <input id="reward-dist-asset" type="text" bind:value={rewardDistAsset} placeholder="HEMP or ASSET_NAME to distribute" class="cyber-input" />
-                                <label for="reward-gross">Gross Distribution Amount</label>
-                                <input id="reward-gross" type="text" bind:value={rewardGrossAmount} placeholder="Total amount to split among holders" class="cyber-input" />
-                                <label for="reward-exceptions">Excluded Addresses (optional)</label>
-                                <input id="reward-exceptions" type="text" bind:value={rewardExceptions} placeholder="Comma-separated addresses to exclude" class="cyber-input" />
-                                <div class="actions">
+                                <div class="field-group">
+                                    <label for="reward-ownership">Ownership Asset</label>
+                                    <input id="reward-ownership" type="text" bind:value={rewardOwnershipAsset} placeholder="ASSET_NAME whose holders receive rewards" class="cyber-input" />
+                                </div>
+                                <div class="field-group">
+                                    <label for="reward-height">Snapshot Block Height</label>
+                                    <input id="reward-height" type="number" bind:value={rewardSnapshotHeight} placeholder="Completed snapshot block number" class="cyber-input" />
+                                </div>
+                                <div class="field-group">
+                                    <label for="reward-dist-asset">Distribution Asset</label>
+                                    <input id="reward-dist-asset" type="text" bind:value={rewardDistAsset} placeholder="HEMP or ASSET_NAME to distribute" class="cyber-input" />
+                                </div>
+                                <div class="field-group">
+                                    <label for="reward-gross">Gross Distribution Amount</label>
+                                    <input id="reward-gross" type="text" bind:value={rewardGrossAmount} placeholder="Total amount to split among holders" class="cyber-input" />
+                                </div>
+                                <div class="field-group">
+                                    <label for="reward-exceptions">Excluded Addresses (optional)</label>
+                                    <input id="reward-exceptions" type="text" bind:value={rewardExceptions} placeholder="Comma-separated addresses to exclude" class="cyber-input" />
+                                </div>
+                                <div class="panel-actions">
                                     <button class="cyber-btn warning" on:click={previewReward} disabled={previewInProgress}>
                                         {previewInProgress ? "Building Preview..." : "Preview Distribution"}
                                     </button>
                                 </div>
                             </div>
                             <!-- Status Check -->
-                            <div class="subsection">
+                            <div class="subpanel">
                                 <h5>Check Distribution Status</h5>
                                 <p class="section-desc">
                                     For distributions already submitted, use the same parameters to check status.
                                 </p>
-                                <div class="actions">
-                                    <button class="cyber-btn" on:click={checkRewardStatus} disabled={rewardStatusLoading}>
+                                <div class="panel-actions left">
+                                    <button class="cyber-btn small" on:click={checkRewardStatus} disabled={rewardStatusLoading}>
                                         {rewardStatusLoading ? "Checking..." : "Check Status"}
                                     </button>
                                 </div>
@@ -822,10 +977,37 @@
                     {/if}
                 {/if}
             </div>
-        </div>
-    </div>
+    {/snippet}
 
-    <ModalAlert
+    {#if isOpen}
+        {#if inline}
+            <div class="advanced-panel" in:fade={{ duration: 150 }}>
+                {@render panelContent()}
+            </div>
+        {:else}
+            <div
+                class="modal-backdrop"
+                role="button"
+                tabindex="0"
+                on:click={close}
+                on:keydown={(e) => e.key === "Escape" && close()}
+                transition:fade={{ duration: 200 }}
+            >
+                <div
+                    class="modal glass-panel"
+                    role="dialog"
+                    aria-modal="true"
+                    tabindex="-1"
+                    on:click|stopPropagation
+                    on:keydown={() => {}}
+                    transition:scale={{ duration: 200, start: 0.95 }}
+                >
+                    {@render panelContent()}
+                </div>
+            </div>
+        {/if}
+
+        <ModalAlert
         isOpen={alertOpen}
         title={alertTitle}
         message={alertMessage}
@@ -850,85 +1032,140 @@
         inset: 0;
         background: rgba(0, 0, 0, 0.85);
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
+        padding-top: 0.5rem;
+        padding-bottom: 1.5rem;
         z-index: 200000;
         backdrop-filter: blur(5px);
     }
     .modal {
-        width: 640px;
-        max-width: 95vw;
-        max-height: 90vh;
+        width: 560px;
+        max-width: 92vw;
+        max-height: calc(100vh - 2rem);
         border: 1px solid rgba(0, 255, 65, 0.2);
         box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
         border-radius: 8px;
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        background: rgba(10, 15, 12, 0.98);
     }
     .modal-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.8rem 1.25rem;
+        padding: 0.5rem 1rem 0.65rem;
         background: rgba(0, 0, 0, 0.3);
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
     }
     .modal-header h3 {
         margin: 0;
         color: var(--color-primary);
         text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
-        font-size: 1.1rem;
+        font-size: 0.9rem;
+        letter-spacing: 1px;
     }
     .close-btn {
         background: none;
         border: none;
         color: #888;
-        font-size: 1.5rem;
+        font-size: 1.3rem;
         cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+        margin: -0.2rem -0.4rem -0.35rem 0;
     }
     .close-btn:hover { color: #fff; }
+
     .tabs {
         display: flex;
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-shrink: 0;
     }
     .tabs button {
         flex: 1;
-        padding: 0.6rem 0.5rem;
+        padding: 0.5rem 0.4rem;
         background: none;
         border: none;
         color: #666;
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         font-weight: 600;
         cursor: pointer;
         letter-spacing: 1px;
         transition: all 0.2s;
+        border-bottom: 2px solid transparent;
     }
     .tabs button:hover { color: #aaa; }
     .tabs button.active {
         color: var(--color-primary);
-        border-bottom: 2px solid var(--color-primary);
+        border-bottom-color: var(--color-primary);
     }
+
     .modal-body {
-        padding: 1.25rem;
+        padding: 0.6rem 0.9rem;
         overflow-y: auto;
-        flex: 1;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
-    .tab-panel {
+    .modal-body::-webkit-scrollbar {
+        width: 8px;
+    }
+    .modal-body::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .modal-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+
+    .panel-body {
         display: flex;
         flex-direction: column;
+        gap: 0.4rem;
+        padding-bottom: 1.2rem;
+    }
+    .panel-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         gap: 0.5rem;
     }
-    .tab-panel h4 {
-        margin: 0 0 0.3rem 0;
+    .panel-title-row h4 {
+        margin: 0;
         color: var(--color-primary);
-        font-size: 0.9rem;
+        font-size: 0.85rem;
+        letter-spacing: 1px;
     }
+
+    .info-banner {
+        background: rgba(0, 255, 65, 0.05);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 6px;
+        padding: 0.5rem 0.75rem;
+        color: #aaa;
+        font-size: 0.7rem;
+        line-height: 1.4;
+    }
+    .info-banner :global(code) {
+        background: rgba(0, 255, 65, 0.1);
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 0.65rem;
+    }
+
     .section-desc {
         color: #888;
         font-size: 0.75rem;
-        margin-bottom: 0.5rem;
-        line-height: 1.3;
+        margin: 0;
+        line-height: 1.4;
     }
     .section-desc code {
         background: rgba(0, 255, 65, 0.1);
@@ -936,38 +1173,105 @@
         border-radius: 3px;
         font-size: 0.7rem;
     }
-    .subsection {
-        margin-top: 1rem;
-        padding-top: 1rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
+
+    .subpanel {
+        margin-top: 0.4rem;
+        padding: 0.5rem 0.6rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
     }
-    .subsection h5 {
-        margin: 0 0 0.5rem 0;
+    .subpanel:first-of-type {
+        margin-top: 0;
+    }
+    .subpanel h5 {
+        margin: 0;
         color: #aaa;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
+        letter-spacing: 0.5px;
     }
+
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .field-group.narrow-inline {
+        max-width: 180px;
+    }
+    .field-group.inline-check {
+        flex-direction: row;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .field-group.flex-grow {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .field-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .label-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .label-row label {
+        margin-bottom: 0;
+    }
+
+    label,
+    .field-label {
+        color: #888;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.15rem;
+    }
+
     .cyber-input {
         width: 100%;
-        padding: 0.5rem;
-        margin-bottom: 0.5rem;
-        background: rgba(0, 0, 0, 0.4);
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 4px;
+        border-radius: 6px;
         color: #fff;
         font-family: var(--font-mono);
         font-size: 0.8rem;
         box-sizing: border-box;
+        outline: none;
+        transition: all 0.2s;
     }
     .cyber-input:focus {
         border-color: var(--color-primary);
-        outline: none;
     }
-    label {
-        color: #aaa;
-        font-size: 0.7rem;
-        display: block;
-        margin-bottom: 0.2rem;
+    .cyber-input::placeholder {
+        color: #555;
     }
+
+    .read-only-field {
+        padding: 0.45rem 0.6rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: #888;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
     .confirm-check {
         display: flex;
         align-items: center;
@@ -976,21 +1280,72 @@
         font-size: 0.8rem;
         cursor: pointer;
     }
-    .tag-action-row {
+    .confirm-check input {
+        display: none;
+    }
+    .checkbox-visual {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #444;
+        border-radius: 4px;
+        transition: all 0.15s;
+        position: relative;
+    }
+    .confirm-check input:checked + .checkbox-visual {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 10px var(--color-primary);
+    }
+    .confirm-check input:checked + .checkbox-visual::after {
+        content: "✓";
+        position: absolute;
+        top: -1px;
+        left: 2px;
+        font-size: 11px;
+        color: #000;
+        font-weight: bold;
+    }
+
+    .tag-toggle {
         display: flex;
-        gap: 1rem;
-        margin-bottom: 0.5rem;
+        gap: 0.25rem;
     }
-    .tag-action-row label {
-        color: #ddd;
-        font-size: 0.8rem;
+    .toggle-btn {
+        flex: 1;
+        padding: 0.4rem 0.6rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        color: #888;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
         cursor: pointer;
+        transition: all 0.2s;
     }
-    .actions {
+    .toggle-btn:hover {
+        border-color: rgba(255, 255, 255, 0.2);
+        color: #aaa;
+    }
+    .toggle-btn.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+
+    .panel-actions {
         display: flex;
         justify-content: flex-end;
-        margin-top: 0.5rem;
+        margin-top: 0.25rem;
     }
+    .panel-actions.left {
+        justify-content: flex-start;
+    }
+    .panel-actions.align-center {
+        align-items: center;
+        margin-top: 0;
+    }
+
     .cyber-btn {
         padding: 0.5rem 1rem;
         background: rgba(0, 255, 65, 0.08);
@@ -1021,6 +1376,11 @@
         background: rgba(255, 170, 0, 0.15);
         box-shadow: 0 0 15px rgba(255, 170, 0, 0.2);
     }
+    .cyber-btn.small {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.65rem;
+    }
+
     .offline-banner {
         text-align: center;
         padding: 2rem;
@@ -1030,6 +1390,7 @@
         border-radius: 8px;
         background: rgba(255, 0, 0, 0.05);
     }
+
     .result-list {
         margin-top: 0.5rem;
         max-height: 200px;
@@ -1047,6 +1408,8 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 0.25rem;
     }
     .result-empty {
         color: #555;
@@ -1073,5 +1436,40 @@
         margin: 0.3rem 0;
         font-size: 0.75rem;
         color: #ccc;
+    }
+
+    /* Inline panel mode */
+    .advanced-panel {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    @media (max-width: 600px) {
+        .modal {
+            max-height: calc(100vh - 1rem);
+            border-radius: 0;
+            max-width: 100vw;
+        }
+        .modal-backdrop {
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+        }
+        .tabs button {
+            font-size: 0.6rem;
+            padding: 0.5rem 0.3rem;
+        }
+        .panel-title-row {
+            flex-wrap: wrap;
+        }
+        .label-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .field-row {
+            flex-direction: column;
+            align-items: stretch;
+        }
     }
 </style>

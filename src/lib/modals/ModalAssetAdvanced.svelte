@@ -1,5 +1,5 @@
 <script>
-    import { createEventDispatcher } from "svelte";
+    import { createEventDispatcher, tick } from "svelte";
     import { fade, scale } from "svelte/transition";
     import { invoke } from "@tauri-apps/api/core";
     import "../../components.css";
@@ -15,6 +15,8 @@
     export let nodeOnline = false;
     export let inline = false;
     export let assets = []; // Array of owned assets for pickers
+    export let initialTab = "";
+    export let initialTagName = "";
 
     const dispatch = createEventDispatcher();
 
@@ -44,6 +46,7 @@
     // Tag Lookup State
     let tagLookupResults = [];
     let tagLookupLoading = false;
+    let recentTagTargets = [];
 
     // Verifier Lookup State
     let verifierLookupName = "";
@@ -81,6 +84,8 @@
     let rewardInlineMessageType = "info";
     let rewardFormHash = "";
     let rewardAssetOptions = [];
+    let appliedInitialKey = "";
+    let recentTagTargetsLoaded = false;
 
     // Wallet addresses
     let walletAddresses = [];
@@ -102,6 +107,10 @@
     let previewJournalId = null;
 
     $: if (isOpen && nodeOnline) loadWalletAddresses();
+    $: if (isOpen && !recentTagTargetsLoaded) {
+        loadRecentTagTargets();
+        recentTagTargetsLoaded = true;
+    }
     $: if (isOpen && nodeOnline && activeTab === "snapshot") hydrateSnapshotTab();
     $: if (isOpen && nodeOnline && activeTab === "rewards") hydrateRewardsTab();
     $: rewardFormHash = buildRewardFormHash();
@@ -112,6 +121,7 @@
         rewardPreviewData = null;
     }
     $: rewardAssetOptions = [{ name: "HEMP", balance: "native", type: "TOKEN" }, ...assets];
+    $: if (isOpen && initialTab) applyInitialContext();
 
     function close() {
         dispatch("close");
@@ -158,6 +168,46 @@
         alertMessage = message;
         alertType = type;
         alertOpen = true;
+    }
+
+    function loadRecentTagTargets() {
+        try {
+            const raw = localStorage.getItem("commander.tagRecentTargets.v1");
+            const parsed = raw ? JSON.parse(raw) : [];
+            recentTagTargets = Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+        } catch (err) {
+            console.warn("Failed to load recent tag targets:", err);
+            recentTagTargets = [];
+        }
+    }
+
+    function saveRecentTagTargets() {
+        localStorage.setItem("commander.tagRecentTargets.v1", JSON.stringify(recentTagTargets.slice(0, 8)));
+    }
+
+    function pushRecentTagTarget(tagName, address) {
+        const cleanedTag = String(tagName || "").trim();
+        const cleanedAddress = String(address || "").trim();
+        if (!cleanedTag || !cleanedAddress) return;
+        const key = `${cleanedTag}|${cleanedAddress}`;
+        const next = [{ key, tag: cleanedTag, address: cleanedAddress }, ...recentTagTargets.filter((row) => row.key !== key)];
+        recentTagTargets = next.slice(0, 8);
+        saveRecentTagTargets();
+    }
+
+    async function applyInitialContext() {
+        const key = `${initialTab}|${initialTagName}|${isOpen}`;
+        if (!isOpen || key === appliedInitialKey) return;
+        if (initialTab === "tags") {
+            activeTab = "tags";
+            if (initialTagName?.trim()) {
+                tagName = initialTagName.trim();
+            }
+            await tick();
+            const target = document.getElementById("tag-address");
+            if (target) target.focus();
+        }
+        appliedInitialKey = key;
     }
 
     function setSnapshotMessage(message, type = "info") {
@@ -264,6 +314,7 @@
         tagAction = "add";
         tagLookupResults = [];
         tagLookupLoading = false;
+        loadRecentTagTargets();
         snapData = null;
         snapGetLoading = false;
         snapInlineMessage = "";
@@ -680,11 +731,13 @@
                     tagName: confirmPayload.tag_name,
                     address: confirmPayload.address,
                 });
+                pushRecentTagTarget(confirmPayload.tag_name, confirmPayload.address);
             } else if (confirmType === "REMOVE TAG") {
                 txid = await invoke("remove_tag_from_address", {
                     tagName: confirmPayload.tag_name,
                     address: confirmPayload.address,
                 });
+                pushRecentTagTarget(confirmPayload.tag_name, confirmPayload.address);
             } else if (confirmType === "REWARD DISTRIBUTION") {
                 const result = await invoke("distribute_reward", {
                     ownershipAsset: previewData.ownership_asset,
@@ -952,6 +1005,7 @@
                                         <li><strong>Remove tag</strong> — revoke a qualifier from an address.</li>
                                         <li><strong>List tags</strong> — check which qualifiers an address currently holds.</li>
                                     </ul>
+                                    <p><strong>Common failures:</strong> invalid address format, missing qualifier ownership token, or node missing <code>-assetindex</code>.</p>
                                 </HelpHitbox>
                             </div>
 
@@ -974,6 +1028,27 @@
                                     <button class="toggle-btn" class:active={tagAction === "add"} on:click={() => (tagAction = "add")}>Add Tag</button>
                                     <button class="toggle-btn" class:active={tagAction === "remove"} on:click={() => (tagAction = "remove")}>Remove Tag</button>
                                 </div>
+                                {#if recentTagTargets.length > 0}
+                                    <div class="recent-targets">
+                                        <div class="recent-label">Recent Targets</div>
+                                        <div class="recent-list">
+                                            {#each recentTagTargets as item}
+                                                <button
+                                                    class="recent-pill"
+                                                    type="button"
+                                                    on:click={() => {
+                                                        tagName = item.tag;
+                                                        tagAddr = item.address;
+                                                    }}
+                                                    title={`${item.tag} -> ${item.address}`}
+                                                >
+                                                    <span>{item.tag}</span>
+                                                    <code>{item.address.slice(0, 8)}...{item.address.slice(-6)}</code>
+                                                </button>
+                                            {/each}
+                                        </div>
+                                    </div>
+                                {/if}
                                 <div class="panel-actions">
                                     <button class="cyber-btn warning" on:click={doTagAction} disabled={previewInProgress}>
                                         {previewInProgress ? "Building Preview..." : `Preview ${tagAction === "add" ? "Add" : "Remove"}`}
@@ -1583,6 +1658,44 @@
     .tag-toggle {
         display: flex;
         gap: 0.25rem;
+    }
+    .recent-targets {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        margin-top: 0.2rem;
+    }
+    .recent-label {
+        color: #888;
+        font-size: 0.63rem;
+        letter-spacing: 0.5px;
+    }
+    .recent-list {
+        display: flex;
+        gap: 0.35rem;
+        overflow-x: auto;
+        padding-bottom: 0.1rem;
+    }
+    .recent-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: rgba(0, 0, 0, 0.32);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        color: #bbb;
+        padding: 0.2rem 0.55rem;
+        cursor: pointer;
+        font-size: 0.63rem;
+        white-space: nowrap;
+    }
+    .recent-pill:hover {
+        border-color: rgba(0, 255, 65, 0.35);
+        color: #d8ffd8;
+    }
+    .recent-pill code {
+        color: #88b6a0;
+        font-size: 0.62rem;
     }
     .toggle-btn {
         flex: 1;

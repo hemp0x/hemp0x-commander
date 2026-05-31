@@ -42,6 +42,8 @@
     let govModalOpen = false;
     let selectedGovAsset = null;
     let advancedModalOpen = false;
+    let advancedInitialTab = "";
+    let advancedInitialTagName = "";
 
     // Back navigation: remember last detail asset when opening action panels
     let lastDetailAsset = null;
@@ -401,6 +403,14 @@
         reissueAsset = asset.name;
         selectedDetail = null;
         reissueModalOpen = true;
+    }
+
+    function goToManageTags(asset) {
+        lastDetailAsset = selectedDetail;
+        selectedDetail = null;
+        advancedInitialTab = "tags";
+        advancedInitialTagName = asset?.name || "";
+        advancedModalOpen = true;
     }
 
     function returnToDetail() {
@@ -790,7 +800,15 @@
                 <button
                     class="header-btn advanced-btn"
                     class:active={advancedModalOpen}
-                    on:click={() => { advancedModalOpen = !advancedModalOpen; createModalOpen = false; browseModalOpen = false; }}
+                    on:click={() => {
+                        advancedModalOpen = !advancedModalOpen;
+                        createModalOpen = false;
+                        browseModalOpen = false;
+                        if (advancedModalOpen) {
+                            advancedInitialTab = "";
+                            advancedInitialTagName = "";
+                        }
+                    }}
                     disabled={!nodeOnline}
                     title="Advanced Asset Controls"
                 >
@@ -814,6 +832,8 @@
                         isOpen={true}
                         {nodeOnline}
                         assets={groupedAssets}
+                        initialTab={advancedInitialTab}
+                        initialTagName={advancedInitialTagName}
                         on:close={() => (advancedModalOpen = false)}
                     />
                 {:else if createModalOpen}
@@ -855,6 +875,7 @@
                         on:createSub={(e) => goToSubAsset(e.detail.name)}
                         on:createNft={(e) => goToNft(e.detail.name)}
                         on:gov={(e) => openGovernance(e.detail)}
+                        on:manageTags={(e) => goToManageTags(e.detail)}
                     />
                 {:else if transferModalOpen}
                     <ModalTransfer

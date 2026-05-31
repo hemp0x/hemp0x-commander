@@ -144,6 +144,10 @@
         }
     }
 
+    function onManageTags() {
+        dispatch("manageTags", asset);
+    }
+
     async function toggleSubscription() {
         if (!asset) return;
         const channelName = asset.name;
@@ -437,6 +441,16 @@
                                 </button>
                             {/if}
                         </div>
+                        {#if asset.hasOwner && asset.name.startsWith("#")}
+                            <div class="detail-actions owner-actions">
+                                <button
+                                    class="action-btn"
+                                    on:click={onManageTags}
+                                >
+                                    <span class="action-icon">🏷</span> MANAGE TAGS
+                                </button>
+                            </div>
+                        {/if}
                         {#if asset.hasOwner && !asset.name.includes("#")}
                             <div class="detail-actions owner-actions">
                                 <button

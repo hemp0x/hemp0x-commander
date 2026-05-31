@@ -55,10 +55,14 @@
     let snapBlockHeight = "";
     let snapRequests = [];
     let snapRequestsLoading = false;
-    let snapGetName = "";
-    let snapGetHeight = "";
     let snapData = null;
     let snapGetLoading = false;
+    let snapCurrentHeight = null;
+    let snapBlockHeightTouched = false;
+    let snapInlineMessage = "";
+    let snapInlineMessageType = "info";
+    let snapshotActionKey = "";
+    let snapshotActionLoading = false;
 
     // Rewards State
     let rewardOwnershipAsset = "";
@@ -66,8 +70,17 @@
     let rewardDistAsset = "HEMP";
     let rewardGrossAmount = "";
     let rewardExceptions = "";
+    let rewardChangeAddress = "";
     let rewardStatusData = null;
     let rewardStatusLoading = false;
+    let rewardPreviewData = null;
+    let rewardDryRunHash = "";
+    let rewardDryRunLoading = false;
+    let rewardHistory = [];
+    let rewardInlineMessage = "";
+    let rewardInlineMessageType = "info";
+    let rewardFormHash = "";
+    let rewardAssetOptions = [];
 
     // Wallet addresses
     let walletAddresses = [];
@@ -89,6 +102,16 @@
     let previewJournalId = null;
 
     $: if (isOpen && nodeOnline) loadWalletAddresses();
+    $: if (isOpen && nodeOnline && activeTab === "snapshot") hydrateSnapshotTab();
+    $: if (isOpen && nodeOnline && activeTab === "rewards") hydrateRewardsTab();
+    $: rewardFormHash = buildRewardFormHash();
+    $: if (rewardDryRunHash && rewardDryRunHash !== rewardFormHash) {
+        rewardDryRunHash = "";
+    }
+    $: if (!rewardDryRunHash) {
+        rewardPreviewData = null;
+    }
+    $: rewardAssetOptions = [{ name: "HEMP", balance: "native", type: "TOKEN" }, ...assets];
 
     function close() {
         dispatch("close");
@@ -137,6 +160,93 @@
         alertOpen = true;
     }
 
+    function setSnapshotMessage(message, type = "info") {
+        snapInlineMessage = message;
+        snapInlineMessageType = type;
+    }
+
+    function setRewardMessage(message, type = "info") {
+        rewardInlineMessage = message;
+        rewardInlineMessageType = type;
+    }
+
+    async function fetchCurrentChainHeight() {
+        try {
+            const raw = await invoke("get_info");
+            const parsed = JSON.parse(raw);
+            const blocks = Number(parsed?.blocks);
+            if (Number.isInteger(blocks) && blocks > 0) return blocks;
+        } catch (err) {
+            console.warn("Unable to read current chain height:", err);
+        }
+        return null;
+    }
+
+    function maybeRollSnapshotDefaultHeight() {
+        if (!snapCurrentHeight || snapBlockHeightTouched) return;
+        const next = String(snapCurrentHeight);
+        const currentValue = Number(snapBlockHeight);
+        if (!snapBlockHeight || !Number.isInteger(currentValue) || currentValue < snapCurrentHeight) {
+            snapBlockHeight = next;
+        }
+    }
+
+    async function hydrateSnapshotTab() {
+        const height = await fetchCurrentChainHeight();
+        if (height) {
+            snapCurrentHeight = height;
+            maybeRollSnapshotDefaultHeight();
+        }
+        await listSnapshots();
+    }
+
+    function buildRewardFormHash() {
+        const fields = [
+            rewardOwnershipAsset.trim(),
+            String(rewardSnapshotHeight).trim(),
+            rewardDistAsset.trim(),
+            rewardGrossAmount.trim(),
+            rewardExceptions.trim(),
+            rewardChangeAddress.trim(),
+        ];
+        return fields.join("|");
+    }
+
+    function loadRewardHistory() {
+        try {
+            const raw = localStorage.getItem("commander.rewardHistory.v1");
+            const parsed = raw ? JSON.parse(raw) : [];
+            rewardHistory = Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            console.warn("Failed to load reward history:", err);
+            rewardHistory = [];
+        }
+    }
+
+    function saveRewardHistory() {
+        localStorage.setItem("commander.rewardHistory.v1", JSON.stringify(rewardHistory));
+    }
+
+    function upsertRewardHistory(entry) {
+        const existing = rewardHistory.findIndex((item) => item.id === entry.id);
+        if (existing >= 0) {
+            rewardHistory[existing] = entry;
+        } else {
+            rewardHistory = [entry, ...rewardHistory].slice(0, 100);
+        }
+        saveRewardHistory();
+    }
+
+    async function hydrateRewardsTab() {
+        if (rewardHistory.length === 0) loadRewardHistory();
+        if (!rewardChangeAddress && walletAddresses.length > 0) {
+            rewardChangeAddress = walletAddresses[0].address;
+        }
+        if (snapRequests.length === 0) {
+            await listSnapshots();
+        }
+    }
+
     function resetFields() {
         qualifierName = "";
         qualifierQty = "1";
@@ -154,17 +264,21 @@
         tagAction = "add";
         tagLookupResults = [];
         tagLookupLoading = false;
-        snapGetName = "";
-        snapGetHeight = "";
         snapData = null;
         snapGetLoading = false;
+        snapInlineMessage = "";
+        snapBlockHeightTouched = false;
         rewardOwnershipAsset = "";
         rewardSnapshotHeight = "";
         rewardDistAsset = "HEMP";
         rewardGrossAmount = "";
         rewardExceptions = "";
+        rewardChangeAddress = walletAddresses.length > 0 ? walletAddresses[0].address : "";
         rewardStatusData = null;
         rewardStatusLoading = false;
+        rewardPreviewData = null;
+        rewardDryRunHash = "";
+        rewardInlineMessage = "";
     }
 
     // ---- Qualifier Operations ----
@@ -338,14 +452,20 @@
             triggerAlert("Validation", "Block height must be a positive whole number.", "error");
             return;
         }
+        if (snapCurrentHeight && height < snapCurrentHeight) {
+            triggerAlert("Validation", "Block height cannot be lower than current chain height.", "error");
+            return;
+        }
         try {
             const result = await invoke("request_snapshot", {
                 assetName: snapAssetName.trim(),
                 blockHeight: height,
             });
-            triggerAlert("Snapshot Requested", JSON.stringify(result, null, 2), "success");
+            setSnapshotMessage("Snapshot request created.", "success");
             snapAssetName = "";
-            snapBlockHeight = "";
+            snapBlockHeightTouched = false;
+            maybeRollSnapshotDefaultHeight();
+            await listSnapshots();
         } catch (err) {
             triggerAlert("Request Failed", String(err), "error");
         }
@@ -362,33 +482,56 @@
         snapRequestsLoading = false;
     }
 
-    async function getSnapshot() {
-        if (!snapGetName || !snapGetHeight) {
-            triggerAlert("Validation", "Asset name and block height are required.", "error");
-            return;
-        }
-        const height = Number(snapGetHeight);
-        if (!Number.isInteger(height) || height <= 0) {
-            triggerAlert("Validation", "Block height must be a positive whole number.", "error");
-            return;
-        }
+    function snapshotBlocksRemaining(blockHeight) {
+        if (!snapCurrentHeight || !Number.isInteger(Number(blockHeight))) return null;
+        return Math.max(0, Number(blockHeight) - snapCurrentHeight);
+    }
+
+    async function getSnapshotFromRequest(assetName, blockHeight) {
         snapGetLoading = true;
+        snapData = null;
         try {
             snapData = await invoke("get_asset_snapshot", {
-                assetName: snapGetName.trim(),
-                blockHeight: height,
+                assetName: assetName.trim(),
+                blockHeight,
             });
+            setSnapshotMessage(`Loaded snapshot for ${assetName} @ ${blockHeight}.`, "success");
         } catch (err) {
             snapData = null;
-            triggerAlert("Get Failed", String(err), "error");
+            const remaining = snapshotBlocksRemaining(blockHeight);
+            if (remaining !== null && remaining > 0) {
+                setSnapshotMessage(`Snapshot block height not reached. Check back in ${remaining} blocks.`, "warning");
+            } else {
+                triggerAlert("Get Failed", String(err), "error");
+            }
         }
         snapGetLoading = false;
     }
 
+    async function cancelSnapshotRequest(assetName, blockHeight) {
+        const confirmed = window.confirm(`Cancel snapshot request for ${assetName} @ ${blockHeight}?`);
+        if (!confirmed) return;
+        snapshotActionKey = `${assetName}:${blockHeight}:cancel`;
+        snapshotActionLoading = true;
+        try {
+            await invoke("cancel_snapshot_request", {
+                assetName,
+                blockHeight,
+            });
+            setSnapshotMessage(`Canceled snapshot request for ${assetName} @ ${blockHeight}.`, "success");
+            await listSnapshots();
+        } catch (err) {
+            triggerAlert("Cancel Failed", String(err), "error");
+        } finally {
+            snapshotActionLoading = false;
+            snapshotActionKey = "";
+        }
+    }
+
     // ---- Rewards / Dividends ----
 
-    async function previewReward() {
-        if (previewInProgress) return;
+    async function runRewardDryRun() {
+        if (rewardDryRunLoading) return;
         if (!rewardOwnershipAsset || !rewardSnapshotHeight || !rewardGrossAmount) {
             triggerAlert("Validation", "Ownership asset, snapshot height, and gross amount are required.", "error");
             return;
@@ -398,43 +541,86 @@
             triggerAlert("Validation", "Snapshot block height must be a positive whole number.", "error");
             return;
         }
-        previewInProgress = true;
+        rewardDryRunLoading = true;
         try {
-            previewData = await invoke("preview_distribute_reward", {
+            rewardPreviewData = await invoke("preview_distribute_reward", {
                 ownershipAsset: rewardOwnershipAsset.trim(),
                 snapshotHeight: height,
                 distributionAsset: rewardDistAsset.trim() || "HEMP",
                 grossAmount: rewardGrossAmount.trim(),
                 exceptionAddresses: rewardExceptions.trim() || null,
+                changeAddress: rewardChangeAddress.trim() || null,
             });
-            confirmType = "REWARD DISTRIBUTION";
-            confirmOpen = true;
-            try {
-                const entry = await invoke("add_tx_journal_entry", {
-                    input: {
-                        status: "Previewed",
-                        operation_type: "distribute_reward",
-                        summary: previewData.summary,
-                        txid: null,
-                        details: {
-                            ownership_asset: previewData.ownership_asset,
-                            snapshot_height: previewData.snapshot_height,
-                            distribution_asset: previewData.distribution_asset,
-                            gross_amount: previewData.gross_amount,
-                            exception_addresses: previewData.exception_addresses,
-                        },
-                    },
-                });
-                previewJournalId = entry.id;
-            } catch (journalErr) {
-                console.warn("Failed to record journal preview entry:", journalErr);
-                previewJournalId = null;
-            }
+            rewardDryRunHash = rewardFormHash;
+            setRewardMessage("Dry run completed. Review summary, then execute reward.", "success");
         } catch (err) {
-            triggerAlert("Preview Failed", String(err), "error");
+            setRewardMessage("", "info");
+            triggerAlert("Dry Run Failed", String(err), "error");
         } finally {
-            previewInProgress = false;
+            rewardDryRunLoading = false;
         }
+    }
+
+    async function executeRewardDistribution() {
+        if (!rewardPreviewData || rewardDryRunHash !== rewardFormHash) {
+            triggerAlert("Validation", "Run Dry Run for current values before execution.", "error");
+            return;
+        }
+        const confirmed = window.confirm("Execute reward distribution now? This action is irreversible.");
+        if (!confirmed) return;
+        try {
+            const result = await invoke("distribute_reward", {
+                ownershipAsset: rewardPreviewData.ownership_asset,
+                snapshotHeight: rewardPreviewData.snapshot_height,
+                distributionAsset: rewardPreviewData.distribution_asset,
+                grossAmount: rewardPreviewData.gross_amount,
+                exceptionAddresses: rewardPreviewData.exception_addresses,
+                changeAddress: rewardChangeAddress.trim() || null,
+                dryRun: false,
+            });
+            const status = result.status || JSON.stringify(result);
+            const id = `${rewardPreviewData.ownership_asset}:${rewardPreviewData.snapshot_height}:${rewardPreviewData.distribution_asset}:${rewardPreviewData.gross_amount}:${rewardPreviewData.exception_addresses || ""}`;
+            upsertRewardHistory({
+                id,
+                created_at: Date.now(),
+                ownership_asset: rewardPreviewData.ownership_asset,
+                snapshot_height: rewardPreviewData.snapshot_height,
+                distribution_asset: rewardPreviewData.distribution_asset,
+                gross_amount: rewardPreviewData.gross_amount,
+                exception_addresses: rewardPreviewData.exception_addresses || "",
+                change_address: rewardChangeAddress.trim() || "",
+                last_status: status,
+            });
+            setRewardMessage("Reward distribution submitted. Use history to track status.", "success");
+            addToolNotification("Reward distribution broadcasted", status, "success");
+        } catch (err) {
+            triggerAlert("Execute Reward Failed", String(err), "error");
+        }
+    }
+
+    async function checkRewardStatusForHistory(entry) {
+        try {
+            const status = await invoke("get_distribute_reward_status", {
+                ownershipAsset: entry.ownership_asset,
+                snapshotHeight: Number(entry.snapshot_height),
+                distributionAsset: entry.distribution_asset,
+                grossAmount: entry.gross_amount,
+                exceptionAddresses: entry.exception_addresses || null,
+                changeAddress: entry.change_address || null,
+            });
+            upsertRewardHistory({
+                ...entry,
+                last_status: typeof status === "object" ? JSON.stringify(status) : String(status),
+                last_checked_at: Date.now(),
+            });
+        } catch (err) {
+            triggerAlert("Status Check Failed", String(err), "error");
+        }
+    }
+
+    function clearRewardHistory() {
+        rewardHistory = [];
+        saveRewardHistory();
     }
 
     async function checkRewardStatus() {
@@ -455,6 +641,7 @@
                 distributionAsset: rewardDistAsset.trim() || "HEMP",
                 grossAmount: rewardGrossAmount.trim(),
                 exceptionAddresses: rewardExceptions.trim() || null,
+                changeAddress: rewardChangeAddress.trim() || null,
             });
         } catch (err) {
             rewardStatusData = null;
@@ -505,6 +692,8 @@
                     distributionAsset: previewData.distribution_asset,
                     grossAmount: previewData.gross_amount,
                     exceptionAddresses: previewData.exception_addresses,
+                    changeAddress: rewardChangeAddress.trim() || null,
+                    dryRun: false,
                 });
                 successMessage = result.status || JSON.stringify(result);
                 journalDetails = {
@@ -838,11 +1027,16 @@
                         <div class="panel-body">
                             <div class="panel-title-row">
                                 <h4>Asset Snapshots</h4>
+                                <HelpHitbox title="Snapshots">
+                                    <p>Snapshot requests tell the node to capture holder balances for one asset at a specific block.</p>
+                                    <p>Block height matters because rewards are anchored to that exact chain state.</p>
+                                    <p>When the chain reaches the target height, use <code>Get Snapshot</code> on that request row.</p>
+                                    <p>Completed snapshots are used as the holder set for reward distributions.</p>
+                                </HelpHitbox>
                             </div>
                             <p class="section-desc">
-                                Request snapshots, list pending requests, and retrieve snapshot data. Requires <code>-assetindex</code> enabled on the node.
+                                Request and manage snapshots. Requires <code>-assetindex</code> on the node.
                             </p>
-                            <!-- Request Snapshot -->
                             <div class="subpanel">
                                 <h5>Request Snapshot</h5>
                                 <AssetPicker
@@ -853,15 +1047,25 @@
                                 />
                                 <div class="field-group">
                                     <label for="snapshot-request-height">Block Height</label>
-                                    <input id="snapshot-request-height" type="number" bind:value={snapBlockHeight} placeholder="Future block number" class="cyber-input" />
+                                    <input
+                                        id="snapshot-request-height"
+                                        type="number"
+                                        bind:value={snapBlockHeight}
+                                        on:input={() => (snapBlockHeightTouched = true)}
+                                        min={snapCurrentHeight || undefined}
+                                        placeholder={snapCurrentHeight ? `>= ${snapCurrentHeight}` : "Future block number"}
+                                        class="cyber-input"
+                                    />
                                 </div>
+                                {#if snapCurrentHeight}
+                                    <p class="hint-text">Current chain height: <span class="mono">{snapCurrentHeight}</span></p>
+                                {/if}
                                 <div class="panel-actions left">
                                     <button class="cyber-btn small" on:click={doSnapshotRequest}>Request Snapshot</button>
                                 </div>
                             </div>
-                            <!-- List Snapshots -->
                             <div class="subpanel">
-                                <h5>Pending Snapshot Requests</h5>
+                                <h5>Snapshot Requests</h5>
                                 <div class="panel-actions left">
                                     <button class="cyber-btn small" on:click={listSnapshots} disabled={snapRequestsLoading}>
                                         {snapRequestsLoading ? "Loading..." : "List Requests"}
@@ -870,76 +1074,115 @@
                                 {#if snapRequests.length > 0}
                                     <div class="result-list">
                                         {#each snapRequests as sr}
-                                            <div class="result-item">
+                                            <div class="result-item request-row">
                                                 <span class="snap-asset">{sr.asset_name}</span>
                                                 <span class="snap-height">@ {sr.block_height}</span>
+                                                {#if snapshotBlocksRemaining(sr.block_height) === null}
+                                                    <span class="row-state">Readiness unknown</span>
+                                                {:else if snapshotBlocksRemaining(sr.block_height) > 0}
+                                                    <span class="row-state">Waiting ({snapshotBlocksRemaining(sr.block_height)} blocks)</span>
+                                                {:else}
+                                                    <span class="row-state ready">Ready</span>
+                                                {/if}
+                                                <div class="row-actions">
+                                                    <button
+                                                        class="cyber-btn small"
+                                                        on:click={() => getSnapshotFromRequest(sr.asset_name, sr.block_height)}
+                                                        disabled={snapGetLoading || snapshotActionLoading}
+                                                    >
+                                                        {snapGetLoading ? "Loading..." : "Get Snapshot"}
+                                                    </button>
+                                                    <button
+                                                        class="cyber-btn small warning"
+                                                        on:click={() => cancelSnapshotRequest(sr.asset_name, sr.block_height)}
+                                                        disabled={snapshotActionLoading}
+                                                    >
+                                                        {snapshotActionLoading && snapshotActionKey === `${sr.asset_name}:${sr.block_height}:cancel` ? "Canceling..." : "Cancel"}
+                                                    </button>
+                                                </div>
                                             </div>
                                         {/each}
                                     </div>
                                 {:else if snapRequests.length === 0 && !snapRequestsLoading}
-                                    <p class="result-empty">No pending snapshot requests.</p>
+                                    <p class="result-empty">No snapshot requests found.</p>
                                 {/if}
                             </div>
-                            <!-- Get Snapshot -->
-                            <div class="subpanel">
-                                <h5>Get Snapshot Data</h5>
-                                <AssetPicker
-                                    id="snapshot-get-asset"
-                                    label="Asset Name"
-                                    bind:value={snapGetName}
-                                    {assets}
-                                />
-                                <div class="field-group">
-                                    <label for="snapshot-get-height">Block Height</label>
-                                    <input id="snapshot-get-height" type="number" bind:value={snapGetHeight} placeholder="Completed block number" class="cyber-input" />
+                            {#if snapInlineMessage}
+                                <div class={`status-banner ${snapInlineMessageType}`}>{snapInlineMessage}</div>
+                            {/if}
+                            {#if snapData}
+                                <div class="subpanel">
+                                    <h5>Snapshot Data</h5>
+                                    {#if snapData}
+                                        <div class="snapshot-result">
+                                            <p><strong>Asset:</strong> {snapData.name} @ height {snapData.height}</p>
+                                            <p><strong>Holders:</strong> {snapData.owners.length}</p>
+                                            {#if snapData.owners.length > 0}
+                                                <div class="result-list">
+                                                    {#each snapData.owners as owner}
+                                                        <div class="result-item">
+                                                            <span class="snap-addr">{owner.address}</span>
+                                                            <span class="snap-amount">{typeof owner.amount_owned === "number" ? owner.amount_owned : JSON.stringify(owner.amount_owned)}</span>
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                            {/if}
+                                        </div>
+                                    {/if}
                                 </div>
-                                <div class="panel-actions left">
-                                    <button class="cyber-btn small" on:click={getSnapshot} disabled={snapGetLoading}>
-                                        {snapGetLoading ? "Loading..." : "Get Snapshot"}
-                                    </button>
-                                </div>
-                                {#if snapData}
-                                    <div class="snapshot-result">
-                                        <p><strong>Asset:</strong> {snapData.name} @ height {snapData.height}</p>
-                                        <p><strong>Holders:</strong> {snapData.owners.length}</p>
-                                        {#if snapData.owners.length > 0}
-                                            <div class="result-list">
-                                                {#each snapData.owners as owner}
-                                                    <div class="result-item">
-                                                        <span class="snap-addr">{owner.address}</span>
-                                                        <span class="snap-amount">{typeof owner.amount_owned === 'number' ? owner.amount_owned : JSON.stringify(owner.amount_owned)}</span>
-                                                    </div>
-                                                {/each}
-                                            </div>
-                                        {/if}
-                                    </div>
-                                {/if}
-                            </div>
+                            {/if}
                         </div>
                     {:else if activeTab === "rewards"}
                         <div class="panel-body">
                             <div class="panel-title-row">
-                                <h4>Rewards / Dividends Distribution</h4>
+                                <h4>Rewards</h4>
+                                <HelpHitbox title="Rewards">
+                                    <p>Rewards distribute an asset to holders captured by a completed snapshot.</p>
+                                    <p>Run Dry Run before execution to validate parameters and estimate recipients.</p>
+                                    <p>Excluded addresses are omitted from payout.</p>
+                                    <p>Change/dust address receives leftover network dust or change when used by the node.</p>
+                                </HelpHitbox>
                             </div>
                             <p class="section-desc">
-                                Distribute rewards or dividends to all holders of an asset using a previously completed snapshot.
-                                Requires <code>-assetindex</code> enabled on the node and a completed snapshot at the target height.
+                                Build reward distribution from a completed snapshot, dry run, then execute.
                             </p>
-                            <!-- Distribution Form -->
                             <div class="subpanel">
                                 <h5>Setup Distribution</h5>
                                 <div class="field-group">
-                                    <label for="reward-ownership">Ownership Asset</label>
-                                    <input id="reward-ownership" type="text" bind:value={rewardOwnershipAsset} placeholder="ASSET_NAME whose holders receive rewards" class="cyber-input" />
+                                    <label for="reward-snapshot-select">Completed Snapshot Request</label>
+                                    <select
+                                        id="reward-snapshot-select"
+                                        class="cyber-input"
+                                        on:change={(e) => {
+                                            const selected = String(e.currentTarget.value || "");
+                                            if (!selected) return;
+                                            const [asset, height] = selected.split("|");
+                                            rewardOwnershipAsset = asset || rewardOwnershipAsset;
+                                            rewardSnapshotHeight = height || rewardSnapshotHeight;
+                                        }}
+                                    >
+                                        <option value="">Select snapshot (or enter manually)</option>
+                                        {#each snapRequests.filter((sr) => snapshotBlocksRemaining(sr.block_height) === 0) as sr}
+                                            <option value={`${sr.asset_name}|${sr.block_height}`}>{sr.asset_name} @ {sr.block_height}</option>
+                                        {/each}
+                                    </select>
                                 </div>
+                                <AssetPicker
+                                    id="reward-ownership"
+                                    label="Ownership Asset"
+                                    bind:value={rewardOwnershipAsset}
+                                    {assets}
+                                />
                                 <div class="field-group">
                                     <label for="reward-height">Snapshot Block Height</label>
                                     <input id="reward-height" type="number" bind:value={rewardSnapshotHeight} placeholder="Completed snapshot block number" class="cyber-input" />
                                 </div>
-                                <div class="field-group">
-                                    <label for="reward-dist-asset">Distribution Asset</label>
-                                    <input id="reward-dist-asset" type="text" bind:value={rewardDistAsset} placeholder="HEMP or ASSET_NAME to distribute" class="cyber-input" />
-                                </div>
+                                <AssetPicker
+                                    id="reward-dist-asset"
+                                    label="Distribution Asset"
+                                    bind:value={rewardDistAsset}
+                                    assets={rewardAssetOptions}
+                                />
                                 <div class="field-group">
                                     <label for="reward-gross">Gross Distribution Amount</label>
                                     <input id="reward-gross" type="text" bind:value={rewardGrossAmount} placeholder="Total amount to split among holders" class="cyber-input" />
@@ -948,27 +1191,58 @@
                                     <label for="reward-exceptions">Excluded Addresses (optional)</label>
                                     <input id="reward-exceptions" type="text" bind:value={rewardExceptions} placeholder="Comma-separated addresses to exclude" class="cyber-input" />
                                 </div>
+                                <WalletAddressPicker
+                                    id="reward-change-address"
+                                    label="Change / Dust Address (optional)"
+                                    bind:value={rewardChangeAddress}
+                                    addresses={walletAddresses}
+                                    {nodeOnline}
+                                    on:generate={generateAddress}
+                                />
                                 <div class="panel-actions">
-                                    <button class="cyber-btn warning" on:click={previewReward} disabled={previewInProgress}>
-                                        {previewInProgress ? "Building Preview..." : "Preview Distribution"}
+                                    <button class="cyber-btn warning" on:click={runRewardDryRun} disabled={rewardDryRunLoading}>
+                                        {rewardDryRunLoading ? "Running Dry Run..." : "Dry Run"}
+                                    </button>
+                                    <button class="cyber-btn" on:click={executeRewardDistribution} disabled={!rewardDryRunHash || rewardDryRunHash !== rewardFormHash}>
+                                        Execute Reward
                                     </button>
                                 </div>
                             </div>
-                            <!-- Status Check -->
+                            {#if rewardInlineMessage}
+                                <div class={`status-banner ${rewardInlineMessageType}`}>{rewardInlineMessage}</div>
+                            {/if}
+                            {#if rewardPreviewData}
+                                <div class="subpanel">
+                                    <h5>Dry Run Summary</h5>
+                                    <div class="snapshot-result">
+                                        <p><strong>Summary:</strong> {rewardPreviewData.summary}</p>
+                                        <p><strong>Estimated Recipients:</strong> {rewardPreviewData.estimated_recipient_count ?? "Unknown"}</p>
+                                        <p><strong>Exceptions:</strong> {rewardPreviewData.exception_addresses || "None"}</p>
+                                    </div>
+                                </div>
+                            {/if}
                             <div class="subpanel">
-                                <h5>Check Distribution Status</h5>
-                                <p class="section-desc">
-                                    For distributions already submitted, use the same parameters to check status.
-                                </p>
+                                <h5>Distribution History</h5>
                                 <div class="panel-actions left">
-                                    <button class="cyber-btn small" on:click={checkRewardStatus} disabled={rewardStatusLoading}>
-                                        {rewardStatusLoading ? "Checking..." : "Check Status"}
+                                    <button class="cyber-btn small warning" on:click={clearRewardHistory} disabled={rewardHistory.length === 0}>
+                                        Clear History
                                     </button>
                                 </div>
-                                {#if rewardStatusData}
-                                    <div class="snapshot-result">
-                                        {#each Object.entries(rewardStatusData) as [k, v]}
-                                            <p><strong>{k}:</strong> {typeof v === 'object' ? JSON.stringify(v) : v}</p>
+                                {#if rewardHistory.length === 0}
+                                    <p class="result-empty">No reward distribution history yet.</p>
+                                {:else}
+                                    <div class="result-list">
+                                        {#each rewardHistory as item}
+                                            <div class="result-item request-row">
+                                                <span class="snap-asset">{item.ownership_asset} @ {item.snapshot_height}</span>
+                                                <span class="snap-height">{item.distribution_asset} {item.gross_amount}</span>
+                                                <span class="row-state">{item.last_status || "Pending status"}</span>
+                                                <div class="row-actions">
+                                                    <button class="cyber-btn small" on:click={() => checkRewardStatusForHistory(item)}>
+                                                        Check Status
+                                                    </button>
+                                                </div>
+                                            </div>
                                         {/each}
                                     </div>
                                 {/if}
@@ -1436,6 +1710,49 @@
         margin: 0.3rem 0;
         font-size: 0.75rem;
         color: #ccc;
+    }
+    .hint-text {
+        margin: 0;
+        color: #777;
+        font-size: 0.68rem;
+    }
+    .hint-text .mono {
+        font-family: var(--font-mono);
+        color: #9ad6a6;
+    }
+    .status-banner {
+        margin-top: 0.35rem;
+        padding: 0.45rem 0.6rem;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 0.72rem;
+        color: #c7c7c7;
+    }
+    .status-banner.success {
+        border-color: rgba(0, 255, 65, 0.3);
+        background: rgba(0, 255, 65, 0.08);
+        color: #b9ffd0;
+    }
+    .status-banner.warning {
+        border-color: rgba(255, 170, 0, 0.35);
+        background: rgba(255, 170, 0, 0.09);
+        color: #ffd89b;
+    }
+    .request-row {
+        align-items: flex-start;
+    }
+    .row-state {
+        font-size: 0.68rem;
+        color: #a4a4a4;
+        width: 100%;
+    }
+    .row-state.ready {
+        color: #9ef5af;
+    }
+    .row-actions {
+        display: flex;
+        gap: 0.4rem;
+        width: 100%;
     }
 
     /* Inline panel mode */

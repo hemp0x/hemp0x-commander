@@ -3145,12 +3145,20 @@ pub fn cancel_snapshot_request(asset_name: String, block_height: i64) -> Result<
   if block_height <= 0 {
     return Err("Block height must be greater than zero".to_string());
   }
-  let raw = run_cli(&[
-    String::from("cancelsnapshotrequest"),
-    asset_name,
-    format!("{block_height}"),
-  ])?;
+  let raw = run_cli(&build_cancel_snapshot_args(&asset_name, block_height)?)?;
   serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+fn build_cancel_snapshot_args(asset_name: &str, block_height: i64) -> Result<Vec<String>, String> {
+  validate_asset_name(asset_name)?;
+  if block_height <= 0 {
+    return Err("Block height must be greater than zero".to_string());
+  }
+  Ok(vec![
+    String::from("cancelsnapshotrequest"),
+    asset_name.trim().to_string(),
+    format!("{block_height}"),
+  ])
 }
 
 #[tauri::command]
@@ -3377,6 +3385,62 @@ fn validate_reward_exception_addresses(addresses: &str) -> Result<(), String> {
   Ok(())
 }
 
+fn validate_optional_change_address(change_address: Option<String>) -> Result<Option<String>, String> {
+  match change_address {
+    Some(value) => {
+      let trimmed = value.trim().to_string();
+      if trimmed.is_empty() {
+        return Ok(None);
+      }
+      if trimmed.len() < 20 || trimmed.len() > 90 {
+        return Err("Change/dust address length is invalid".to_string());
+      }
+      if !trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Change/dust address must be an alphanumeric address string".to_string());
+      }
+      Ok(Some(trimmed))
+    }
+    None => Ok(None),
+  }
+}
+
+fn build_distribute_reward_args(
+  ownership_asset: &str,
+  snapshot_height: i64,
+  distribution_asset: &str,
+  gross_amount: &str,
+  exception_addresses: Option<String>,
+  change_address: Option<String>,
+) -> Result<Vec<String>, String> {
+  validate_asset_name(ownership_asset)?;
+  validate_reward_snapshot_height(snapshot_height)?;
+  if distribution_asset != "HEMP" {
+    validate_asset_name(distribution_asset)?;
+  }
+  let amount_val = validate_distribution_amount(gross_amount)?;
+  let amount_formatted = format_reward_amount(amount_val);
+  let exceptions = parse_exception_addresses(exception_addresses)?;
+  validate_reward_exception_addresses(&exceptions)?;
+  let change = validate_optional_change_address(change_address)?;
+
+  let mut args = vec![
+    String::from("distributereward"),
+    ownership_asset.trim().to_string(),
+    format!("{snapshot_height}"),
+    distribution_asset.trim().to_string(),
+    amount_formatted,
+  ];
+  if !exceptions.is_empty() {
+    args.push(exceptions);
+  } else if change.is_some() {
+    args.push(String::new());
+  }
+  if let Some(change_addr) = change {
+    args.push(change_addr);
+  }
+  Ok(args)
+}
+
 fn reward_status_label(status: i64) -> &'static str {
   match status {
     0 => "ERROR",
@@ -3415,6 +3479,7 @@ pub fn preview_distribute_reward(
   distribution_asset: String,
   gross_amount: String,
   exception_addresses: Option<String>,
+  change_address: Option<String>,
 ) -> Result<RewardDistributionPreview, String> {
   ensure_config()?;
   let ownership_asset = ownership_asset.trim().to_string();
@@ -3430,6 +3495,7 @@ pub fn preview_distribute_reward(
   let amount_formatted = format_reward_amount(amount_val);
   let exceptions = parse_exception_addresses(exception_addresses)?;
   validate_reward_exception_addresses(&exceptions)?;
+  let _change = validate_optional_change_address(change_address)?;
 
   let mut warnings = Vec::new();
   warnings.push("Reward distributions are IRREVERSIBLE once triggered. Funds cannot be recalled.".to_string());
@@ -3494,32 +3560,21 @@ pub fn distribute_reward(
   distribution_asset: String,
   gross_amount: String,
   exception_addresses: Option<String>,
+  change_address: Option<String>,
+  dry_run: Option<bool>,
 ) -> Result<serde_json::Value, String> {
   ensure_config()?;
-  let ownership_asset = ownership_asset.trim().to_string();
-  validate_asset_name(&ownership_asset)?;
-  let snapshot_height = validate_reward_snapshot_height(snapshot_height)?;
-  let distribution_asset = distribution_asset.trim().to_string();
-  if distribution_asset != "HEMP" {
-    validate_asset_name(&distribution_asset)?;
+  if dry_run.unwrap_or(false) {
+    return Err("Dry run is handled by preview_distribute_reward; no reward distribution was broadcast.".to_string());
   }
-  let amount_val = validate_distribution_amount(&gross_amount)?;
-  let amount_formatted = format_reward_amount(amount_val);
-  let exceptions = parse_exception_addresses(exception_addresses)?;
-  validate_reward_exception_addresses(&exceptions)?;
-
-  // Build args for distributereward:
-  // distributereward "asset_name" snapshot_height "distribution_asset_name" gross_amount ["exception_addresses"] ["change_address"]
-  let mut args = vec![
-    String::from("distributereward"),
-    ownership_asset,
-    format!("{snapshot_height}"),
-    distribution_asset,
-    amount_formatted,
-  ];
-  if !exceptions.is_empty() {
-    args.push(exceptions);
-  }
+  let args = build_distribute_reward_args(
+    ownership_asset.trim(),
+    snapshot_height,
+    distribution_asset.trim(),
+    gross_amount.trim(),
+    exception_addresses,
+    change_address,
+  )?;
 
   let raw = run_cli(&args)?;
 
@@ -3541,6 +3596,7 @@ pub fn get_distribute_reward_status(
   distribution_asset: String,
   gross_amount: String,
   exception_addresses: Option<String>,
+  change_address: Option<String>,
 ) -> Result<serde_json::Value, String> {
   ensure_config()?;
   let ownership_asset = ownership_asset.trim().to_string();
@@ -3554,6 +3610,7 @@ pub fn get_distribute_reward_status(
   let amount_formatted = format_reward_amount(amount_val);
   let exceptions = parse_exception_addresses(exception_addresses)?;
   validate_reward_exception_addresses(&exceptions)?;
+  let change = validate_optional_change_address(change_address)?;
 
   let mut args = vec![
     String::from("getdistributestatus"),
@@ -3562,8 +3619,15 @@ pub fn get_distribute_reward_status(
     distribution_asset,
     amount_formatted,
   ];
-  if !exceptions.is_empty() {
+  let has_exceptions = !exceptions.is_empty();
+  if has_exceptions {
     args.push(exceptions);
+  }
+  if let Some(change_addr) = change {
+    if !has_exceptions {
+      args.push(String::new());
+    }
+    args.push(change_addr);
   }
 
   let raw = run_cli(&args)?;
@@ -4569,7 +4633,7 @@ mod tests {
   // --- Reward Distribution Tests ---
 
   use super::{
-    format_reward_amount, parse_exception_addresses, reward_rpc_status_value,
+    build_cancel_snapshot_args, build_distribute_reward_args, format_reward_amount, parse_exception_addresses, reward_rpc_status_value,
     validate_distribution_amount, validate_reward_exception_addresses,
     validate_reward_snapshot_height,
   };
@@ -4642,6 +4706,23 @@ mod tests {
     assert!(validate_reward_exception_addresses("H123456789ABCDEFGHijklmno").is_ok());
     assert!(validate_reward_exception_addresses("bad address").is_err());
     assert!(validate_reward_exception_addresses("short").is_err());
+  }
+
+  #[test]
+  fn cancel_snapshot_args_reject_empty_asset() {
+    assert!(build_cancel_snapshot_args("", 123).is_err());
+  }
+
+  #[test]
+  fn cancel_snapshot_args_reject_invalid_height() {
+    assert!(build_cancel_snapshot_args("ASSET", 0).is_err());
+    assert!(build_cancel_snapshot_args("ASSET", -1).is_err());
+  }
+
+  #[test]
+  fn cancel_snapshot_args_builds_expected() {
+    let args = build_cancel_snapshot_args("ASSET", 12345).unwrap();
+    assert_eq!(args, vec!["cancelsnapshotrequest", "ASSET", "12345"]);
   }
 
   #[test]
@@ -4721,6 +4802,83 @@ mod tests {
     assert!(validate_asset_name("DIVIDENDS").is_ok());
     assert!(validate_distribution_amount("500").is_ok());
     assert!(validate_reward_snapshot_height(100000).is_ok());
+  }
+
+  #[test]
+  fn distributereward_args_build_with_exceptions_and_change() {
+    let args = build_distribute_reward_args(
+      "OWN",
+      123,
+      "HEMP",
+      "500",
+      Some("H123456789ABCDEFGHijklmno".to_string()),
+      Some("H123456789ABCDEFGHijklmnopqr".to_string()),
+    ).unwrap();
+    assert_eq!(
+      args,
+      vec![
+        "distributereward",
+        "OWN",
+        "123",
+        "HEMP",
+        "500.00000000",
+        "H123456789ABCDEFGHijklmno",
+        "H123456789ABCDEFGHijklmnopqr",
+      ]
+    );
+  }
+
+  #[test]
+  fn distributereward_args_build_change_without_exceptions_preserves_position() {
+    let args = build_distribute_reward_args(
+      "OWN",
+      123,
+      "HEMP",
+      "500",
+      None,
+      Some("H123456789ABCDEFGHijklmnopqr".to_string()),
+    ).unwrap();
+    assert_eq!(
+      args,
+      vec![
+        "distributereward",
+        "OWN",
+        "123",
+        "HEMP",
+        "500.00000000",
+        "",
+        "H123456789ABCDEFGHijklmnopqr",
+      ]
+    );
+  }
+
+  #[test]
+  fn distributereward_args_build_execute_without_optional_fields() {
+    let args = build_distribute_reward_args(
+      "OWN",
+      123,
+      "DIV",
+      "12.5",
+      None,
+      None,
+    ).unwrap();
+    assert_eq!(
+      args,
+      vec!["distributereward", "OWN", "123", "DIV", "12.50000000"]
+    );
+  }
+
+  #[test]
+  fn distributereward_args_reject_invalid_change_address() {
+    let result = build_distribute_reward_args(
+      "OWN",
+      123,
+      "HEMP",
+      "1",
+      None,
+      Some("bad address".to_string()),
+    );
+    assert!(result.is_err());
   }
 
   // --- Policy Helper Tests ---

@@ -5,6 +5,7 @@
     import { save } from "@tauri-apps/plugin-dialog";
     import { systemStatus } from "../../stores.js";
     import { addToolNotification } from "../stores/notifications.js";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -125,6 +126,12 @@
 
 <div class="journal-view">
     <div class="journal-controls">
+        <div style="display:flex; justify-content:flex-end;">
+            <HelpHitbox title="Transaction Journal">
+                <p>The journal is a local activity log of previews and broadcasts, including warnings and selected inputs when available.</p>
+                <p>Deleting entries only removes local records in Commander. It does not cancel or alter on-chain transactions.</p>
+            </HelpHitbox>
+        </div>
         <div class="filter-row">
             <div class="filter-group">
                 <label for="journal-filter-status">STATUS</label>

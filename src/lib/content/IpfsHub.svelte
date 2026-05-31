@@ -5,6 +5,7 @@
     import CidViewer from "./CidViewer.svelte";
     import CidImportPanel from "./CidImportPanel.svelte";
     import ProviderSettingsPanel from "./ProviderSettingsPanel.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
 
     function setSection(section) {
         $ipfsHubSection = section;
@@ -15,6 +16,12 @@
 
 <div class="ipfs-hub" in:fade={{ duration: 200 }}>
     <header class="hub-header">
+        <div class="hub-help-row">
+            <HelpHitbox title="IPFS In Commander">
+                <p>Library packages are local records in Commander. A CID points to content on IPFS and may be fetched through a public gateway.</p>
+                <p>Public gateways can reveal request metadata. Pinning keeps content available on your selected provider; unpinning removes that provider pin but cannot erase data already shared elsewhere.</p>
+            </HelpHitbox>
+        </div>
         <div class="hub-tabs">
             <button
                 class="hub-tab"
@@ -70,6 +77,11 @@
         padding: 0.25rem 0;
         margin-bottom: 0.5rem;
         border-bottom: 1px solid rgba(0, 255, 65, 0.08);
+    }
+    .hub-help-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.25rem;
     }
     .hub-tabs {
         display: flex;

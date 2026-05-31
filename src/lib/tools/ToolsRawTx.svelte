@@ -3,6 +3,7 @@
     import { core } from "@tauri-apps/api";
     import { fly } from "svelte/transition";
     import { systemStatus } from "../../stores.js";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -216,6 +217,10 @@
 <div class="rawtx-view">
     <div class="rawtx-header-bar">
         <span class="header-label mono">RAW TRANSACTION EDITOR</span>
+        <HelpHitbox title="Raw Transaction Safety">
+            <p>This tool decodes and builds unsigned transactions only. Nothing is broadcast here.</p>
+            <p>Always verify inputs, outputs, and fee impact before signing elsewhere. Signed hex grants spend authority for the included UTXOs.</p>
+        </HelpHitbox>
         <span class="header-sub">&#9888; ADVANCED TOOL - Decode, inspect, and build unsigned raw transactions</span>
     </div>
 

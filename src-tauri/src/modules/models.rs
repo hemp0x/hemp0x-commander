@@ -216,6 +216,8 @@ pub struct IssuePreview {
 pub struct ConsolidationPreview {
   pub utxo_count: usize,
   pub input_total: String,
+  pub estimated_bytes: u64,
+  pub fee_rate_sat_per_byte: u64,
   pub fee_estimate: String,
   pub output_amount: String,
   pub destination: String,

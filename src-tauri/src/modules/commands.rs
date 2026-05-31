@@ -1658,7 +1658,7 @@ pub fn preview_wallet_consolidation(
   fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<ConsolidationPreview, String> {
   ensure_config()?;
-  let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
+  let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
 
   if utxos.is_empty() {
     return Err("At least one UTXO must be selected for consolidation".to_string());
@@ -1816,6 +1816,8 @@ pub fn preview_wallet_consolidation(
   Ok(ConsolidationPreview {
     utxo_count,
     input_total: format!("{:.8}", input_total),
+    estimated_bytes: tx_bytes,
+    fee_rate_sat_per_byte: fee_rate,
     fee_estimate: format!("{:.8}", fee),
     output_amount: format!("{:.8}", output_amount),
     destination: destination.clone(),
@@ -1833,7 +1835,7 @@ pub fn broadcast_wallet_consolidation(
   fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<String, String> {
   ensure_config()?;
-  let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
+  let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
 
   if utxos.is_empty() {
     return Err("No UTXOs selected for consolidation".to_string());
@@ -2028,6 +2030,52 @@ fn validate_fee_rate_sat_per_byte(rate: u64) -> Result<u64, String> {
     Ok(rate)
 }
 
+fn clamp_fee_rate_sat_per_byte(rate: u64) -> u64 {
+    std::cmp::max(FEE_RATE_MIN_SAT_PER_BYTE, std::cmp::min(FEE_RATE_MAX_SAT_PER_BYTE, rate))
+}
+
+fn parse_estimatesmartfee_sat_per_byte(raw: &str) -> Option<u64> {
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let feerate = parsed.get("feerate")?.as_f64()?;
+    if !feerate.is_finite() || feerate <= 0.0 {
+        return None;
+    }
+    let sat_per_byte = ((feerate * SATS_PER_HEMP) / 1000.0).ceil() as u64;
+    Some(clamp_fee_rate_sat_per_byte(sat_per_byte))
+}
+
+fn estimate_smartfee_sat_per_byte() -> Option<u64> {
+    let conservative = run_cli(&[
+        String::from("estimatesmartfee"),
+        String::from("6"),
+        String::from("CONSERVATIVE"),
+    ]).ok();
+    if let Some(raw) = conservative {
+        if let Some(rate) = parse_estimatesmartfee_sat_per_byte(&raw) {
+            return Some(rate);
+        }
+    }
+
+    let basic = run_cli(&[
+        String::from("estimatesmartfee"),
+        String::from("6"),
+    ]).ok();
+    if let Some(raw) = basic {
+        return parse_estimatesmartfee_sat_per_byte(&raw);
+    }
+    None
+}
+
+fn recommended_consolidation_fee_rate_sat_per_byte(override_fee_rate: Option<u64>) -> Result<u64, String> {
+    if let Some(rate) = override_fee_rate {
+        return validate_fee_rate_sat_per_byte(rate);
+    }
+    if let Some(estimated) = estimate_smartfee_sat_per_byte() {
+        return validate_fee_rate_sat_per_byte(estimated);
+    }
+    validate_fee_rate_sat_per_byte(DEFAULT_FEE_RATE_SAT_PER_BYTE)
+}
+
 fn estimate_legacy_tx_bytes(input_count: usize, output_count: usize) -> u64 {
     LEGACY_TX_OVERHEAD_BYTES
         + (input_count as u64) * LEGACY_P2PKH_INPUT_BYTES
@@ -2063,7 +2111,7 @@ pub fn get_policy_diagnostics(
     fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<PolicyDiagnostics, String> {
     ensure_config()?;
-    let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
+    let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
     let raw = run_cli(&[
         String::from("listunspent"),
         String::from("0"),
@@ -2108,7 +2156,7 @@ pub fn plan_wallet_consolidation(
     fee_rate_sat_per_byte: Option<u64>,
 ) -> Result<ConsolidationPlan, String> {
     ensure_config()?;
-    let fee_rate = validate_fee_rate_sat_per_byte(fee_rate_sat_per_byte.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE))?;
+    let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
 
     if let Some(destination) = destination.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         validate_destination_address(destination)?;
@@ -3925,6 +3973,8 @@ mod tests {
     validate_qualifier_name, validate_restricted_name, validate_verifier_string,
     estimate_legacy_tx_bytes, max_policy_inputs, estimate_fee_from_bytes,
     format_hemp_amount, sat_to_hemp, validate_fee_rate_sat_per_byte,
+    clamp_fee_rate_sat_per_byte, parse_estimatesmartfee_sat_per_byte,
+    recommended_consolidation_fee_rate_sat_per_byte,
     hemp_to_sat,
     validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
     message_authority_asset_name,
@@ -5005,6 +5055,32 @@ mod tests {
   fn fee_rate_above_max_is_invalid() {
     assert!(validate_fee_rate_sat_per_byte(10_001).is_err());
     assert!(validate_fee_rate_sat_per_byte(100_000).is_err());
+  }
+
+  #[test]
+  fn clamp_fee_rate_applies_bounds() {
+    assert_eq!(clamp_fee_rate_sat_per_byte(0), 1);
+    assert_eq!(clamp_fee_rate_sat_per_byte(500), 500);
+    assert_eq!(clamp_fee_rate_sat_per_byte(50_000), 10_000);
+  }
+
+  #[test]
+  fn parse_estimatesmartfee_sat_per_byte_parses_valid_value() {
+    let parsed = parse_estimatesmartfee_sat_per_byte(r#"{"feerate":0.001}"#);
+    assert_eq!(parsed, Some(100));
+  }
+
+  #[test]
+  fn parse_estimatesmartfee_sat_per_byte_rejects_missing_or_invalid() {
+    assert_eq!(parse_estimatesmartfee_sat_per_byte(r#"{"errors":["insufficient data"]}"#), None);
+    assert_eq!(parse_estimatesmartfee_sat_per_byte(r#"{"feerate":0}"#), None);
+  }
+
+  #[test]
+  fn recommended_consolidation_fee_rate_respects_override() {
+    assert_eq!(recommended_consolidation_fee_rate_sat_per_byte(Some(250)).unwrap(), 250);
+    assert!(recommended_consolidation_fee_rate_sat_per_byte(Some(0)).is_err());
+    assert!(recommended_consolidation_fee_rate_sat_per_byte(Some(20_000)).is_err());
   }
 
   #[test]

@@ -4,6 +4,7 @@
     import { fly } from "svelte/transition";
     import { formatBalance } from "./utils.js";
     import { nodeStatus } from "../stores.js"; // Import Store
+    import HelpHitbox from "./ui/HelpHitbox.svelte";
 
     let label = "";
     let addresses = [];
@@ -135,6 +136,10 @@
     <div class="glass-panel panel-strong gen-area cyber-panel">
         <header class="panel-header">
             <span class="hud-title mono">[ GENERATE ADDRESS ]</span>
+            <HelpHitbox title="Receive Addresses">
+                <p>Receiving addresses are wallet-controlled destinations for incoming funds. Generating a new address improves privacy by reducing address reuse.</p>
+                <p>Change addresses are usually created automatically by the wallet for transaction change, not for direct sharing.</p>
+            </HelpHitbox>
             <span class="hint mono">CREATE NEW RECEIVING IDENTIFIER</span>
         </header>
 

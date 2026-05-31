@@ -5,6 +5,8 @@
     import { formatAmount } from "../utils.js";
     import { systemStatus } from "../../stores.js";
     import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
+    import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
+    import HelpHitbox from "../ui/HelpHitbox.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -32,29 +34,9 @@
     let planning = false;
     let estimatedSelectedBytes = 0;
     let estimatedSelectedFee = "0.00000000";
-    let feeRateSatPerByte = 1000;
     let previewFeeRateSatPerByte = 1000;
-
-    function activeFeeRate() {
-        const parsed = Number(feeRateSatPerByte);
-        if (!Number.isFinite(parsed)) return 1000;
-        return Math.max(1, Math.min(10000, Math.trunc(parsed)));
-    }
-
-    function normalizeFeeRate() {
-        feeRateSatPerByte = activeFeeRate();
-        calculateTotal();
-    }
-
-    function setFeeRate(rate) {
-        feeRateSatPerByte = rate;
-        calculateTotal();
-    }
-
-    $: effectiveFeeRateSatPerByte = activeFeeRate();
-    $: feeRateSatPerByteLabel = `${effectiveFeeRateSatPerByte} sat/B`;
+    let walletAddresses = [];
     $: {
-        effectiveFeeRateSatPerByte;
         filteredUtxos;
         selectedIds;
         calculateTotal();
@@ -117,7 +99,8 @@
         }
         totalSelected = sum;
         estimatedSelectedBytes = 10 + count * 148 + 1 * 34;
-        estimatedSelectedFee = ((estimatedSelectedBytes * effectiveFeeRateSatPerByte) / 100000000).toFixed(8);
+        const diagRate = Number(policyDiag?.fee_rate_sat_per_byte || previewFeeRateSatPerByte || 1000);
+        estimatedSelectedFee = ((estimatedSelectedBytes * diagRate) / 100000000).toFixed(8);
     }
 
     function toggleUtxo(id) {
@@ -180,7 +163,7 @@
                 targetFinalUtxoCount: null,
                 maxRounds: null,
                 targetMaxTxBytes: null,
-                feeRateSatPerByte: effectiveFeeRateSatPerByte,
+                feeRateSatPerByte: null,
             });
             status = "";
             showPlanModal = true;
@@ -223,8 +206,9 @@
             utxos = await core.invoke("list_utxos");
             utxos.sort((a, b) => b.amount - a.amount);
             policyDiag = await core.invoke("get_policy_diagnostics", {
-                feeRateSatPerByte: effectiveFeeRateSatPerByte,
+                feeRateSatPerByte: null,
             });
+            await loadWalletAddresses();
         } catch (err) {
             showToast("Failed to list UTXOs: " + err, "error");
         }
@@ -235,14 +219,30 @@
         }
     }
 
-    async function refreshDestination() {
+    async function refreshDestination(label = null) {
         if (!tauriReady) return;
         try {
-            const addr = await core.invoke("new_address", { label: null });
+            const addr = await core.invoke("new_address", { label });
             destination = addr;
+            await loadWalletAddresses();
         } catch (err) {
             showToast("Failed to get new address: " + err, "error");
         }
+    }
+
+    async function loadWalletAddresses() {
+        try {
+            walletAddresses = await core.invoke("get_receive_addresses", { showChange: false });
+            if ((!destination || !destination.trim()) && walletAddresses.length > 0) {
+                destination = walletAddresses[0].address;
+            }
+        } catch {
+            walletAddresses = [];
+        }
+    }
+
+    async function handleAddressGenerate(event) {
+        await refreshDestination(event?.detail?.label || null);
     }
 
     async function handlePreview() {
@@ -274,9 +274,9 @@
             previewData = await core.invoke("preview_wallet_consolidation", {
                 utxos: inputs,
                 destination: destination.trim(),
-                feeRateSatPerByte: effectiveFeeRateSatPerByte,
+                feeRateSatPerByte: null,
             });
-            previewFeeRateSatPerByte = effectiveFeeRateSatPerByte;
+            previewFeeRateSatPerByte = Number(previewData?.fee_rate_sat_per_byte || 1000);
             status = "";
 
             try {
@@ -328,24 +328,22 @@
     }
 
     async function executeConsolidation() {
+        if (!previewData) {
+            status = "Preview expired. Build a fresh consolidation preview first.";
+            return;
+        }
         showPreviewModal = false;
         broadcasting = true;
         status = "Broadcasting consolidation...";
 
-        const inputs = [];
-        for (const u of filteredUtxos) {
-            const id = `${u.txid}:${u.vout}`;
-            if (selectedIds.has(id)) {
-                inputs.push({ txid: u.txid, vout: u.vout });
-            }
-        }
+        const inputs = (previewData.utxos || []).map((u) => ({ txid: u.txid, vout: u.vout }));
 
         const fee = parseFloat(previewData?.fee_estimate || "0.01");
 
         try {
             const txid = await core.invoke("broadcast_wallet_consolidation", {
                 utxos: inputs,
-                destination: destination.trim(),
+                destination: previewData.destination,
                 fee,
                 feeRateSatPerByte: previewFeeRateSatPerByte,
             });
@@ -419,25 +417,25 @@
 
 <div class="consolidation-view">
     <div class="consolidation-header-bar">
-        <span class="header-label mono">WALLET CONSOLIDATION</span>
+        <span class="header-label mono">WALLET CONSOLIDATION</span> <HelpHitbox title="Wallet Consolidation">
+            <p>Consolidation merges many small HEMP UTXOs into one wallet output so future sends are simpler and less likely to hit policy size limits.</p>
+            <p>It links selected UTXOs together on-chain, so there is a privacy tradeoff.</p>
+            <p>Asset-bearing, unsafe, or unspendable UTXOs are excluded to protect funds. Commander estimates fee rate automatically before preview and broadcast.</p>
+        </HelpHitbox>
         <span class="header-sub">Merge multiple UTXOs into a single wallet address</span>
     </div>
 
     <div class="destination-row">
         <div class="dest-group">
-            <label for="cons-dest">DESTINATION ADDRESS</label>
-            <div class="input-group brackets">
-                <input
-                    type="text"
-                    id="cons-dest"
-                    class="input-glass mono full-width"
-                    bind:value={destination}
-                    placeholder="Wallet consolidation address..."
-                />
-                <button class="icon-btn" on:click={refreshDestination} title="Generate new address">
-                    NEW
-                </button>
-            </div>
+            <WalletAddressPicker
+                id="cons-dest"
+                label="DESTINATION ADDRESS"
+                bind:value={destination}
+                addresses={walletAddresses}
+                nodeOnline={tauriReady}
+                placeholder="Wallet consolidation address..."
+                on:generate={handleAddressGenerate}
+            />
         </div>
     </div>
 
@@ -473,43 +471,6 @@
         </div>
     </div>
 
-    <div class="fee-rate-row">
-        <div class="filter-group">
-            <label for="cons-fee-rate">FEE RATE (sat/byte)</label>
-            <div class="fee-rate-control">
-                <button
-                    class="cyber-btn ghost preset"
-                    class:active={effectiveFeeRateSatPerByte === 10}
-                    on:click={() => setFeeRate(10)}
-                >10</button
-                >
-                <button
-                    class="cyber-btn ghost preset"
-                    class:active={effectiveFeeRateSatPerByte === 100}
-                    on:click={() => setFeeRate(100)}
-                >100</button
-                >
-                <button
-                    class="cyber-btn ghost preset"
-                    class:active={effectiveFeeRateSatPerByte === 1000}
-                    on:click={() => setFeeRate(1000)}
-                >1000</button
-                >
-                <input
-                    id="cons-fee-rate"
-                    type="number"
-                    class="input-glass fee-rate-input"
-                    bind:value={feeRateSatPerByte}
-                    min="1"
-                    max="10000"
-                    step="1"
-                    on:change={normalizeFeeRate}
-                />
-                <span class="fee-rate-label mono">{feeRateSatPerByteLabel}</span>
-            </div>
-        </div>
-    </div>
-
     <div class="utxo-stats-row">
         <span class="stat-item">
             <span class="stat-label">UTXOS:</span>
@@ -534,6 +495,10 @@
         <span class="stat-item">
             <span class="stat-label">EST TX:</span>
             <span class="stat-value mono">{estimatedSelectedBytes}B</span>
+        </span>
+        <span class="stat-item">
+            <span class="stat-label">AUTO FEE:</span>
+            <span class="stat-value mono">{policyDiag?.fee_rate_sat_per_byte || previewFeeRateSatPerByte} sat/B</span>
         </span>
         <span class="stat-item">
             <span class="stat-label">EST FEE:</span>
@@ -673,6 +638,14 @@
                     <div class="tx-detail">
                         <span class="label">ESTIMATED FEE:</span>
                         <span class="value">{previewData.fee_estimate} HEMP</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">FEE RATE:</span>
+                        <span class="value">{previewData.fee_rate_sat_per_byte} sat/B</span>
+                    </div>
+                    <div class="tx-detail">
+                        <span class="label">ESTIMATED BYTES:</span>
+                        <span class="value">{previewData.estimated_bytes}B</span>
                     </div>
                     <div class="tx-detail">
                         <span class="label">ESTIMATED OUTPUT:</span>
@@ -831,18 +804,6 @@
         gap: 0.25rem;
     }
 
-    .dest-group label {
-        font-size: 0.6rem;
-        color: #666;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-    }
-
-    .input-group {
-        display: flex;
-        gap: 4px;
-    }
-
     .input-glass {
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -856,29 +817,6 @@
 
     .input-glass:focus {
         border-color: var(--color-primary);
-    }
-
-    .full-width {
-        flex: 1;
-    }
-
-    .icon-btn {
-        background: rgba(0, 255, 65, 0.05);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        color: var(--color-primary);
-        font-size: 0.65rem;
-        padding: 0 0.8rem;
-        cursor: pointer;
-        font-family: var(--font-mono);
-        border-radius: 4px;
-        letter-spacing: 1px;
-        transition: all 0.2s;
-        white-space: nowrap;
-    }
-
-    .icon-btn:hover {
-        background: var(--color-primary);
-        color: #000;
     }
 
     select.input-glass {
@@ -922,40 +860,6 @@
         flex-direction: row;
         gap: 0.5rem;
         align-self: flex-end;
-    }
-
-    .fee-rate-row {
-        display: flex;
-        flex-shrink: 0;
-        padding: 0.2rem 0;
-    }
-
-    .fee-rate-control {
-        display: flex;
-        gap: 0.3rem;
-        align-items: center;
-    }
-
-    .fee-rate-input {
-        width: 70px;
-        text-align: center;
-        padding: 0.3rem 0.4rem;
-    }
-
-    .fee-rate-label {
-        font-size: 0.65rem;
-        color: #ccc;
-    }
-
-    .preset {
-        padding: 0.2rem 0.5rem;
-        font-size: 0.6rem;
-    }
-
-    .preset.active {
-        border-color: var(--color-primary);
-        color: var(--color-primary);
-        background: rgba(0, 255, 65, 0.1);
     }
 
     .utxo-stats-row {

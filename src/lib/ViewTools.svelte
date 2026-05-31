@@ -33,6 +33,11 @@
       ipfsOpenCid = $cidViewerTarget;
   }
 
+  function openLibraryFromPicker() {
+    activeSubTab = "IPFS";
+    ipfsHubSection.set("library");
+  }
+
   let toastMsg = "";
   let toastType = "info"; // info, error, success
   let toastTimer;
@@ -445,6 +450,7 @@
   }
 
   onMount(() => {
+    window.addEventListener("commander-open-content-library", openLibraryFromPicker);
     tauriReady = typeof core?.isTauri === "function" ? core.isTauri() : false;
     if (tauriReady) {
       loadConfig(true); // Silent start
@@ -456,6 +462,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener("commander-open-content-library", openLibraryFromPicker);
     clearTimeout(toastTimer);
   });
 </script>

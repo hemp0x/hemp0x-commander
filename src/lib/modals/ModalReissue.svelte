@@ -49,7 +49,7 @@
                 <h4>Reissue Asset</h4>
                 <HelpHitbox title="Reissue Behavior">
                     <p>Reissue increases the total supply of an existing asset.</p>
-                    <p>Set quantity to zero to update metadata (IPFS) without increasing supply.</p>
+                    <p>Set quantity to zero to update metadata CID/hash only, without increasing supply.</p>
                     <p>Unchecking "Keep Reissuable" permanently locks the supply. This cannot be undone.</p>
                 </HelpHitbox>
             </div>
@@ -78,7 +78,7 @@
 
             {#if currentIpfs}
                 <div class="field-group">
-                    <span class="field-label">Current IPFS Metadata</span>
+                    <span class="field-label">Current Metadata CID / Hash</span>
                     <div class="read-only-field">{currentIpfs}</div>
                 </div>
             {/if}
@@ -89,7 +89,7 @@
             </div>
 
             <div class="field-group">
-                <label for="reissue-new-ipfs">New IPFS Hash (Optional)</label>
+                <label for="reissue-new-ipfs">New Metadata CID / Hash (Optional)</label>
                 <IpfsHashField id="reissue-new-ipfs" bind:value={newIpfs} />
             </div>
 

@@ -46,7 +46,7 @@
                 <HelpHitbox title="Unique Asset / NFT Metadata">
                     <p>Unique assets (NFTs) are one-of-one units under a parent asset.</p>
                     <p>Useful for collectibles, certificates, licenses, and media metadata.</p>
-                    <p>Metadata should be a CID/hash reference. Create and publish the package first, then select it here.</p>
+                    <p>Metadata stores a CID/hash reference, not the full package. Publish or link in Content Library before selecting here.</p>
                 </HelpHitbox>
             </div>
 
@@ -67,7 +67,7 @@
             </div>
 
             <div class="field-group">
-                <label for="nft-ipfs">IPFS Metadata (Optional)</label>
+                <label for="nft-ipfs">Metadata CID / Hash (Optional)</label>
                 <IpfsHashField id="nft-ipfs" bind:value={ipfs} />
             </div>
 

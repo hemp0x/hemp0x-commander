@@ -21,7 +21,7 @@
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
-  import { cidViewerTarget } from "./lib/stores/contentLibrary.js";
+  import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
   import { APP_VERSION } from "./lib/constants.js";
 
   // --- STATE ---
@@ -575,6 +575,11 @@
     window.addEventListener("resize", updateScale);
 
     let unlistenNetwork;
+    const openLibraryHandler = () => {
+      activeTab = "TOOLS";
+      ipfsHubSection.set("library");
+    };
+    window.addEventListener("commander-open-content-library", openLibraryHandler);
     if (tauriReady) {
       // Handle close event for daemon lifecycle
       getCurrentWindow().onCloseRequested(async (event) => {
@@ -783,6 +788,7 @@
     return () => {
       clearTimeout(timer);
       window.removeEventListener("resize", updateScale);
+      window.removeEventListener("commander-open-content-library", openLibraryHandler);
       if (typeof unlistenNetwork === "function") unlistenNetwork();
     };
   });

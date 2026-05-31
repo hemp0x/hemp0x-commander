@@ -82,7 +82,7 @@
             </div>
 
             <div class="field-group">
-                <label for="sub-ipfs">IPFS Metadata (Optional)</label>
+                <label for="sub-ipfs">Metadata CID / Hash (Optional)</label>
                 <IpfsHashField id="sub-ipfs" bind:value={ipfs} />
             </div>
 

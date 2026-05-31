@@ -1,4 +1,5 @@
 <script>
+    import { createEventDispatcher } from "svelte";
     import { fly } from "svelte/transition";
     import { core } from "@tauri-apps/api";
     import { contentLibrary, libraryLoading } from "../stores/contentLibrary.js";
@@ -13,8 +14,11 @@
     let pickerSearch = "";
     let pickerError = "";
     let pickerEl;
+    const dispatch = createEventDispatcher();
+    let collapsedFolders = {};
 
     $: pickerPackages = filterPackages($contentLibrary, pickerSearch);
+    $: pickerGroups = groupByFolder(pickerPackages);
 
     function filterPackages(packages, query) {
         let list = [...packages];
@@ -36,6 +40,16 @@
             if (!aHasCid && bHasCid) return 1;
             return (b.updated_at || "").localeCompare(a.updated_at || "");
         });
+    }
+
+    function groupByFolder(packages) {
+        const groups = new Map();
+        for (const pkg of packages) {
+            const folder = pkg.folder && pkg.folder.trim() ? pkg.folder.trim() : "Unsorted";
+            if (!groups.has(folder)) groups.set(folder, []);
+            groups.get(folder).push(pkg);
+        }
+        return Array.from(groups.entries()).map(([folder, rows]) => ({ folder, rows }));
     }
 
     function shortCid(cid) {
@@ -80,6 +94,15 @@
         showDropdown = false;
         pickerSearch = "";
         pickerError = "";
+    }
+
+    function toggleFolder(folder) {
+        collapsedFolders = { ...collapsedFolders, [folder]: !collapsedFolders[folder] };
+    }
+
+    function openLibrary() {
+        dispatch("openLibrary");
+        closeDropdown();
     }
 
     function handleKeydown(e) {
@@ -133,8 +156,13 @@
                     type="text"
                     class="search-input mono"
                     bind:value={pickerSearch}
-                    placeholder="Search..."
+                    placeholder="Search name, CID, tags, folder..."
                 />
+            </div>
+            <div class="dropdown-tools">
+                <button class="library-link" type="button" on:click={openLibrary}>
+                    Go to Content Library
+                </button>
             </div>
 
             <div class="dropdown-divider"></div>
@@ -167,21 +195,29 @@
             {:else if pickerPackages.length === 0}
                 <div class="dropdown-empty">No packages found.</div>
             {:else}
-                {#each pickerPackages as pkg (pkg.id)}
-                    <button
-                        class="dropdown-row"
-                        type="button"
-                        class:selected={pkg.cid === value}
-                        class:disabled={!isSelectable(pkg)}
-                        on:click={() => selectPackage(pkg)}
-                        disabled={!isSelectable(pkg)}
-                    >
-                        <span class="row-name" title={pkg.name}>{pkg.name}</span>
-                        <span class="row-cid mono" title={pkg.cid || ""}>{pkg.cid ? shortCid(pkg.cid) : "—"}</span>
-                        <span class="row-status" class:published={pkg.status === "published"} class:external={pkg.status === "external"}>
-                            {statusLabel(pkg)}
-                        </span>
+                {#each pickerGroups as group (group.folder)}
+                    <button class="folder-row" type="button" on:click={() => toggleFolder(group.folder)}>
+                        <span class="folder-name">{collapsedFolders[group.folder] ? "▶" : "▼"} {group.folder}</span>
+                        <span class="folder-count">{group.rows.length}</span>
                     </button>
+                    {#if !collapsedFolders[group.folder]}
+                        {#each group.rows as pkg (pkg.id)}
+                            <button
+                                class="dropdown-row"
+                                type="button"
+                                class:selected={pkg.cid === value}
+                                class:disabled={!isSelectable(pkg)}
+                                on:click={() => selectPackage(pkg)}
+                                disabled={!isSelectable(pkg)}
+                            >
+                                <span class="row-name" title={pkg.name}>{pkg.name}</span>
+                                <span class="row-cid mono" title={pkg.cid || ""}>{pkg.cid ? shortCid(pkg.cid) : "No CID yet"}</span>
+                                <span class="row-status" class:published={pkg.status === "published"} class:external={pkg.status === "external"}>
+                                    {statusLabel(pkg)}
+                                </span>
+                            </button>
+                        {/each}
+                    {/if}
                 {/each}
             {/if}
         </div>
@@ -294,6 +330,23 @@
     .dropdown-search {
         padding: 0.25rem 0.3rem;
     }
+    .dropdown-tools {
+        padding: 0.15rem 0.3rem 0.25rem;
+    }
+    .library-link {
+        width: 100%;
+        text-align: left;
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        background: rgba(0, 255, 65, 0.08);
+        color: var(--color-primary);
+        border-radius: 6px;
+        padding: 0.35rem 0.45rem;
+        font-size: 0.65rem;
+        cursor: pointer;
+    }
+    .library-link:hover {
+        background: rgba(0, 255, 65, 0.16);
+    }
     .search-input {
         width: 100%;
         padding: 0.35rem 0.5rem;
@@ -351,6 +404,28 @@
         text-align: left;
         transition: all 0.1s;
         width: 100%;
+    }
+    .folder-row {
+        display: flex;
+        width: 100%;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        margin: 0.2rem 0;
+        color: #aaa;
+        font-size: 0.62rem;
+        padding: 0.22rem 0.45rem;
+        cursor: pointer;
+    }
+    .folder-name {
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+    .folder-count {
+        color: #666;
+        font-family: var(--font-mono);
     }
     .dropdown-row:hover:not(:disabled) {
         background: rgba(0, 255, 65, 0.06);

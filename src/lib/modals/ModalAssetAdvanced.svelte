@@ -122,6 +122,10 @@
     }
     $: rewardAssetOptions = [{ name: "HEMP", balance: "native", type: "TOKEN" }, ...assets];
     $: if (isOpen && initialTab) applyInitialContext();
+    $: if (!isOpen) {
+        appliedInitialKey = "";
+        recentTagTargetsLoaded = false;
+    }
 
     function close() {
         dispatch("close");
@@ -907,7 +911,7 @@
                             />
 
                             <div class="field-group">
-                                <label for="qualifier-ipfs">IPFS Metadata</label>
+                                <label for="qualifier-ipfs">Metadata CID / Hash</label>
                                 <IpfsHashField id="qualifier-ipfs" bind:value={qualifierIpfs} />
                             </div>
 
@@ -983,7 +987,7 @@
                             </div>
 
                             <div class="field-group">
-                                <label for="restricted-ipfs">IPFS Metadata</label>
+                                <label for="restricted-ipfs">Metadata CID / Hash</label>
                                 <IpfsHashField id="restricted-ipfs" bind:value={restrictedIpfs} />
                             </div>
 
@@ -1051,7 +1055,7 @@
                                 {/if}
                                 <div class="panel-actions">
                                     <button class="cyber-btn warning" on:click={doTagAction} disabled={previewInProgress}>
-                                        {previewInProgress ? "Building Preview..." : `Preview ${tagAction === "add" ? "Add" : "Remove"}`}
+                                        {previewInProgress ? "Building Preview..." : "Preview & Confirm"}
                                     </button>
                                 </div>
                             </div>

@@ -43,7 +43,7 @@
                     <HelpHitbox title="Root Assets">
                         <p>Root assets are top-level asset names on the chain.</p>
                         <p>Ownership of a root asset controls future sub-assets and metadata/reissue behavior.</p>
-                        <p>Metadata should be a published CID or hash reference. Create and publish the package in Content Library first, then select it here.</p>
+                        <p>Metadata stores a CID/hash reference, not the package body. Publish or link a package in Content Library first, then select its CID here.</p>
                     </HelpHitbox>
                 </div>
 
@@ -90,7 +90,7 @@
 
                 <div class="field-group">
                     <div class="label-row">
-                        <label for="root-ipfs">IPFS Metadata (Optional)</label>
+                        <label for="root-ipfs">Metadata CID / Hash (Optional)</label>
                     </div>
                     <IpfsHashField id="root-ipfs" bind:value={ipfs} />
                 </div>

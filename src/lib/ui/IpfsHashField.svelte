@@ -4,6 +4,10 @@
     export let value = "";
     export let id = "ipfs-hash";
     export let disabled = false;
+
+    function openContentLibrary() {
+        window.dispatchEvent(new CustomEvent("commander-open-content-library"));
+    }
 </script>
 
-<ContentLibraryPicker {id} bind:value placeholder="Qm..." {disabled} />
+<ContentLibraryPicker {id} bind:value placeholder="Qm..." {disabled} on:openLibrary={openContentLibrary} />

@@ -165,7 +165,7 @@
 
     async function previewAnnouncement() {
         if (!composeIpfsHash.trim()) {
-            composeError = "IPFS hash is required";
+            composeError = "CID/hash is required";
             return;
         }
         const expireTime = parseComposeExpireTime();
@@ -230,6 +230,11 @@
         composeIpfsHash = "";
         composeExpireTime = "";
         composeSent = false;
+    }
+
+    function openContentLibrary() {
+        window.dispatchEvent(new CustomEvent("commander-open-content-library"));
+        cancelCompose();
     }
 
     function parseComposeExpireTime() {
@@ -376,7 +381,7 @@
                                 {#if metadata.has_ipfs && metadata.ipfs_hash}
                                     <div class="meta-card ipfs-card">
                                         <div class="ipfs-header">
-                                            <span class="meta-label">IPFS METADATA</span>
+                                            <span class="meta-label">METADATA CID / HASH</span>
                                             <div class="ipfs-header-actions">
                                                 {#if asset.hasOwner && metadata?.reissuable}
                                                     <button
@@ -403,7 +408,7 @@
                                 {:else}
                                     <div class="meta-card ipfs-card empty">
                                         <div class="ipfs-header">
-                                            <span class="meta-label">IPFS METADATA</span>
+                                            <span class="meta-label">METADATA CID / HASH</span>
                                             {#if asset.hasOwner && metadata?.reissuable}
                                                 <button
                                                     class="meta-update-btn"
@@ -546,11 +551,14 @@
                                             <div class="compose-label-row">
                                                 <label for="compose-ipfs">MESSAGE CID / HASH</label>
                                                 <HelpHitbox title="Asset Messages">
-                                                    <p>Asset messages store a CID or hash reference on-chain, not the full content.</p>
-                                                    <p>Create a text package in Content Library, publish or link it to a CID, then select that CID here.</p>
+                                                    <p>Asset messages store a CID/hash reference on-chain, not the full package body.</p>
+                                                    <p>Create content in Content Library, then publish or link it before selecting that CID here.</p>
                                                 </HelpHitbox>
                                             </div>
                                             <IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || composeSent || !!composePreview} />
+                                            <button class="compose-library-link" type="button" on:click={openContentLibrary}>
+                                                Go to Content Library
+                                            </button>
                                         </div>
                                         <div class="compose-field">
                                             <label for="compose-expire">Expire Time (UTC timestamp, optional)</label>
@@ -574,7 +582,7 @@
                                                     <span>Channel:</span> {composePreview.channel_name}
                                                 </div>
                                                 <div class="preview-row">
-                                                    <span>IPFS:</span> {composePreview.ipfs_hash}
+                                                    <span>CID:</span> {composePreview.ipfs_hash}
                                                 </div>
                                                 <div class="preview-row">
                                                     <span>Ownership:</span> {composePreview.has_ownership ? 'Confirmed' : 'Not confirmed'}
@@ -1159,13 +1167,26 @@
         flex-direction: column;
         gap: 0.2rem;
     }
+    .compose-library-link {
+        align-self: flex-start;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+        border-radius: 6px;
+        padding: 0.35rem 0.55rem;
+        font-size: 0.62rem;
+        cursor: pointer;
+    }
+    .compose-library-link:hover {
+        background: rgba(0, 255, 65, 0.14);
+    }
     .compose-label-row {
         display: flex;
         align-items: center;
         gap: 0.5rem;
     }
     .compose-field label {
-        font-size: 0.55rem;
+        font-size: 0.62rem;
         color: #666;
         letter-spacing: 0.5px;
     }
@@ -1175,7 +1196,7 @@
         border-radius: 6px;
         padding: 0.4rem 0.5rem;
         color: #fff;
-        font-size: 0.65rem;
+        font-size: 0.72rem;
         font-family: var(--font-mono);
     }
     .compose-field input:focus {
@@ -1183,7 +1204,7 @@
         border-color: var(--color-primary);
     }
     .compose-error {
-        font-size: 0.55rem;
+        font-size: 0.62rem;
         color: #ff5555;
         padding: 0.3rem;
         background: rgba(255, 85, 85, 0.1);

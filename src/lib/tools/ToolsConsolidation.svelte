@@ -52,6 +52,10 @@
 
     $: maxSafeInputs = policyDiag?.max_safe_inputs_for_one_output || 607;
     $: exceedsOneRoundMax = safeUtxoCount > maxSafeInputs;
+    $: selectedExceedsOneRound = selectedCount > maxSafeInputs;
+    $: estimatedBatchCount = maxSafeInputs > 1
+        ? Math.max(1, Math.ceil((Math.max(safeUtxoCount, 1) - 1) / (maxSafeInputs - 1)))
+        : 1;
 
     $: filteredUtxos = (() => {
         return utxos.filter((u) => {
@@ -130,10 +134,16 @@
 
     function selectAllSafe() {
         clearSelected();
-        for (const u of filteredUtxos) {
-            if (!isUnsafe(u)) {
-                selectedIds.add(`${u.txid}:${u.vout}`);
-            }
+        const safe = filteredUtxos
+            .filter((u) => !isUnsafe(u))
+            .sort((a, b) => a.amount - b.amount);
+        const maxInputs = policyDiag?.max_safe_inputs_for_one_output || 607;
+        const limit = Math.min(safe.length, maxInputs);
+        for (let i = 0; i < limit; i++) {
+            selectedIds.add(`${safe[i].txid}:${safe[i].vout}`);
+        }
+        if (safe.length > maxInputs) {
+            status = `Selected one safe batch (${limit} of ${safe.length}). This wallet needs about ${estimatedBatchCount} reviewed batches.`;
         }
         selectedIds = selectedIds;
         calculateTotal();
@@ -147,6 +157,9 @@
         const maxInputs = policyDiag?.max_safe_inputs_for_one_output || 607;
         for (let i = 0; i < Math.min(safe.length, maxInputs); i++) {
             selectedIds.add(`${safe[i].txid}:${safe[i].vout}`);
+        }
+        if (safe.length > maxInputs) {
+            status = `Selected the maximum safe one-round batch (${Math.min(safe.length, maxInputs)} inputs).`;
         }
         selectedIds = selectedIds;
         calculateTotal();
@@ -254,6 +267,10 @@
         }
         if (!destination.trim()) {
             status = "Consolidation destination address is required.";
+            return;
+        }
+        if (selectedExceedsOneRound) {
+            status = `Selected ${selectedCount} inputs exceeds the one-round limit of ${maxSafeInputs}. Use Select Safe Batch or Plan Batches.`;
             return;
         }
 
@@ -418,11 +435,11 @@
 <div class="consolidation-view">
     <div class="consolidation-header-bar">
         <span class="header-label mono">WALLET CONSOLIDATION</span> <HelpHitbox title="Wallet Consolidation">
-            <p>Consolidation merges many small HEMP UTXOs into one wallet output so future sends are simpler and less likely to hit policy size limits.</p>
+            <p>Consolidation merges many small HEMP UTXOs into fewer wallet outputs so future sends are simpler and less likely to hit policy size limits.</p>
             <p>It links selected UTXOs together on-chain, so there is a privacy tradeoff.</p>
-            <p>Asset-bearing, unsafe, or unspendable UTXOs are excluded to protect funds. Commander estimates fee rate automatically before preview and broadcast.</p>
+            <p>Asset-bearing, unsafe, or unspendable UTXOs are excluded to protect funds. Commander broadcasts one reviewed batch at a time and estimates fees before each broadcast.</p>
         </HelpHitbox>
-        <span class="header-sub">Merge multiple UTXOs into a single wallet address</span>
+        <span class="header-sub">Merge safe HEMP UTXOs in reviewed one-round batches</span>
     </div>
 
     <div class="destination-row">
@@ -462,8 +479,8 @@
             />
         </div>
         <div class="filter-group actions-right">
-            <button class="cyber-btn ghost" on:click={selectAllSafe}>SEL ALL SAFE</button>
-            <button class="cyber-btn ghost" on:click={selectSafeMax}>SEL SAFE MAX</button>
+            <button class="cyber-btn ghost" on:click={selectAllSafe}>SELECT SAFE BATCH</button>
+            <button class="cyber-btn ghost" on:click={selectSafeMax}>SAFE 1-ROUND MAX</button>
             <button class="cyber-btn ghost" on:click={clearSelected}>CLEAR</button>
             <button class="cyber-btn" on:click={() => fetchUtxos(false)} disabled={loading}>
                 {loading ? "LOADING..." : "REFRESH"}
@@ -514,7 +531,12 @@
 
     {#if exceedsOneRoundMax}
         <div class="warning-banner">
-            <span>&#9888; Safe UTXO count ({safeUtxoCount}) exceeds one-round max ({maxSafeInputs}). Multi-round consolidation recommended.</span>
+            <span>&#9888; Safe UTXO count ({safeUtxoCount}) exceeds one-round max ({maxSafeInputs}). This wallet needs about {estimatedBatchCount} reviewed batches; Commander will not broadcast them all at once.</span>
+        </div>
+    {/if}
+    {#if selectedExceedsOneRound}
+        <div class="warning-banner danger">
+            <span>&#9888; Selected inputs ({selectedCount}) exceed the one-round max ({maxSafeInputs}). Reduce selection before preview.</span>
         </div>
     {/if}
 
@@ -586,7 +608,7 @@
     <div class="action-row">
         <button
             class="cyber-btn primary"
-            disabled={selectedCount === 0 || !destination.trim() || loading || previewing || broadcasting}
+            disabled={selectedCount === 0 || selectedExceedsOneRound || !destination.trim() || loading || previewing || broadcasting}
             on:click={handlePreview}
         >
             {broadcasting ? "BROADCASTING..." : previewing ? "PREVIEWING..." : "PREVIEW CONSOLIDATION"}
@@ -1286,6 +1308,12 @@
         flex-shrink: 0;
         font-family: var(--font-mono);
         letter-spacing: 0.3px;
+    }
+
+    .warning-banner.danger {
+        background: rgba(255, 68, 68, 0.12);
+        border-color: rgba(255, 68, 68, 0.35);
+        color: #ff7777;
     }
 
     .plan-modal {

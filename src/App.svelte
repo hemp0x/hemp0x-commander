@@ -445,7 +445,7 @@
     walletPromptMode = mode;
     walletPromptPass = "";
     walletPromptPassConfirm = "";
-    walletPromptDuration = "60";
+    walletPromptDuration = "300";
     walletPromptError = "";
     showWalletPrompt = true;
   }
@@ -501,6 +501,7 @@
         openWalletPrompt("unlock");
       } else {
         await core.invoke("wallet_lock");
+        await refreshDashboard();
       }
     } catch (err) {
       lastError = String(err || "Wallet action failed");
@@ -868,17 +869,22 @@
       <span class="ts-label">Daemon</span>
       <span class="ts-val">{nodeInfo.state}</span>
     </div>
-    <div
+    <button
+      type="button"
       class="ts-item"
       class:ts-ok={walletInfo.status !== "UNENCRYPTED" &&
         walletInfo.status !== "LOCKED" &&
         walletInfo.status !== "--"}
       class:ts-warn={walletInfo.status === "LOCKED"}
       class:ts-bad={walletInfo.status === "UNENCRYPTED"}
+      class:wallet-status-action={walletInfo.status !== "--" && nodeInfo.state === "RUNNING"}
+      disabled={walletInfo.status === "--" || nodeInfo.state !== "RUNNING"}
+      title={nodeInfo.state === "RUNNING" ? walletActionLabel(walletInfo.status) : "Wallet controls require the daemon to be running"}
+      on:click={handleWalletAction}
     >
       <span class="ts-label">Wallet</span>
       <span class="ts-val">{walletInfo.status}</span>
-    </div>
+    </button>
     <div class="ts-item">
       <span class="ts-label">Network</span>
       <span class="ts-val">LOCAL ONLY</span>
@@ -975,15 +981,19 @@
                   <img src={hideBalance ? eyeClosed : eyeOpen} alt="toggle" />
                 </button>
               </div>
-              <div
+              <button
+                type="button"
                 class="status-chip"
                 class:status-red={walletInfo.status === "UNENCRYPTED"}
                 class:status-green={walletInfo.status !== "UNENCRYPTED" &&
                   walletInfo.status !== "--" && walletInfo.status !== "LOCKED"}
                 class:status-warn={walletInfo.status === "LOCKED"}
+                disabled={nodeInfo.state !== "RUNNING" || walletInfo.status === "--"}
+                title={nodeInfo.state === "RUNNING" ? walletActionLabel(walletInfo.status) : "Wallet controls require the daemon to be running"}
+                on:click={handleWalletAction}
               >
                 {walletInfo.status}
-              </div>
+              </button>
             </header>
 
             <div class="panel-content wallet-content compact-wallet">
@@ -1223,6 +1233,9 @@
           placeholder="Confirm password"
         />
       {:else}
+        <p class="modal-text">
+          Unlocking allows Commander to sign transactions for the selected time. The default is 5 minutes. Lock the wallet again when you are done sending.
+        </p>
         <label class="modal-label" for="wallet-duration"
           >Duration (seconds)</label
         >
@@ -1583,6 +1596,23 @@
     border-right: 1px solid rgba(255, 255, 255, 0.04);
     flex-shrink: 0;
     white-space: nowrap;
+  }
+  button.ts-item {
+    background: transparent;
+    border-top: none;
+    border-left: none;
+    border-bottom: none;
+    cursor: default;
+    font: inherit;
+  }
+  button.ts-item.wallet-status-action {
+    cursor: pointer;
+  }
+  button.ts-item.wallet-status-action:hover {
+    background: rgba(0, 255, 65, 0.05);
+  }
+  button.ts-item:disabled {
+    opacity: 1;
   }
   .ts-label {
     font-size: 0.55rem;
@@ -2078,6 +2108,16 @@
     border: 1px solid var(--color-primary);
     color: var(--color-primary);
     transition: all 0.3s ease;
+    background: transparent;
+    cursor: pointer;
+    font-family: var(--font-mono);
+  }
+  .status-chip:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+  .status-chip:hover:not(:disabled) {
+    transform: translateY(-1px);
   }
   .status-chip.status-red {
     color: #ff4444;

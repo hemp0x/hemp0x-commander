@@ -344,10 +344,15 @@ pub struct ConsolidationRoundPlan {
 #[derive(Serialize)]
 pub struct ConsolidationPlan {
   pub initial_utxo_count: usize,
+  pub selected_safe_utxo_count: usize,
+  pub target_final_utxo_count: usize,
   pub projected_final_utxo_count: usize,
+  pub estimated_round_count: usize,
+  pub planned_round_count: usize,
   pub max_inputs_per_round: usize,
   pub target_max_tx_bytes: u64,
   pub total_estimated_fee: String,
+  pub total_estimated_bytes: u64,
   pub rounds: Vec<ConsolidationRoundPlan>,
 }
 

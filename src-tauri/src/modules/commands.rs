@@ -1810,7 +1810,7 @@ pub fn preview_wallet_consolidation(
     utxo_count,
     &destination[..std::cmp::min(12, destination.len())],
     if destination.len() > 12 { "..." } else { "" },
-    output_amount
+    format_hemp_amount(output_amount)
   );
 
   Ok(ConsolidationPreview {
@@ -1872,8 +1872,6 @@ pub fn broadcast_wallet_consolidation(
       format_hemp_amount(computed_fee), format_hemp_amount(fee)
     ));
   }
-
-  let inputs_json = serde_json::to_string(&utxos).map_err(|e| e.to_string())?;
 
   let raw = run_cli(&[
     String::from("listunspent"),
@@ -1972,19 +1970,15 @@ pub fn broadcast_wallet_consolidation(
   let mut outputs = std::collections::HashMap::new();
   outputs.insert(destination.clone(), format!("{:.8}", output_amount));
 
-  let outputs_json = serde_json::to_string(&outputs).map_err(|e| e.to_string())?;
+  let inputs_value = serde_json::to_value(&utxos).map_err(|e| e.to_string())?;
+  let outputs_value = serde_json::to_value(&outputs).map_err(|e| e.to_string())?;
 
-  let raw_hex = run_cli(&[
-    String::from("createrawtransaction"),
-    inputs_json,
-    outputs_json,
-  ])?;
+  let raw_hex = rpc::call_rpc("createrawtransaction", &[inputs_value, outputs_value])?
+    .as_str()
+    .ok_or("Core returned an invalid raw transaction response")?
+    .to_string();
 
-  let signed_res_raw = run_cli(&[
-    String::from("signrawtransaction"),
-    raw_hex,
-  ])?;
-  let signed_res: serde_json::Value = serde_json::from_str(&signed_res_raw).map_err(|e| e.to_string())?;
+  let signed_res = rpc::call_rpc("signrawtransaction", &[serde_json::Value::String(raw_hex)])?;
 
   let complete = signed_res["complete"].as_bool().unwrap_or(false);
   if !complete {
@@ -1995,10 +1989,10 @@ pub fn broadcast_wallet_consolidation(
   }
   let signed_hex = signed_res["hex"].as_str().ok_or("No signed hex returned")?.to_string();
 
-  let txid = run_cli(&[
-    String::from("sendrawtransaction"),
-    signed_hex,
-  ])?;
+  let txid = rpc::call_rpc("sendrawtransaction", &[serde_json::Value::String(signed_hex)])?
+    .as_str()
+    .ok_or("Core returned an invalid transaction id response")?
+    .to_string();
 
   normalize_cli_txid(txid)
 }
@@ -2094,6 +2088,21 @@ fn estimate_fee_from_bytes(tx_bytes: u64, fee_rate_sat_per_byte: u64) -> f64 {
     (tx_bytes as f64 * fee_rate_sat_per_byte as f64) / SATS_PER_HEMP
 }
 
+fn estimate_consolidation_round_count(initial_utxos: usize, target_final_utxo_count: usize, max_inputs_per_round: usize) -> usize {
+    if initial_utxos <= target_final_utxo_count || max_inputs_per_round < 2 {
+        return 0;
+    }
+    let mut rounds = 0usize;
+    let mut current = initial_utxos;
+    let max_reduction = max_inputs_per_round - 1;
+    while current > target_final_utxo_count {
+        let reduction = std::cmp::min(max_reduction, current - target_final_utxo_count);
+        current -= reduction;
+        rounds += 1;
+    }
+    rounds
+}
+
 fn format_hemp_amount(hemp: f64) -> String {
     format!("{:.8}", hemp)
 }
@@ -2154,6 +2163,7 @@ pub fn plan_wallet_consolidation(
     max_rounds: Option<usize>,
     target_max_tx_bytes: Option<u64>,
     fee_rate_sat_per_byte: Option<u64>,
+    selected_outpoints: Option<Vec<RawTxInput>>,
 ) -> Result<ConsolidationPlan, String> {
     ensure_config()?;
     let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
@@ -2163,7 +2173,7 @@ pub fn plan_wallet_consolidation(
     }
 
     let target_final_utxo_count = target_final_utxo_count.unwrap_or(80);
-    let max_rounds = std::cmp::max(1, max_rounds.unwrap_or(6));
+    let max_rounds = std::cmp::max(1, max_rounds.unwrap_or(usize::MAX / 2));
     let target_max_tx_bytes = target_max_tx_bytes.unwrap_or(DEFAULT_TARGET_TX_BYTES);
 
     let raw = run_cli(&[
@@ -2175,20 +2185,26 @@ pub fn plan_wallet_consolidation(
     ])?;
     let all_utxos: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
 
-    let mut safe_utxos: Vec<(String, u64, f64)> = Vec::new();
-    for u in &all_utxos {
-        let txid = u["txid"].as_str().unwrap_or("").to_string();
-        let vout = u["vout"].as_u64().unwrap_or(0);
-        let amount = u["amount"].as_f64().unwrap_or(0.0);
-        let spendable = u["spendable"].as_bool().unwrap_or(true);
-        let safe = u["safe"].as_bool().unwrap_or(true);
-        let asset = u["asset"].as_str();
-        let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mut safe_utxos: Vec<(String, u64, f64)> = match selected_outpoints {
+        Some(selected) => collect_selected_safe_utxos(&selected, &all_utxos)?,
+        None => {
+            let mut collected = Vec::new();
+            for u in &all_utxos {
+                let txid = u["txid"].as_str().unwrap_or("").to_string();
+                let vout = u["vout"].as_u64().unwrap_or(0);
+                let amount = u["amount"].as_f64().unwrap_or(0.0);
+                let spendable = u["spendable"].as_bool().unwrap_or(true);
+                let safe = u["safe"].as_bool().unwrap_or(true);
+                let asset = u["asset"].as_str();
+                let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-        if spendable && safe && (asset.is_none() || asset == Some("HEMP")) && asset_amount == 0.0 && amount > 0.0 {
-            safe_utxos.push((txid, vout, amount));
+                if spendable && safe && (asset.is_none() || asset == Some("HEMP")) && asset_amount == 0.0 && amount > 0.0 {
+                    collected.push((txid, vout, amount));
+                }
+            }
+            collected
         }
-    }
+    };
 
     let initial_utxo_count = safe_utxos.len();
     if initial_utxo_count < 2 {
@@ -2214,6 +2230,7 @@ pub fn plan_wallet_consolidation(
         .map(|(txid, vout, amount)| (*amount, format!("{}:{}", txid, vout)))
         .collect();
     let mut total_estimated_fee = 0.0_f64;
+    let mut total_estimated_bytes = 0u64;
 
     for round in 0..max_rounds {
         working.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -2260,6 +2277,7 @@ pub fn plan_wallet_consolidation(
         };
 
         total_estimated_fee += fee_estimate;
+        total_estimated_bytes = total_estimated_bytes.saturating_add(tx_bytes);
         rounds.push(round_plan);
 
         let drain_end = input_count;
@@ -2268,15 +2286,76 @@ pub fn plan_wallet_consolidation(
     }
 
     let projected_final_utxo_count = working.len();
+    let estimated_round_count = estimate_consolidation_round_count(
+        initial_utxo_count,
+        target_final_utxo_count,
+        max_inputs_per_round,
+    );
+    let planned_round_count = rounds.len();
 
     Ok(ConsolidationPlan {
         initial_utxo_count,
+        selected_safe_utxo_count: initial_utxo_count,
+        target_final_utxo_count,
         projected_final_utxo_count,
+        estimated_round_count,
+        planned_round_count,
         max_inputs_per_round,
         target_max_tx_bytes,
         total_estimated_fee: format_hemp_amount(total_estimated_fee),
+        total_estimated_bytes,
         rounds,
     })
+}
+
+fn collect_selected_safe_utxos(
+    selected_outpoints: &[RawTxInput],
+    all_utxos: &[serde_json::Value],
+) -> Result<Vec<(String, u64, f64)>, String> {
+    if selected_outpoints.is_empty() {
+        return Err("Selected outpoint set is empty".to_string());
+    }
+    let selected_keys: std::collections::HashSet<String> = selected_outpoints
+        .iter()
+        .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
+        .collect();
+    if selected_keys.len() != selected_outpoints.len() {
+        return Err("Duplicate selected outpoints are not allowed".to_string());
+    }
+
+    let mut selected_safe = Vec::new();
+    for u in all_utxos {
+        let txid = u["txid"].as_str().unwrap_or("");
+        let vout = u["vout"].as_u64().unwrap_or(0);
+        let key = format!("{}:{}", txid, vout);
+        if !selected_keys.contains(&key) {
+            continue;
+        }
+
+        let amount = u["amount"].as_f64().unwrap_or(0.0);
+        let spendable = u["spendable"].as_bool().unwrap_or(true);
+        let safe = u["safe"].as_bool().unwrap_or(true);
+        let asset = u["asset"].as_str();
+        let asset_amount = u.get("asset_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if !spendable || !safe {
+            return Err(format!("Selected outpoint {} is not safe/spendable", key));
+        }
+        if asset_amount > 0.0 || (asset.is_some() && asset != Some("HEMP")) {
+            return Err(format!("Selected outpoint {} carries asset data and cannot be consolidated", key));
+        }
+        if amount <= 0.0 {
+            return Err(format!("Selected outpoint {} has non-positive amount", key));
+        }
+        selected_safe.push((txid.to_string(), vout, amount));
+    }
+
+    if selected_safe.len() != selected_keys.len() {
+        return Err(format!(
+            "{} selected outpoints are unavailable. Refresh UTXOs and reselect.",
+            selected_keys.len().saturating_sub(selected_safe.len())
+        ));
+    }
+    Ok(selected_safe)
 }
 
 #[tauri::command]
@@ -3974,7 +4053,8 @@ mod tests {
     estimate_legacy_tx_bytes, max_policy_inputs, estimate_fee_from_bytes,
     format_hemp_amount, sat_to_hemp, validate_fee_rate_sat_per_byte,
     clamp_fee_rate_sat_per_byte, parse_estimatesmartfee_sat_per_byte,
-    recommended_consolidation_fee_rate_sat_per_byte,
+    recommended_consolidation_fee_rate_sat_per_byte, estimate_consolidation_round_count,
+    collect_selected_safe_utxos,
     hemp_to_sat,
     validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
     message_authority_asset_name,
@@ -3982,6 +4062,7 @@ mod tests {
     validate_ipfs_reference, build_ipfs_gateway_url, build_reissue_preview,
     validate_raw_tx_hex, validate_tx_input, normalize_raw_tx_outputs,
   };
+  use crate::modules::models::RawTxInput;
 
   #[test]
   fn validates_valid_send_preview_input() {
@@ -5125,6 +5206,39 @@ mod tests {
     let fee_1 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1);
     let fee_1000 = estimate_fee_from_bytes(estimate_legacy_tx_bytes(max_1, 1), 1000);
     assert!(fee_1000 > fee_1);
+  }
+
+  #[test]
+  fn consolidation_round_count_large_wallet_example() {
+    assert_eq!(estimate_consolidation_round_count(15029, 80, 607), 25);
+  }
+
+  #[test]
+  fn consolidation_round_count_can_exceed_six() {
+    assert!(estimate_consolidation_round_count(5000, 80, 607) > 6);
+  }
+
+  #[test]
+  fn selected_planning_rejects_duplicate_outpoints() {
+    let selected = vec![
+      RawTxInput { txid: "a".repeat(64), vout: 0 },
+      RawTxInput { txid: "a".repeat(64), vout: 0 },
+    ];
+    let all = vec![];
+    assert!(collect_selected_safe_utxos(&selected, &all).is_err());
+  }
+
+  #[test]
+  fn selected_planning_rejects_unavailable_outpoints() {
+    let selected = vec![RawTxInput { txid: "b".repeat(64), vout: 1 }];
+    let all = vec![serde_json::json!({
+      "txid": "c".repeat(64),
+      "vout": 1,
+      "amount": 1.0,
+      "spendable": true,
+      "safe": true
+    })];
+    assert!(collect_selected_safe_utxos(&selected, &all).is_err());
   }
 
   // --- Channel Name Validation Tests ---

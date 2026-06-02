@@ -10,7 +10,7 @@
     $: isNodeOnline = $nodeStatus.online;
     $: networkMode = $networkInfo.chain || "mainnet";
 
-    export let activeSubTab = "";
+    export let isVisible = false;
 
     const dispatch = createEventDispatcher();
 
@@ -25,6 +25,8 @@
     let banningInProgress = false;
     let banListRefreshTimer;
     let autoBanIntervalId = null;
+    let autoPeerProtectionEnabled = true;
+    let peerSettingLoading = false;
     const autoBanInterval = 120000; // 2 minutes
 
     // Unban Modal State
@@ -37,7 +39,7 @@
         try {
             banList = await core.invoke("get_banned_peers");
         } catch (e) {
-            if (activeSubTab === "NETWORK") {
+            if (isVisible) {
                 // Only show toast if looking at it
                 showToast("Failed to load ban list", "error");
             }
@@ -46,7 +48,7 @@
     }
 
     async function banOldPeers(silent = false) {
-        if (!tauriReady) return;
+        if (!tauriReady || !isNodeOnline) return;
         banningInProgress = true;
         try {
             const res = await core.invoke("ban_old_peers");
@@ -61,6 +63,32 @@
             if (!silent) showToast("Peer check failed", "error");
         }
         banningInProgress = false;
+    }
+
+    async function loadPeerProtectionSetting() {
+        if (!tauriReady) return;
+        try {
+            const settings = await core.invoke("load_app_settings");
+            autoPeerProtectionEnabled = settings.auto_peer_protection_enabled !== false;
+            restartAutoBanCheck();
+        } catch {
+            autoPeerProtectionEnabled = true;
+        }
+    }
+
+    async function setPeerProtectionEnabled(value) {
+        autoPeerProtectionEnabled = value;
+        peerSettingLoading = true;
+        try {
+            const settings = await core.invoke("load_app_settings");
+            settings.auto_peer_protection_enabled = value;
+            await core.invoke("save_app_settings", { settings });
+            restartAutoBanCheck();
+            showToast(value ? "Automatic peer protection enabled" : "Automatic peer protection disabled", "info");
+        } catch (e) {
+            showToast("Failed to save peer protection setting", "error");
+        }
+        peerSettingLoading = false;
     }
 
     function initiateUnban(address) {
@@ -81,10 +109,22 @@
     }
 
     function startAutoBanCheck() {
+        if (autoBanIntervalId || !autoPeerProtectionEnabled || !tauriReady || !isNodeOnline) return;
         autoBanIntervalId = setInterval(() => {
-            // We can run this even if not on the tab, it protects the node
             banOldPeers(true);
         }, autoBanInterval);
+    }
+
+    function stopAutoBanCheck() {
+        if (autoBanIntervalId) {
+            clearInterval(autoBanIntervalId);
+            autoBanIntervalId = null;
+        }
+    }
+
+    function restartAutoBanCheck() {
+        stopAutoBanCheck();
+        startAutoBanCheck();
     }
 
     // --- DIAGNOSTICS ---
@@ -189,7 +229,7 @@
     }
 
     // Reactivity
-    $: if (activeSubTab === "NETWORK") {
+    $: if (isVisible) {
         loadBanList();
         if (banListRefreshTimer) clearInterval(banListRefreshTimer);
         banListRefreshTimer = setInterval(loadBanList, 30000); // 30s refresh
@@ -197,15 +237,19 @@
         if (banListRefreshTimer) clearInterval(banListRefreshTimer);
     }
 
+    $: if (autoPeerProtectionEnabled && tauriReady && isNodeOnline) {
+        startAutoBanCheck();
+    } else {
+        stopAutoBanCheck();
+    }
+
     onMount(() => {
-        if (tauriReady) {
-            startAutoBanCheck();
-        }
+        loadPeerProtectionSetting();
     });
 
     onDestroy(() => {
         if (banListRefreshTimer) clearInterval(banListRefreshTimer);
-        if (autoBanIntervalId) clearInterval(autoBanIntervalId);
+        stopAutoBanCheck();
     });
 </script>
 
@@ -217,14 +261,24 @@
             class="section-desc"
             style="margin-bottom: 1rem; color: #888; font-size: 0.8rem;"
         >
-            App automatically checks for bad peers every 120 seconds. Peers
-            running outdated versions (below v4.7.0) are banned for 24 hours.
+            Automatically checks connected peers every 120 seconds. Peers
+            running old Hemp0x Core builds or non-Hemp0x subversions are banned
+            for 24 hours.
         </p>
 
         <div
             class="action-row"
             style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;"
         >
+            <label class="peer-toggle">
+                <input
+                    type="checkbox"
+                    checked={autoPeerProtectionEnabled}
+                    disabled={peerSettingLoading}
+                    on:change={(e) => setPeerProtectionEnabled(e.currentTarget.checked)}
+                />
+                <span>AUTO PROTECT</span>
+            </label>
             <button
                 class="cyber-btn small"
                 on:click={() => banOldPeers(false)}
@@ -654,5 +708,20 @@
         font-size: 0.75rem;
         color: #888;
         margin: 0;
+    }
+    .peer-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.4rem 0.65rem;
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        border-radius: 6px;
+        color: #aaa;
+        font-size: 0.68rem;
+        letter-spacing: 0.08em;
+        user-select: none;
+    }
+    .peer-toggle input {
+        accent-color: var(--color-primary);
     }
 </style>

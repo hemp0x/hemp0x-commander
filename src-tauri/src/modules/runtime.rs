@@ -9,7 +9,8 @@ use serde::Serialize;
 
 use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
-use crate::modules::utils::resolve_bin;
+use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
+use crate::modules::files::load_app_settings_impl;
 
 const REQUIRED_CORE_NEXT_COMMIT: &str = "192c6b5ce";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.7.0.0";
@@ -94,7 +95,13 @@ impl DaemonProcessIdentity {
 }
 
 fn bundled_daemon_path() -> PathBuf {
-    PathBuf::from(resolve_bin("hemp0xd"))
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  let path = if let Some(ref d) = custom_bin_dir {
+    resolve_bin_with_override("hemp0xd", Some(d))
+  } else {
+    resolve_bin("hemp0xd")
+  };
+  PathBuf::from(path)
 }
 
 #[cfg(target_os = "linux")]
@@ -281,8 +288,13 @@ fn parse_commit_hash(raw: &str) -> Option<String> {
 }
 
 fn binary_version(name: &str) -> BinaryVersion {
-    let path = resolve_bin(name);
-    let exists = PathBuf::from(&path).exists();
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  let path = if let Some(ref d) = custom_bin_dir {
+    resolve_bin_with_override(name, Some(d))
+  } else {
+    resolve_bin(name)
+  };
+  let exists = PathBuf::from(&path).exists();
     let raw = if exists {
         command_version(&path).unwrap_or_else(|e| format!("Version check failed: {e}"))
     } else {

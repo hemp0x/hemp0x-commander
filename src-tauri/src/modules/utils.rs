@@ -40,6 +40,17 @@ pub fn add_bin_candidates(candidates: &mut Vec<PathBuf>, base: PathBuf, name: &s
 }
 
 pub fn resolve_bin(name: &str) -> String {
+  resolve_bin_with_override(name, None)
+}
+
+pub fn resolve_bin_with_override(name: &str, override_dir: Option<&str>) -> String {
+  if let Some(dir) = override_dir {
+    let p = PathBuf::from(dir).join(bin_name(name));
+    if p.exists() {
+      return p.to_string_lossy().to_string();
+    }
+  }
+
   let suffixed_name = format!("{}-{}", name, target_triple());
 
   if let Ok(exe) = std::env::current_exe() {
@@ -181,9 +192,20 @@ const MIN_VERSION: (u32, u32, u32) = (4, 7, 0);
 
 pub fn parse_version(subver: &str) -> Option<(u32, u32, u32)> {
   let stripped = subver.trim_matches('/');
-  if let Some(ver_str) = stripped.strip_prefix("Hemp0x:") {
-    let parts: Vec<&str> = ver_str.split('.').collect();
-    if parts.len() >= 3 {
+  if !stripped.to_lowercase().contains("hemp0x") {
+    return None;
+  }
+
+  for token in stripped.split(|c: char| !(c.is_ascii_digit() || c == '.')) {
+    if token.matches('.').count() < 2 {
+      continue;
+    }
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() >= 3
+      && parts[0].chars().all(|c| c.is_ascii_digit())
+      && parts[1].chars().all(|c| c.is_ascii_digit())
+      && parts[2].chars().all(|c| c.is_ascii_digit())
+    {
       let major = parts[0].parse().ok()?;
       let minor = parts[1].parse().ok()?;
       let patch = parts[2].parse().ok()?;
@@ -203,4 +225,24 @@ pub fn version_is_old(subver: &str) -> bool {
     return false;
   }
   true
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn parse_version_accepts_common_hemp0x_subver_formats() {
+    assert_eq!(parse_version("/Hemp0x:4.7.0/"), Some((4, 7, 0)));
+    assert_eq!(parse_version("/Hemp0x:4.7.0.0/"), Some((4, 7, 0)));
+    assert_eq!(parse_version("/Hemp0x Core:4.7.1/"), Some((4, 7, 1)));
+  }
+
+  #[test]
+  fn version_is_old_rejects_old_or_non_hemp0x_peers() {
+    assert!(version_is_old("/Hemp0x:4.6.9/"));
+    assert!(version_is_old("/Satoshi:4.7.0/"));
+    assert!(!version_is_old("/Hemp0x:4.7.0/"));
+    assert!(!version_is_old("/Hemp0x Core:4.8.0/"));
+  }
 }

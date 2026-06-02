@@ -9,10 +9,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 
 // Import local modules
-use crate::modules::models::{ConfigPaths, DataFolderInfo, BinaryStatus, AddressBookEntry, AppSettings};
-use crate::modules::utils::{resolve_bin, bin_name, calculate_dir_size, format_size};
+use crate::modules::models::{ConfigPaths, DataFolderInfo, DataMovePreview, DataMoveResult, BinaryStatus, AddressBookEntry, AppSettings, RepairStatus};
+use crate::modules::utils::{resolve_bin, resolve_bin_with_override, bin_name, calculate_dir_size, format_size};
 
-pub fn data_dir() -> Result<PathBuf, String> {
+pub fn default_core_data_dir() -> Result<PathBuf, String> {
   if cfg!(windows) {
     let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA not set".to_string())?;
     Ok(PathBuf::from(appdata).join("Hemp0x"))
@@ -20,6 +20,142 @@ pub fn data_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("HOME not set")?;
     Ok(home.join(".hemp0x"))
   }
+}
+
+// Bootstrap dir is always under default_core_data_dir — never under active data dir
+fn bootstrap_dir() -> Result<PathBuf, String> {
+  Ok(default_core_data_dir()?.join("commander"))
+}
+
+fn bootstrap_path() -> Result<PathBuf, String> {
+  Ok(bootstrap_dir()?.join("bootstrap.json"))
+}
+
+fn load_bootstrap() -> Result<serde_json::Value, String> {
+  let path = bootstrap_path()?;
+  if path.exists() {
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let val: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|_| {
+      let mut map = serde_json::Map::new();
+      map.insert("custom_data_dir".to_string(), serde_json::Value::Null);
+      serde_json::Value::Object(map)
+    });
+    return Ok(val);
+  }
+  let mut map = serde_json::Map::new();
+  map.insert("custom_data_dir".to_string(), serde_json::Value::Null);
+  Ok(serde_json::Value::Object(map))
+}
+
+fn save_bootstrap(custom_data_dir: Option<String>) -> Result<(), String> {
+  let path = bootstrap_path()?;
+  let dir = path.parent().ok_or("Could not determine bootstrap parent directory")?;
+  if !dir.exists() {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+  }
+  let mut map = serde_json::Map::new();
+  map.insert("custom_data_dir".to_string(), match custom_data_dir {
+    Some(s) => serde_json::Value::String(s),
+    None => serde_json::Value::Null,
+  });
+  let content = serde_json::to_string_pretty(&serde_json::Value::Object(map)).map_err(|e| e.to_string())?;
+  fs::write(&path, content).map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+// Active data dir follows the bootstrap pointer
+pub fn active_data_dir() -> Result<PathBuf, String> {
+  let bootstrap = load_bootstrap()?;
+  if let Some(serde_json::Value::String(ref custom)) = bootstrap.get("custom_data_dir") {
+    let p = PathBuf::from(custom);
+    if !p.is_absolute() {
+      return Err("Custom data directory must be an absolute path. Use Settings to fix or reset.".to_string());
+    }
+    if p.exists() && p.is_file() {
+      return Err("Custom data directory points to a file, not a directory. Use Settings to fix or reset.".to_string());
+    }
+    return Ok(p);
+  }
+  default_core_data_dir()
+}
+
+// Legacy alias: data_dir() is the active data directory
+pub fn data_dir() -> Result<PathBuf, String> {
+  active_data_dir()
+}
+
+// Active commander settings live under the active data dir
+pub fn commander_settings_path() -> Result<PathBuf, String> {
+  Ok(active_data_dir()?.join("commander").join("app_settings.json"))
+}
+
+fn external_slice17_settings_path() -> Result<PathBuf, String> {
+  if cfg!(windows) {
+    let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA not set".to_string())?;
+    Ok(PathBuf::from(appdata).join("Hemp0xCommander").join("app_settings.json"))
+  } else if cfg!(target_os = "macos") {
+    let home = dirs::home_dir().ok_or("HOME not set")?;
+    Ok(home.join("Library").join("Application Support").join("Hemp0xCommander").join("app_settings.json"))
+  } else {
+    let config = dirs::config_dir().ok_or("Could not determine config directory")?;
+    Ok(config.join("hemp0x-commander").join("app_settings.json"))
+  }
+}
+
+fn fallback_prior_17b_settings_path() -> Result<PathBuf, String> {
+  // Slice 17b stored settings under default dir regardless of custom dir
+  Ok(default_core_data_dir()?.join("commander").join("app_settings.json"))
+}
+
+pub fn load_app_settings_impl() -> Result<AppSettings, String> {
+  let active_path = commander_settings_path()?;
+
+  if active_path.exists() {
+    let content = fs::read_to_string(&active_path).map_err(|e| e.to_string())?;
+    return Ok(serde_json::from_str(&content).unwrap_or_default());
+  }
+
+  // Fallback 1: prior 17b path (default dir /commander/app_settings.json)
+  if let Ok(prior17b) = fallback_prior_17b_settings_path() {
+    if prior17b.exists() {
+      let content = fs::read_to_string(&prior17b).map_err(|e| e.to_string())?;
+      let settings: AppSettings = serde_json::from_str(&content).unwrap_or_default();
+      save_app_settings_impl(&settings)?;
+      return Ok(settings);
+    }
+  }
+
+  // Fallback 2: external Slice 17 path
+  if let Ok(external) = external_slice17_settings_path() {
+    if external.exists() {
+      let content = fs::read_to_string(&external).map_err(|e| e.to_string())?;
+      let settings: AppSettings = serde_json::from_str(&content).unwrap_or_default();
+      save_app_settings_impl(&settings)?;
+      return Ok(settings);
+    }
+  }
+
+  // Fallback 3: legacy root path
+  let legacy_path = default_core_data_dir()?.join("app_settings.json");
+  if legacy_path.exists() {
+    let content = fs::read_to_string(&legacy_path).map_err(|e| e.to_string())?;
+    let settings: AppSettings = serde_json::from_str(&content).unwrap_or_default();
+    save_app_settings_impl(&settings)?;
+    return Ok(settings);
+  }
+
+  Ok(AppSettings::default())
+}
+
+fn save_app_settings_impl(settings: &AppSettings) -> Result<(), String> {
+  let path = commander_settings_path()?;
+  let cfg_dir = path.parent().ok_or("Could not determine settings parent directory")?;
+  if !cfg_dir.exists() {
+    fs::create_dir_all(cfg_dir).map_err(|e| e.to_string())?;
+  }
+  let content = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+  fs::write(&path, content).map_err(|e| e.to_string())?;
+  Ok(())
 }
 
 pub fn config_path() -> Result<PathBuf, String> {
@@ -86,27 +222,14 @@ pub fn save_address_book(entries: Vec<AddressBookEntry>) -> Result<(), String> {
   Ok(())
 }
 
-fn app_settings_path() -> Result<PathBuf, String> {
-  Ok(data_dir()?.join("app_settings.json"))
-}
-
 #[tauri::command]
 pub fn load_app_settings() -> Result<AppSettings, String> {
-  let path = app_settings_path()?;
-  if !path.exists() {
-    return Ok(AppSettings::default());
-  }
-  let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-  let settings: AppSettings = serde_json::from_str(&content).unwrap_or_default();
-  Ok(settings)
+  load_app_settings_impl()
 }
 
 #[tauri::command]
 pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
-  let path = app_settings_path()?;
-  let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-  fs::write(&path, content).map_err(|e| e.to_string())?;
-  Ok(())
+  save_app_settings_impl(&settings)
 }
 
 #[tauri::command]
@@ -123,12 +246,25 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
 pub fn init_config() -> Result<ConfigPaths, String> {
   let cfg = ensure_config()?;
   let dir = data_dir()?;
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  let resolve = |name: &str| -> String {
+    if let Some(ref d) = custom_bin_dir {
+      resolve_bin_with_override(name, Some(d))
+    } else {
+      resolve_bin(name)
+    }
+  };
   Ok(ConfigPaths {
     data_dir: dir.to_string_lossy().to_string(),
     config_path: cfg.to_string_lossy().to_string(),
-    daemon_path: resolve_bin("hemp0xd"),
-    cli_path: resolve_bin("hemp0x-cli"),
+    daemon_path: resolve("hemp0xd"),
+    cli_path: resolve("hemp0x-cli"),
   })
+}
+
+#[tauri::command]
+pub fn get_commander_settings_path() -> Result<String, String> {
+  commander_settings_path().map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -175,21 +311,43 @@ rpcport=42068
 
 #[tauri::command]
 pub fn get_data_folder_info() -> Result<DataFolderInfo, String> {
-  let dir = data_dir()?;
+  let default_dir = default_core_data_dir()?;
+  let settings_path = commander_settings_path().unwrap_or_else(|_| PathBuf::from(""));
+  let bootstrap = bootstrap_path().unwrap_or_else(|_| PathBuf::from(""));
+
+  // Try to resolve the active data dir; fall back to default if bootstrap is invalid
+  let (dir, bootstrap_error) = match active_data_dir() {
+    Ok(d) => (d, None),
+    Err(e) => (default_dir.clone(), Some(e)),
+  };
+
   let folder_exists = dir.exists();
   let config_exists = dir.join("hemp.conf").exists();
   let wallet_exists = dir.join("wallet.dat").exists();
-  
+  let blocks_exists = dir.join("blocks").exists();
+  let chainstate_exists = dir.join("chainstate").exists();
+  let debug_log_exists = dir.join("debug.log").exists();
+  let lock_exists = dir.join(".lock").exists();
+
   let size_bytes = if folder_exists { calculate_dir_size(&dir) } else { 0 };
   let size_display = format_size(size_bytes);
-  
+
   Ok(DataFolderInfo {
     path: dir.to_string_lossy().to_string(),
+    default_path: default_dir.to_string_lossy().to_string(),
+    using_custom_path: bootstrap_error.is_none() && dir != default_dir,
+    commander_settings_path: settings_path.to_string_lossy().to_string(),
+    bootstrap_path: bootstrap.to_string_lossy().to_string(),
     size_bytes,
     size_display,
     config_exists,
     wallet_exists,
     folder_exists,
+    blocks_exists,
+    chainstate_exists,
+    debug_log_exists,
+    lock_exists,
+    bootstrap_error,
   })
 }
 
@@ -272,31 +430,16 @@ pub fn backup_data_folder() -> Result<String, String> {
   if !dir.exists() {
     return Err("Data folder does not exist".to_string());
   }
-  
+
   let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
   let backup_name = format!("hemp0x_data_backup_{}", ts);
-  
+
   let backup_base = dirs::desktop_dir()
     .or_else(dirs::home_dir)
     .ok_or("Could not determine backup location")?;
   let backup_path = backup_base.join(&backup_name);
-  
-  fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-      let entry = entry.map_err(|e| e.to_string())?;
-      let src_path = entry.path();
-      let dst_path = dst.join(entry.file_name());
-      if src_path.is_dir() {
-        copy_dir_recursive(&src_path, &dst_path)?;
-      } else {
-        fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
-      }
-    }
-    Ok(())
-  }
-  
-  copy_dir_recursive(&dir, &backup_path)?;
+
+  safe_copy_dir_recursive(&dir, &backup_path)?;
   Ok(backup_path.to_string_lossy().to_string())
 }
 
@@ -306,23 +449,8 @@ pub fn backup_data_folder_to(path: String) -> Result<(), String> {
   if !dir.exists() {
     return Err("Data folder does not exist".to_string());
   }
-  
-  fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-      let entry = entry.map_err(|e| e.to_string())?;
-      let src_path = entry.path();
-      let dst_path = dst.join(entry.file_name());
-      if src_path.is_dir() {
-        copy_dir_recursive(&src_path, &dst_path)?;
-      } else {
-        fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
-      }
-    }
-    Ok(())
-  }
-  
-  copy_dir_recursive(&dir, Path::new(&path))?;
+
+  safe_copy_dir_recursive(&dir, Path::new(&path))?;
   Ok(())
 }
 
@@ -364,15 +492,13 @@ pub fn extract_binaries(target_dir: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_binary_status() -> Result<BinaryStatus, String> {
-  let daemon_path = PathBuf::from(resolve_bin("hemp0xd"));
-  let cli_path = PathBuf::from(resolve_bin("hemp0x-cli"));
-  let tx_path = PathBuf::from(resolve_bin("hemp0x-tx"));
-  Ok(BinaryStatus {
-    daemon_exists: daemon_path.exists(),
-    cli_exists: cli_path.exists(),
-    tx_exists: tx_path.exists(),
-  })
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  get_binary_status_with_override(custom_bin_dir.as_deref())
 }
+
+// SAFETY: replace_binaries removed in Slice 17d.
+// External Core folder selection (non-destructive) is deferred to a future slice.
+// See SystemHub.svelte for the placeholder UI.
 
 #[tauri::command]
 pub fn extract_snapshot(archive_path: String) -> Result<String, String> {
@@ -474,4 +600,551 @@ pub fn extract_snapshot(archive_path: String) -> Result<String, String> {
     if has_chainstate { "OK" } else { "-" }
   );
   Ok(msg)
+}
+
+#[tauri::command]
+pub fn set_core_data_dir(path: String) -> Result<DataFolderInfo, String> {
+  let p = PathBuf::from(&path);
+  if path.trim().is_empty() {
+    return Err("Path cannot be empty".to_string());
+  }
+  if !p.is_absolute() {
+    return Err("Path must be absolute".to_string());
+  }
+  if p.exists() && p.is_file() {
+    return Err("Path points to a file, not a directory".to_string());
+  }
+  if !p.exists() {
+    fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+  }
+  let current_dir = data_dir()?;
+  if p == current_dir {
+    return get_data_folder_info();
+  }
+
+  // 1. Load current settings from wherever they are now
+  let mut settings = load_app_settings_impl()?;
+
+  // 2. Write bootstrap pointer to default data dir
+  save_bootstrap(Some(path.clone()))?;
+
+  // 3. Update settings for backwards compatibility
+  settings.custom_data_dir = Some(path.clone());
+
+  // 4. Now active_data_dir() resolves to the new path — save settings there
+  save_app_settings_impl(&settings)?;
+
+  // 5. Ensure Core config exists in the custom data dir
+  ensure_config()?;
+
+  get_data_folder_info()
+}
+
+#[tauri::command]
+pub fn reset_core_data_dir() -> Result<DataFolderInfo, String> {
+  // 1. Clear bootstrap pointer FIRST so an invalid bootstrap does not block reset
+  save_bootstrap(None)?;
+
+  // 2. Load current settings from active location (now default, since bootstrap is cleared)
+  let mut settings = load_app_settings_impl().unwrap_or_default();
+
+  // 3. Update settings for backwards compatibility
+  settings.custom_data_dir = None;
+
+  // 4. active_data_dir() now resolves to default — save settings there
+  save_app_settings_impl(&settings)?;
+
+  // 5. Ensure default data dir exists
+  let default_dir = default_core_data_dir()?;
+  if !default_dir.exists() {
+    fs::create_dir_all(&default_dir).map_err(|e| e.to_string())?;
+  }
+
+  // 6. Ensure Core config exists in default dir
+  ensure_config()?;
+
+  get_data_folder_info()
+}
+
+#[tauri::command]
+pub fn prepare_core_data_dir_move(target_path: String) -> Result<DataMovePreview, String> {
+  let source = data_dir()?;
+  let target = PathBuf::from(&target_path);
+  if target_path.trim().is_empty() {
+    return Err("Target path cannot be empty".to_string());
+  }
+  if !target.is_absolute() {
+    return Err("Target path must be absolute".to_string());
+  }
+  if target.exists() && target.is_file() {
+    return Err("Target path points to a file, not a directory".to_string());
+  }
+
+  if path_contains(&source, &target) {
+    return Err("Target directory is inside the source directory".to_string());
+  }
+  if target.exists() && path_contains(&target, &source) {
+    return Err("Source directory is inside the target directory".to_string());
+  }
+  if let Some(normalized_target) = nearest_existing_absolute_ancestor(&target) {
+    if path_contains(&source, &normalized_target) {
+      return Err("Target path would be inside the source directory".to_string());
+    }
+  }
+
+  let source_size = calculate_dir_size(&source);
+  let target_exists = target.exists();
+  let target_is_empty = target_exists && fs::read_dir(&target).map(|mut r| r.next().is_none()).unwrap_or(true);
+  let target_has_files = target_exists && !target_is_empty;
+
+  let mut warnings: Vec<String> = Vec::new();
+  if target_has_files {
+    warnings.push("Target directory exists and contains files. Copy will be refused for safety.".to_string());
+  }
+  if source.join(".lock").exists() {
+    warnings.push("Source has a .lock file — daemon may be running. Stop it before move.".to_string());
+  }
+
+  Ok(DataMovePreview {
+    source_path: source.to_string_lossy().to_string(),
+    target_path: target.to_string_lossy().to_string(),
+    source_size_bytes: source_size,
+    source_size_display: format_size(source_size),
+    target_exists,
+    target_is_empty,
+    target_has_files,
+    wallet_present: source.join("wallet.dat").exists(),
+    config_present: source.join("hemp.conf").exists(),
+    blocks_present: source.join("blocks").exists(),
+    chainstate_present: source.join("chainstate").exists(),
+    warnings,
+  })
+}
+
+#[tauri::command]
+pub fn copy_core_data_dir_to(target_path: String) -> Result<DataMoveResult, String> {
+  let source = data_dir()?;
+  let target = PathBuf::from(&target_path);
+  if !source.exists() {
+    return Err("Source data directory does not exist".to_string());
+  }
+  if source.join(".lock").exists() {
+    return Err("Cannot copy while daemon .lock file exists. Stop the daemon first.".to_string());
+  }
+
+  if path_contains(&source, &target) {
+    return Err("Target directory is inside the source directory".to_string());
+  }
+  if target.exists() && path_contains(&target, &source) {
+    return Err("Source directory is inside the target directory".to_string());
+  }
+  if let Some(normalized_target) = nearest_existing_absolute_ancestor(&target) {
+    if path_contains(&source, &normalized_target) {
+      return Err("Target path would be inside the source directory".to_string());
+    }
+  }
+
+  if target.exists() {
+    let has_content = fs::read_dir(&target).map(|mut r| r.next().is_some()).unwrap_or(false);
+    if has_content {
+      return Err("Target directory is not empty. Clear it or choose a different target.".to_string());
+    }
+  }
+  if !target.exists() {
+    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+  }
+
+  let (file_count, byte_count) = safe_copy_dir_recursive(&source, &target)?;
+  Ok(DataMoveResult {
+    success: true,
+    message: format!("Copied {} files ({}) to {}", file_count, format_size(byte_count), target.to_string_lossy()),
+    files_copied: file_count,
+    bytes_copied: byte_count,
+  })
+}
+
+fn safe_absolute_path(p: &Path) -> PathBuf {
+  if p.is_absolute() {
+    let mut normalized = PathBuf::new();
+    for c in p.components() {
+      match c {
+        std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+          normalized.push(c.as_os_str());
+        }
+        std::path::Component::Normal(name) => {
+          normalized.push(name);
+        }
+        std::path::Component::CurDir => {}
+        std::path::Component::ParentDir => {
+          normalized.pop();
+        }
+      }
+    }
+    normalized
+  } else {
+    p.to_path_buf()
+  }
+}
+
+fn safe_copy_dir_recursive(src: &Path, dst: &Path) -> Result<(u64, u64), String> {
+  fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+  let mut file_count: u64 = 0;
+  let mut byte_count: u64 = 0;
+  for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+    let entry = entry.map_err(|e| e.to_string())?;
+    let src_path = entry.path();
+    let dst_path = dst.join(entry.file_name());
+    let ft = entry.file_type().map_err(|e| e.to_string())?;
+    if ft.is_symlink() {
+      continue;
+    }
+    if ft.is_dir() {
+      let (fc, bc) = safe_copy_dir_recursive(&src_path, &dst_path)?;
+      file_count += fc;
+      byte_count += bc;
+    } else {
+      let meta = fs::metadata(&src_path).map_err(|e| e.to_string())?;
+      fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
+      file_count += 1;
+      byte_count += meta.len();
+    }
+  }
+  Ok((file_count, byte_count))
+}
+
+fn path_contains(a: &Path, b: &Path) -> bool {
+  let a_abs = safe_absolute_path(a);
+  let b_abs = safe_absolute_path(b);
+  if let (Ok(canon_a), Ok(canon_b)) = (a.canonicalize(), b.canonicalize()) {
+    return canon_b.starts_with(&canon_a);
+  }
+  b_abs.starts_with(&a_abs)
+}
+
+fn nearest_existing_absolute_ancestor(p: &Path) -> Option<PathBuf> {
+  if p.is_absolute() && p.exists() {
+    return Some(p.to_path_buf());
+  }
+  let mut current = p.to_path_buf();
+  loop {
+    if let Some(parent) = current.parent() {
+      if parent.as_os_str().is_empty() {
+        return None;
+      }
+      if !parent.is_absolute() {
+        continue;
+      }
+      if parent.exists() {
+        if let Ok(canon) = parent.canonicalize() {
+          let rel = current.strip_prefix(parent).unwrap_or_else(|_| Path::new(""));
+          return Some(canon.join(rel));
+        }
+        return Some(current.to_path_buf());
+      }
+      current = parent.to_path_buf();
+    } else {
+      return None;
+    }
+  }
+}
+
+#[tauri::command]
+pub fn set_daemon_repair_mode(mode: String) -> Result<AppSettings, String> {
+  match mode.as_str() {
+    "none" | "reindex" | "reindex-chainstate" => {},
+    _ => return Err("Invalid repair mode. Use 'none', 'reindex', or 'reindex-chainstate'.".to_string()),
+  }
+  let mut settings = load_app_settings_impl()?;
+  if mode == "none" {
+    settings.pending_repair_mode = None;
+  } else {
+    settings.pending_repair_mode = Some(mode.clone());
+    settings.active_repair_mode = Some(mode);
+    settings.active_repair_started_at = Some(std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|d| d.as_secs())
+      .unwrap_or(0));
+  }
+  save_app_settings_impl(&settings)?;
+  Ok(settings)
+}
+
+#[tauri::command]
+pub fn clear_daemon_repair_mode() -> Result<AppSettings, String> {
+  let mut settings = load_app_settings_impl()?;
+  settings.pending_repair_mode = None;
+  settings.active_repair_mode = None;
+  settings.active_repair_started_at = None;
+  save_app_settings_impl(&settings)?;
+  Ok(settings)
+}
+
+#[tauri::command]
+pub fn get_daemon_repair_mode() -> Result<String, String> {
+  let settings = load_app_settings_impl()?;
+  Ok(settings.pending_repair_mode.unwrap_or_else(|| "none".to_string()))
+}
+
+const REQUIRED_CORE_BINS: &[&str] = &["hemp0xd", "hemp0x-cli"];
+const OPTIONAL_CORE_BINS: &[&str] = &["hemp0x-tx"];
+
+#[tauri::command]
+pub fn set_core_binary_dir(path: String) -> Result<BinaryStatus, String> {
+  let p = PathBuf::from(&path);
+  if path.trim().is_empty() {
+    return Err("Path cannot be empty".to_string());
+  }
+  if !p.is_absolute() {
+    return Err("Path must be absolute".to_string());
+  }
+  if !p.exists() {
+    return Err("Directory does not exist".to_string());
+  }
+  if !p.is_dir() {
+    return Err("Path is not a directory".to_string());
+  }
+
+  for bin in REQUIRED_CORE_BINS {
+    let bin_path = p.join(bin_name(bin));
+    if !bin_path.exists() {
+      return Err(format!("Missing required binary: {} (not found at {})", bin, bin_path.display()));
+    }
+  }
+
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    for bin in REQUIRED_CORE_BINS.iter().chain(OPTIONAL_CORE_BINS.iter()) {
+      let bin_path = p.join(bin_name(bin));
+      if let Ok(meta) = fs::metadata(&bin_path) {
+        let mut perms = meta.permissions();
+        let mode = perms.mode();
+        if mode & 0o111 == 0 {
+          perms.set_mode(0o755);
+          fs::set_permissions(&bin_path, perms)
+            .map_err(|e| format!("Failed to set executable permission on {}: {}", bin, e))?;
+        }
+      }
+    }
+  }
+
+  let mut settings = load_app_settings_impl()?;
+  settings.custom_core_binary_dir = Some(path.clone());
+  save_app_settings_impl(&settings)?;
+
+  get_binary_status_with_override(Some(&path))
+}
+
+#[tauri::command]
+pub fn reset_core_binary_dir() -> Result<BinaryStatus, String> {
+  let mut settings = load_app_settings_impl()?;
+  settings.custom_core_binary_dir = None;
+  save_app_settings_impl(&settings)?;
+  get_binary_status_with_override(None)
+}
+
+#[tauri::command]
+pub fn get_core_binary_dir() -> Result<Option<String>, String> {
+  let settings = load_app_settings_impl()?;
+  Ok(settings.custom_core_binary_dir)
+}
+
+fn get_binary_status_with_override(override_dir: Option<&str>) -> Result<BinaryStatus, String> {
+  let daemon_path = resolve_bin_with_override("hemp0xd", override_dir);
+  let cli_path = resolve_bin_with_override("hemp0x-cli", override_dir);
+  let tx_path = resolve_bin_with_override("hemp0x-tx", override_dir);
+  Ok(BinaryStatus {
+    daemon_exists: PathBuf::from(&daemon_path).exists(),
+    cli_exists: PathBuf::from(&cli_path).exists(),
+    tx_exists: PathBuf::from(&tx_path).exists(),
+    daemon_path,
+    cli_path,
+    tx_path,
+  })
+}
+
+fn read_log_recent_lines(path: &Path, max_lines: usize) -> Vec<String> {
+  if !path.exists() {
+    return Vec::new();
+  }
+  if let Ok(content) = fs::read_to_string(path) {
+    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let start = lines.len().saturating_sub(max_lines);
+    return lines[start..].to_vec();
+  }
+  Vec::new()
+}
+
+fn parse_log_hint(lines: &[String]) -> Option<String> {
+  for line in lines.iter().rev() {
+    let lower = line.to_lowercase();
+    if lower.contains("reindexing") {
+      return Some("Reindexing block data".to_string());
+    }
+    if lower.contains("loadblockindex") {
+      return Some("Loading block index".to_string());
+    }
+    if lower.contains("loaded block index") {
+      return Some("Block index loaded".to_string());
+    }
+    if lower.contains("verifying blocks") {
+      return Some("Verifying chainstate".to_string());
+    }
+    if lower.contains("updatetip") {
+      return Some("RPC online, syncing".to_string());
+    }
+    if lower.contains("progress=") {
+      return Some("Syncing in progress".to_string());
+    }
+    if lower.contains("shutdown") {
+      return Some("Daemon shutting down".to_string());
+    }
+  }
+  None
+}
+
+#[tauri::command]
+pub fn get_daemon_repair_status() -> Result<RepairStatus, String> {
+  let mut settings = load_app_settings_impl()?;
+  let pending_mode = settings.pending_repair_mode.clone();
+  let active_mode = settings.active_repair_mode.clone();
+  let dir = data_dir().ok();
+  let lock_exists = dir.as_ref().map(|d| d.join(".lock").exists()).unwrap_or(false);
+  let debug_log_path = dir.as_ref().map(|d| d.join("debug.log"));
+
+  let rpc_online = {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    TcpStream::connect_timeout(&"127.0.0.1:42068".parse().unwrap(), Duration::from_millis(500)).is_ok()
+  };
+
+  let (blocks, headers, verification_progress) = if rpc_online {
+    use crate::modules::rpc::rpc_context;
+    if let Ok(ctx) = rpc_context() {
+      if let Ok(data) = ctx.call("getblockchaininfo", &[]) {
+        let b = data["blocks"].as_u64();
+        let h = data["headers"].as_u64();
+        let vp = data["verificationprogress"].as_f64();
+        (b, h, vp)
+      } else {
+        (None, None, None)
+      }
+    } else {
+      (None, None, None)
+    }
+  } else {
+    (None, None, None)
+  };
+
+  let log_lines = debug_log_path.as_ref().map(|p| read_log_recent_lines(p, 50)).unwrap_or_default();
+  let log_hint = parse_log_hint(&log_lines);
+  let latest_log_line = log_lines.last().cloned();
+
+  let has_pending = pending_mode.as_deref() == Some("reindex") || pending_mode.as_deref() == Some("reindex-chainstate");
+  let has_active = active_mode.as_deref() == Some("reindex") || active_mode.as_deref() == Some("reindex-chainstate");
+  let repair_mode = if has_active { active_mode.clone() } else { pending_mode.clone() };
+
+  let repair_work_ongoing = log_hint.as_ref().map(|h| {
+    let l = h.to_lowercase();
+    l.contains("reindexing") || l.contains("loading block index") || l.contains("verifying")
+  }).unwrap_or(false);
+  let sync_ongoing = log_hint.as_ref().map(|h| h.to_lowercase().contains("syncing")).unwrap_or(false);
+
+  let rpc_healthy = rpc_online && blocks.is_some() && headers.is_some();
+  let repair_complete = rpc_healthy && !repair_work_ongoing;
+
+  if repair_complete && has_active {
+    settings.active_repair_mode = None;
+    settings.active_repair_started_at = None;
+    save_app_settings_impl(&settings)?;
+  }
+
+  let is_repair_active = has_active || has_pending;
+  let is_startup_repair = is_repair_active && !rpc_online;
+
+  let phase = if is_startup_repair {
+    if lock_exists {
+      "Starting daemon with repair flag".to_string()
+    } else {
+      log_hint.clone().unwrap_or_else(|| "Reindexing block data".to_string())
+    }
+  } else if repair_complete {
+    "Repair complete / node online".to_string()
+  } else if rpc_online && (repair_work_ongoing || sync_ongoing) {
+    "RPC online, syncing".to_string()
+  } else if rpc_online && !repair_work_ongoing && has_active {
+    "Node online; repair/sync status available".to_string()
+  } else if is_repair_active {
+    log_hint.clone().unwrap_or_else(|| "Daemon starting".to_string())
+  } else {
+    "Idle".to_string()
+  };
+
+  Ok(RepairStatus {
+    active: is_repair_active && (!repair_complete || repair_work_ongoing),
+    mode: repair_mode,
+    phase,
+    rpc_online,
+    lock_exists,
+    blocks,
+    headers,
+    verification_progress,
+    latest_log_line,
+    log_hint,
+  })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::fs;
+
+  #[test]
+  fn path_contains_target_inside_source() {
+    let dir = std::env::temp_dir().join("hemp17d_contains_test_1");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source");
+    let target = dir.join("source").join("child");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&target).unwrap();
+    assert!(path_contains(&source, &target), "child should be inside source");
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn path_contains_source_inside_target() {
+    let dir = std::env::temp_dir().join("hemp17d_contains_test_2");
+    let _ = fs::remove_dir_all(&dir);
+    let source = dir.join("child");
+    let target = dir;
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&target).unwrap();
+    assert!(path_contains(&target, &source), "source(child) should be inside target(dir)");
+    let _ = fs::remove_dir_all(&target);
+  }
+
+  #[test]
+  fn path_contains_unrelated_paths() {
+    let dir = std::env::temp_dir().join("hemp17d_contains_test_3");
+    let _ = fs::remove_dir_all(&dir);
+    let a = dir.join("a");
+    let b = dir.join("b");
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(&b).unwrap();
+    assert!(!path_contains(&a, &b), "sibling dirs should not contain each other");
+    assert!(!path_contains(&b, &a), "sibling dirs should not contain each other");
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn path_contains_non_existing_target() {
+    let dir = std::env::temp_dir().join("hemp17d_contains_test_4");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let a = dir.clone();
+    let b = dir.join("nonexistent_child");
+    assert!(path_contains(&a, &b), "non-existing child should still be detected as inside parent");
+    let _ = fs::remove_dir_all(&a);
+  }
 }

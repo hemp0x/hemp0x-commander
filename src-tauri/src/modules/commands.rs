@@ -8,8 +8,8 @@ use chrono::{Local, TimeZone, DateTime};
 
 // Import local modules
 use crate::modules::models::*;
-use crate::modules::utils::{resolve_bin, split_args, parse_balances, version_is_old};
-use crate::modules::files::{data_dir, ensure_config, parse_config, config_path};
+use crate::modules::utils::{resolve_bin, resolve_bin_with_override, split_args, parse_balances, version_is_old};
+use crate::modules::files::{data_dir, ensure_config, parse_config, config_path, load_app_settings_impl};
 use crate::modules::rpc;
 
 // --- SHELL STATE ---
@@ -21,7 +21,13 @@ pub struct ShellState {
 static SHELL_STATE: OnceLock<Mutex<ShellState>> = OnceLock::new();
 
 fn default_shell_cwd() -> PathBuf {
-  let candidate = PathBuf::from(resolve_bin("hemp0xd"));
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  let daemon = if let Some(ref d) = custom_bin_dir {
+    resolve_bin_with_override("hemp0xd", Some(d))
+  } else {
+    resolve_bin("hemp0xd")
+  };
+  let candidate = PathBuf::from(daemon);
   if candidate.exists() {
     if let Some(parent) = candidate.parent() {
       return parent.to_path_buf();
@@ -38,7 +44,13 @@ fn shell_state() -> &'static Mutex<ShellState> {
 pub fn run_cli(args: &[String]) -> Result<String, String> {
   let cfg = ensure_config()?;
   let dir = data_dir()?;
-  let cli = resolve_bin("hemp0x-cli");
+
+  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
+  let cli = if let Some(ref d) = custom_bin_dir {
+    resolve_bin_with_override("hemp0x-cli", Some(d))
+  } else {
+    resolve_bin("hemp0x-cli")
+  };
   let cli_path = PathBuf::from(&cli);
   if !cli_path.exists() {
     return Err(format!("CLI not found at {}", cli));
@@ -5533,4 +5545,5 @@ mod tests {
   fn ipfs_gateway_url_rejects_invalid_input() {
     assert!(build_ipfs_gateway_url("", None).is_err());
   }
+
 }

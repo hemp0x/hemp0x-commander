@@ -5,25 +5,38 @@ use std::time::Duration;
 use std::fs;
 
 // Import local modules
-use crate::modules::files::{data_dir, ensure_config, config_path};
-use crate::modules::utils::resolve_bin;
+use crate::modules::files::{data_dir, ensure_config, config_path, load_app_settings, save_app_settings};
+use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
 use crate::modules::commands::run_cli;
 
 #[tauri::command]
 pub fn start_node() -> Result<(), String> {
-  // EARLY DEBUG LOGGING
-  // EARLY DEBUG LOGGING - Removed for production
-
   let cfg = ensure_config()?;
   let dir = data_dir()?;
-  let daemon = resolve_bin("hemp0xd");
-  
 
+  let settings: crate::modules::models::AppSettings = load_app_settings()?;
+  let custom_bin_dir = settings.custom_core_binary_dir.clone();
+
+  let daemon = if let Some(ref d) = custom_bin_dir {
+    resolve_bin_with_override("hemp0xd", Some(d))
+  } else {
+    resolve_bin("hemp0xd")
+  };
+
+  let settings: crate::modules::models::AppSettings = load_app_settings()?;
+  let repair_flag: Option<String> = match settings.pending_repair_mode.as_deref() {
+    Some("reindex") | Some("reindex-chainstate") => settings.pending_repair_mode.clone(),
+    _ => None,
+  };
 
   let daemon_path = PathBuf::from(&daemon);
   if !daemon_path.exists() {
-
-    return Err(format!("Daemon not found at {}", daemon));
+    let hint = if custom_bin_dir.is_some() {
+      "Daemon not found in custom Core binary folder. Check the folder path or reset to bundled."
+    } else {
+      &format!("Daemon not found at {}", daemon)
+    };
+    return Err(hint.to_string());
   }
   #[cfg(unix)]
   let mut cmd = Command::new("sh");
@@ -31,33 +44,28 @@ pub fn start_node() -> Result<(), String> {
   #[cfg(windows)]
   let mut cmd = Command::new(&daemon);
 
-  // Removed current_dir setting to avoid permission issues
-  /*
-  if let Some(parent) = daemon_path.parent() {
-    cmd.current_dir(parent);
-  }
-  */
-
   #[cfg(windows)]
   {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     cmd.arg(format!("-conf={}", cfg.to_string_lossy()))
        .arg(format!("-datadir={}", dir.to_string_lossy()));
+    if let Some(ref flag) = repair_flag {
+      cmd.arg(format!("-{}", flag));
+    }
   }
 
   #[cfg(unix)]
   {
-     // Construct the full shell command string
-     // Note: We quote the paths to be safe
-     let full_cmd = format!(
+     let mut full_cmd = format!(
          "\"{}\" -conf=\"{}\" -datadir=\"{}\" -daemon",
          daemon,
          cfg.to_string_lossy(),
          dir.to_string_lossy()
      );
-     
-
+     if let Some(ref flag) = repair_flag {
+       full_cmd.push_str(&format!(" -{}", flag));
+     }
      
      cmd.arg("-c").arg(full_cmd);
   }
@@ -65,9 +73,15 @@ pub fn start_node() -> Result<(), String> {
   cmd
     .spawn()
     .map_err(|e| {
-
         e.to_string()
     })?;
+
+  if repair_flag.is_some() {
+    let mut updated = settings.clone();
+    updated.pending_repair_mode = None;
+    save_app_settings(updated)?;
+  }
+
   Ok(())
 }
 

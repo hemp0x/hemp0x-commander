@@ -50,6 +50,9 @@ pub struct BinaryStatus {
   pub daemon_exists: bool,
   pub cli_exists: bool,
   pub tx_exists: bool,
+  pub daemon_path: String,
+  pub cli_path: String,
+  pub tx_path: String,
 }
 
 #[derive(Serialize)]
@@ -135,11 +138,20 @@ pub struct NetworkInfo {
 #[derive(Serialize)]
 pub struct DataFolderInfo {
   pub path: String,
+  pub default_path: String,
+  pub using_custom_path: bool,
+  pub commander_settings_path: String,
+  pub bootstrap_path: String,
   pub size_bytes: u64,
   pub size_display: String,
   pub config_exists: bool,
   pub wallet_exists: bool,
   pub folder_exists: bool,
+  pub blocks_exists: bool,
+  pub chainstate_exists: bool,
+  pub debug_log_exists: bool,
+  pub lock_exists: bool,
+  pub bootstrap_error: Option<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
@@ -161,7 +173,52 @@ pub struct SendPreview {
   pub validated: bool,
 }
 
-#[derive(Serialize, serde::Deserialize)]
+#[derive(Serialize)]
+pub struct DataMovePreview {
+  pub source_path: String,
+  pub target_path: String,
+  pub source_size_bytes: u64,
+  pub source_size_display: String,
+  pub target_exists: bool,
+  pub target_is_empty: bool,
+  pub target_has_files: bool,
+  pub wallet_present: bool,
+  pub config_present: bool,
+  pub blocks_present: bool,
+  pub chainstate_present: bool,
+  pub warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct DataMoveResult {
+  pub success: bool,
+  pub message: String,
+  pub files_copied: u64,
+  pub bytes_copied: u64,
+}
+
+#[derive(Serialize)]
+pub struct RepairModeInfo {
+  pub active_mode: String,
+  pub description: String,
+  pub requires_restart: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct RepairStatus {
+  pub active: bool,
+  pub mode: Option<String>,
+  pub phase: String,
+  pub rpc_online: bool,
+  pub lock_exists: bool,
+  pub blocks: Option<u64>,
+  pub headers: Option<u64>,
+  pub verification_progress: Option<f64>,
+  pub latest_log_line: Option<String>,
+  pub log_hint: Option<String>,
+}
+
+#[derive(Serialize, serde::Deserialize, Clone)]
 #[serde(default)]
 pub struct AppSettings {
   pub hide_balance: bool,
@@ -172,6 +229,12 @@ pub struct AppSettings {
   pub auto_start_daemon_on_launch: bool,
   pub keep_daemon_running_on_close: bool,
   pub allow_non_bundled_core_next: bool,
+  pub auto_peer_protection_enabled: bool,
+  pub custom_data_dir: Option<String>,
+  pub custom_core_binary_dir: Option<String>,
+  pub pending_repair_mode: Option<String>,
+  pub active_repair_mode: Option<String>,
+  pub active_repair_started_at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -192,6 +255,12 @@ impl Default for AppSettings {
       auto_start_daemon_on_launch: false,
       keep_daemon_running_on_close: false,
       allow_non_bundled_core_next: false,
+      auto_peer_protection_enabled: true,
+      custom_data_dir: None,
+      custom_core_binary_dir: None,
+      pending_repair_mode: None,
+      active_repair_mode: None,
+      active_repair_started_at: None,
     }
   }
 }

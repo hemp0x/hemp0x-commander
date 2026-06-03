@@ -501,15 +501,16 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.8rem 1.25rem;
+        padding: 0.45rem 1rem;
         background: rgba(0, 0, 0, 0.3);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
     }
     .modal-header h3 {
         margin: 0;
         color: var(--color-primary);
-        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
-        font-size: 1.1rem;
+        font-size: 0.9rem;
+        letter-spacing: 1px;
     }
     .back-btn {
         background: none;
@@ -520,55 +521,126 @@
         transition: all 0.15s;
         padding: 0.15rem 0.4rem;
         line-height: 1;
-        margin: -0.2rem 0 -0.35rem -0.4rem;
     }
     .back-btn:hover {
         color: var(--color-primary);
     }
-    /* ... */
+    .close-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+    }
+    .close-btn:hover { color: #fff; }
+
+    /* Tabs — match asset detail / advanced style */
+    .tabs {
+        display: flex;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex-shrink: 0;
+    }
+    .tabs button {
+        flex: 1;
+        padding: 0.5rem 0.4rem;
+        background: none;
+        border: none;
+        color: #555;
+        font-size: 0.58rem;
+        font-weight: 600;
+        cursor: pointer;
+        letter-spacing: 1px;
+        transition: all 0.2s;
+        border-bottom: 2px solid transparent;
+        text-transform: uppercase;
+    }
+    .tabs button:hover { color: #aaa; }
+    .tabs button.active {
+        color: var(--color-primary);
+        border-bottom-color: var(--color-primary);
+    }
+    .tabs button.tab-danger.active {
+        color: #ff5555;
+        border-bottom-color: #ff5555;
+    }
+    .tabs button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
     .modal-body {
-        padding: 1.25rem;
-        min-height: 310px; /* Fixed height to accommodate Lock Tab without jumping */
+        padding: 0.6rem 1rem;
         display: flex;
         flex-direction: column;
-        justify-content: center;
+        gap: 0.5rem;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
+    }
+    .modal-body::-webkit-scrollbar {
+        width: 8px;
+    }
+    .modal-body::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .modal-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+    .panel {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
     }
     .section-desc {
         color: #aaa;
-        font-size: 0.85rem;
-        margin-bottom: 1rem;
-        line-height: 1.3;
+        font-size: 0.72rem;
+        margin-bottom: 0;
+        line-height: 1.35;
     }
     .actions {
         display: flex;
         justify-content: flex-end;
+        margin-top: 0.25rem;
     }
     .danger-zone {
         border: 1px solid rgba(255, 0, 0, 0.2);
         background: rgba(255, 0, 0, 0.05);
-        padding: 1rem; /* Compact padding */
+        padding: 0.6rem;
         border-radius: 8px;
         text-align: center;
+        gap: 0.3rem;
     }
     .danger-zone h4 {
         color: #ff3333;
-        margin: 0.2rem 0; /* Tighter */
-        font-size: 1rem;
+        margin: 0;
+        font-size: 0.85rem;
+        letter-spacing: 0.5px;
     }
     .locked-msg {
         color: #ffaaaa;
         font-weight: bold;
-        text-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
-        margin-bottom: 0.5rem;
+        font-size: 0.72rem;
+        margin-bottom: 0.3rem;
     }
     .danger-zone p {
         color: #ddd;
-        font-size: 0.85rem;
-        margin-bottom: 0.5rem;
+        font-size: 0.72rem;
+        margin-bottom: 0.3rem;
+        line-height: 1.35;
+    }
+    .danger-zone p:last-child {
+        margin-bottom: 0;
     }
     .warning-icon {
-        font-size: 1.5rem; /* Smaller icon */
-        margin-bottom: 0.2rem;
+        font-size: 1.2rem;
+        margin-bottom: 0.1rem;
     }
     .cyber-btn.danger {
         border-color: #ff3333;
@@ -584,23 +656,33 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 0.5rem;
-        margin: 0.8rem 0; /* Compact margin */
+        gap: 0.4rem;
+        margin: 0.5rem 0;
         cursor: pointer;
         color: #ffaaaa;
-        font-size: 0.85rem;
+        font-size: 0.7rem;
     }
     .warning-text {
         color: #ffaaaa;
-        font-size: 0.8rem;
-        margin-bottom: 0.5rem;
+        font-size: 0.7rem;
+        margin-bottom: 0.3rem;
     }
     .coming-soon {
         text-align: center;
-        padding: 2rem;
+        padding: 1rem;
         border: 1px dashed rgba(255, 255, 255, 0.2);
         border-radius: 8px;
         color: #aaa;
+        font-size: 0.72rem;
+    }
+    .coming-soon p {
+        margin: 0 0 0.2rem;
+        font-size: 0.75rem;
+        color: #ccc;
+    }
+    .coming-soon small {
+        font-size: 0.62rem;
+        color: #666;
     }
 
     .gov-panel {
@@ -612,6 +694,5 @@
     .gov-panel .modal-body {
         min-height: 0;
         flex: 1 1 0%;
-        overflow-y: auto;
     }
 </style>

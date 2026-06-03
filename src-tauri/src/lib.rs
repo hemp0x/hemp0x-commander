@@ -13,6 +13,8 @@ use modules::runtime;
 use modules::rpc;
 use modules::journal;
 use modules::stratum;
+use modules::short_message;
+use modules::short_message_suggestions;
 
 
 
@@ -245,6 +247,11 @@ pub fn run() {
       stratum::validate_stratum_address,
       stratum::get_stratum_bind_candidates,
       stratum::reset_stratum_stats,
+
+      // Short Message Commands
+      short_message::short_message_encode,
+      short_message::short_message_decode,
+      short_message_suggestions::short_message_suggestions,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

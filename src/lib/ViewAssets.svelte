@@ -47,6 +47,11 @@
 
     // Back navigation: remember last detail asset when opening action panels
     let lastDetailAsset = null;
+    let lastDetailTab = "DETAILS";
+    let initialDetailTab = "DETAILS";
+
+    // Track the active tab inside the current detail view for back-navigation
+    let activeDetailTab = "DETAILS";
 
     // Browse Modal
     let browseModalOpen = false;
@@ -336,7 +341,7 @@
     let metadataLoading = false;
     let slideDirection = 0; // -1 = left, 1 = right, 0 = none
 
-    async function openDetail(asset) {
+    async function openDetail(asset, tab = "DETAILS") {
         selectedDetail = asset;
         // Close all other panels when opening detail
         advancedModalOpen = false;
@@ -349,6 +354,7 @@
         govModalOpen = false;
         assetMetadata = null;
         metadataLoading = true;
+        initialDetailTab = tab;
 
         try {
             // Fetch full asset data from CLI
@@ -377,7 +383,7 @@
         const prevIdx =
             currentIdx <= 0 ? groupedAssets.length - 1 : currentIdx - 1;
         slideDirection = -1;
-        openDetail(groupedAssets[prevIdx]);
+        openDetail(groupedAssets[prevIdx], activeDetailTab);
     }
 
     function navigateNext() {
@@ -388,11 +394,12 @@
         const nextIdx =
             currentIdx >= groupedAssets.length - 1 ? 0 : currentIdx + 1;
         slideDirection = 1;
-        openDetail(groupedAssets[nextIdx]);
+        openDetail(groupedAssets[nextIdx], activeDetailTab);
     }
 
     function goToTransfer(assetName) {
         lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
         selectedAsset = assetName;
         selectedDetail = null; // Close detail, open transfer inline
         transferModalOpen = true;
@@ -400,6 +407,7 @@
 
     function goToReissue(asset) {
         lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
         reissueAsset = asset.name;
         selectedDetail = null;
         reissueModalOpen = true;
@@ -407,16 +415,60 @@
 
     function goToManageTags(asset) {
         lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
         selectedDetail = null;
         advancedInitialTab = "tags";
         advancedInitialTagName = asset?.name || "";
         advancedModalOpen = true;
     }
 
+    function goToSubAsset(parentName) {
+        lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
+        issueParent = parentName;
+        issueType = "sub";
+        issueName = "";
+        issueQty = "1";
+        issueUnits = 0;
+        issueReissue = true;
+        issueIpfs = "";
+        selectedDetail = null;
+        subModalOpen = true;
+    }
+
+    function goToNft(parentName) {
+        lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
+        issueParent = parentName;
+        issueType = "nft";
+        nftTag = "";
+        issueIpfs = "";
+        selectedDetail = null;
+        nftModalOpen = true;
+    }
+
+    async function openGovernance(asset) {
+        lastDetailAsset = selectedDetail;
+        lastDetailTab = activeDetailTab;
+        // We need full asset data (units, ipfs, etc) for governance
+        try {
+            const details = await core.invoke("get_asset_data", {
+                name: asset.name,
+            });
+            selectedGovAsset = { ...asset, ...details }; // Merge list info with full details
+            selectedDetail = null;
+            govModalOpen = true;
+        } catch (e) {
+            console.error("Failed to load details for governance", e);
+        }
+    }
+
     function returnToDetail() {
         const asset = lastDetailAsset;
+        const tab = lastDetailTab;
         lastDetailAsset = null;
-        if (asset) openDetail(asset);
+        lastDetailTab = "DETAILS";
+        if (asset) openDetail(asset, tab);
     }
 
     function initiateTransfer() {
@@ -695,44 +747,6 @@
         previewData = null;
         previewJournalId = null;
     }
-
-    function goToSubAsset(parentName) {
-        lastDetailAsset = selectedDetail;
-        issueParent = parentName;
-        issueType = "sub";
-        issueName = "";
-        issueQty = "1";
-        issueUnits = 0;
-        issueReissue = true;
-        issueIpfs = "";
-        selectedDetail = null;
-        subModalOpen = true;
-    }
-
-    function goToNft(parentName) {
-        lastDetailAsset = selectedDetail;
-        issueParent = parentName;
-        issueType = "nft";
-        nftTag = "";
-        issueIpfs = "";
-        selectedDetail = null;
-        nftModalOpen = true;
-    }
-
-    async function openGovernance(asset) {
-        lastDetailAsset = selectedDetail;
-        // We need full asset data (units, ipfs, etc) for governance
-        try {
-            const details = await core.invoke("get_asset_data", {
-                name: asset.name,
-            });
-            selectedGovAsset = { ...asset, ...details }; // Merge list info with full details
-            selectedDetail = null;
-            govModalOpen = true;
-        } catch (e) {
-            console.error("Failed to load details for governance", e);
-        }
-    }
 </script>
 
 <div class="view-assets">
@@ -866,6 +880,7 @@
                         metadata={assetMetadata}
                         loading={metadataLoading}
                         {slideDirection}
+                        initialActiveTab={initialDetailTab}
                         hasMultipleAssets={groupedAssets.length > 1}
                         on:close={closeDetail}
                         on:prev={navigatePrev}
@@ -876,6 +891,7 @@
                         on:createNft={(e) => goToNft(e.detail.name)}
                         on:gov={(e) => openGovernance(e.detail)}
                         on:manageTags={(e) => goToManageTags(e.detail)}
+                        on:tabChange={(e) => (activeDetailTab = e.detail)}
                     />
                 {:else if transferModalOpen}
                     <ModalTransfer
@@ -955,7 +971,7 @@
                         isOpen={true}
                         asset={selectedGovAsset}
                         showBack={lastDetailAsset !== null}
-                        on:close={() => (govModalOpen = false)}
+                        on:close={() => { govModalOpen = false; if (lastDetailAsset) returnToDetail(); }}
                         on:back={() => { govModalOpen = false; returnToDetail(); }}
                     />
                 {:else}

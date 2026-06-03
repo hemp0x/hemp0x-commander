@@ -11,3 +11,6 @@ pub mod runtime;
 pub mod rpc;
 pub mod journal;
 pub mod stratum;
+pub mod short_message_tables;
+pub mod short_message;
+pub mod short_message_suggestions;

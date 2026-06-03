@@ -2,13 +2,14 @@
     import { fly, fade } from "svelte/transition";
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
-    import { formatBalance } from "../utils.js";
+    import { formatBalance, insertSuggestion } from "../utils.js";
     import "../../components.css";
     import Tooltip from "../ui/Tooltip.svelte";
     import IpfsReference from "../ui/IpfsReference.svelte";
     import IpfsHashField from "../ui/IpfsHashField.svelte";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
     import ModalAlert from "./ModalAlert.svelte";
+    import ShortMessageAutocomplete from "../ui/ShortMessageAutocomplete.svelte";
     import { addNotification } from "../stores/notifications.js";
     import { cidViewerTarget } from "../stores/contentLibrary.js";
 
@@ -20,10 +21,11 @@
     export let slideDirection = 0;
     export let hasMultipleAssets = false;
     export let inline = false;
+    export let initialActiveTab = "DETAILS";
 
     let showAlert = false;
 
-    let activeTab = "DETAILS";
+    let activeTab = initialActiveTab;
 
     let messagesInfo = null;
     let messages = [];
@@ -41,6 +43,103 @@
     let composeBroadcasting = false;
     let composeSent = false;
     let currentAssetName = "";
+
+    // Short message compose state
+    let composeMode = "cid"; // "cid" | "short"
+    let composeShortText = "";
+    let composeShortResult = null;
+    let composeShortEncoding = false;
+    let composeShortShowHex = false;
+    let composeShortDebounce = null;
+    let composeShortTextarea = null;
+    let autocompleteEnabled = true;
+    let composeShortFocused = false;
+
+    function handleShortSuggestion(suggestion) {
+        const nextText = insertSuggestion(composeShortText, suggestion);
+        composeShortText = nextText;
+        queueEncodeShortMessage();
+        return nextText;
+    }
+
+    function handleTextareaFocusOut(event) {
+        const related = event.relatedTarget;
+        const wrap = event.currentTarget;
+        if (!wrap.contains(related)) {
+            composeShortFocused = false;
+        }
+    }
+
+    // Short message decode cache for received messages
+    let shortMessageCache = {};
+    let shortMessagePending = new Set();
+
+    $: if (activeTab) {
+        dispatch("tabChange", activeTab);
+    }
+
+    $: if (filteredMessages.length > 0) {
+        decodePendingShortMessages(filteredMessages);
+    }
+
+    async function decodePendingShortMessages(msgs) {
+        const toDecode = [];
+        for (const msg of msgs) {
+            if (shortMessageCache[msg.message] === undefined && !shortMessagePending.has(msg.message)) {
+                toDecode.push(msg.message);
+                shortMessagePending.add(msg.message);
+            }
+        }
+        if (toDecode.length === 0) return;
+        const promises = toDecode.map(async (hex) => {
+            try {
+                const result = await core.invoke("short_message_decode", { hex });
+                shortMessageCache[hex] = result;
+            } catch (e) {
+                shortMessageCache[hex] = { is_short_message: false };
+            } finally {
+                shortMessagePending.delete(hex);
+            }
+        });
+        await Promise.all(promises);
+        shortMessageCache = shortMessageCache;
+    }
+
+    function queueEncodeShortMessage() {
+        if (composeShortDebounce) clearTimeout(composeShortDebounce);
+        composeShortDebounce = setTimeout(() => {
+            encodeShortMessage();
+        }, 300);
+    }
+
+    async function encodeShortMessage() {
+        const text = composeShortText.trim();
+        if (!text) {
+            composeShortResult = null;
+            composeIpfsHash = "";
+            composeError = "";
+            return;
+        }
+        composeShortEncoding = true;
+        composeError = "";
+        try {
+            const result = await core.invoke("short_message_encode", { text });
+            composeShortResult = result;
+            if (result.fits) {
+                composeIpfsHash = result.hex;
+                composeError = "";
+            } else {
+                composeIpfsHash = "";
+                composeError = "Message is too long to fit in the short-message field.";
+            }
+        } catch (err) {
+            composeShortResult = null;
+            composeIpfsHash = "";
+            composeError = String(err);
+        } finally {
+            composeShortEncoding = false;
+        }
+    }
 
     $: assetChannelNames = asset ? channelNamesForAsset(asset.name) : [];
 
@@ -230,6 +329,14 @@
         composeIpfsHash = "";
         composeExpireTime = "";
         composeSent = false;
+        composeMode = "cid";
+        composeShortText = "";
+        composeShortResult = null;
+        composeShortShowHex = false;
+        if (composeShortDebounce) {
+            clearTimeout(composeShortDebounce);
+            composeShortDebounce = null;
+        }
     }
 
     function openContentLibrary() {
@@ -472,169 +579,272 @@
                                 </button>
                             </div>
                         {/if}
-                    {:else if activeTab === "MESSAGES"}
-                        <div class="messages-panel">
-                            <div class="messages-header">
-                                <div class="messages-title">MESSAGES</div>
-                                <div class="messages-actions">
-                                    <button
-                                        class="action-btn subscribe-btn"
-                                        class:subscribed={isSubscribed}
-                                        on:click={toggleSubscription}
-                                        disabled={messagesLoading}
-                                    >
-                                        {isSubscribed ? "UNSUBSCRIBE" : "SUBSCRIBE"}
-                                    </button>
-                                    {#if asset.hasOwner}
-                                        <button
-                                            class="action-btn primary"
-                                            on:click={() => (composeOpen = true)}
-                                        >
-                                            <span class="action-icon">✉</span> SEND
-                                        </button>
-                                    {/if}
-                                </div>
-                            </div>
+				{:else if activeTab === "MESSAGES"}
+					{#if composeOpen}
+						<div class="compose-pane" transition:fade={{ duration: 150 }}>
+							<div class="compose-pane-header">
+								<div class="compose-pane-title">Send Announcement on {asset.name}</div>
+								<button class="close-btn" on:click={cancelCompose}>×</button>
+							</div>
+							<div class="compose-pane-body">
+								<div class="compose-mode-bar">
+									<button
+										class="mode-btn"
+										class:active={composeMode === "cid"}
+										on:click={() => { composeMode = "cid"; composeShortText = ""; composeShortResult = null; composeIpfsHash = ""; composeError = ""; }}
+										disabled={composeBroadcasting || composeSent || !!composePreview}
+									>CID / Hash</button>
+									<button
+										class="mode-btn"
+										class:active={composeMode === "short"}
+										on:click={() => { composeMode = "short"; composeIpfsHash = ""; composeError = ""; }}
+										disabled={composeBroadcasting || composeSent || !!composePreview}
+									>Short Message</button>
+								</div>
 
-                            {#if messagesInfo && !messagesInfo.enabled}
-                                <div class="messages-status warn">
-                                    Messaging is disabled on this node. Enable it by removing -disablemessaging or waiting for BIP9 activation.
-                                </div>
-                            {/if}
+								{#if composeMode === "cid"}
+									<div class="compose-field">
+										<div class="compose-label-row">
+											<label for="compose-ipfs">MESSAGE CID / HASH</label>
+											<HelpHitbox title="Asset Messages">
+												<p>Asset messages store a CID/hash reference on-chain, not the full package body.</p>
+												<p>Create content in Content Library, then publish or link it before selecting that CID here.</p>
+											</HelpHitbox>
+										</div>
+										<IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || composeSent || !!composePreview} />
+										<button class="compose-library-link" type="button" on:click={openContentLibrary}>
+											Go to Content Library
+										</button>
+									</div>
+								{:else}
+									<div class="compose-field">
+											<div class="compose-label-row">
+												<label for="compose-short">SHORT MESSAGE</label>
+												<HelpHitbox title="Short Messages">
+													<p>Short messages are encoded into Commander&apos;s fixed 32-byte on-chain message frame, then broadcast as a 64-character hex payload.</p>
+													<p>The codec auto-selects the best fit from dictionary, raw, 5-bit, and 6-bit modes to compress short public updates as efficiently as possible.</p>
+													<p>Messages are public, permanent, and not encrypted. Commander restores a readable preview locally, but other wallets may only show the raw hex unless they support this format.</p>
+													<p>Text prediction uses the same dictionary families as the codec, so suggestions are biased toward phrases that compress well. For anything longer or richer than a short status/update, use Content Library and send a CID instead.</p>
+												</HelpHitbox>
+											</div>
+										<div class="short-textarea-wrap"
+											on:focusin={() => (composeShortFocused = true)}
+											on:focusout={handleTextareaFocusOut}
+										>
+											<textarea
+												id="compose-short"
+												bind:this={composeShortTextarea}
+												bind:value={composeShortText}
+												on:input={queueEncodeShortMessage}
+												placeholder="Type a short message..."
+												rows="3"
+												disabled={composeBroadcasting || composeSent || !!composePreview}
+											></textarea>
+											{#if autocompleteEnabled && !composeBroadcasting && !composeSent && !composePreview}
+												<ShortMessageAutocomplete
+													text={composeShortText}
+													disabled={composeBroadcasting || composeSent || !!composePreview}
+													targetElement={composeShortTextarea}
+													onAccept={handleShortSuggestion}
+													focused={composeShortFocused}
+												/>
+											{/if}
+										</div>
+										<label class="autocomplete-toggle">
+											<input type="checkbox" bind:checked={autocompleteEnabled} />
+											<span>Enable text prediction</span>
+										</label>
+										{#if composeShortEncoding}
+											<div class="short-msg-status">Encoding...</div>
+										{:else if composeShortResult}
+											<div class="short-msg-status" class:fits={composeShortResult.fits} class:no-fits={!composeShortResult.fits}>
+												{#if composeShortResult.fits}
+													✓ Fits ({composeShortResult.encoded_payload_len} / 29 bytes used)
+												{:else}
+													✗ Does not fit ({composeShortResult.encoded_payload_len} / 29 bytes)
+												{/if}
+											</div>
+											{#if composeShortResult.warnings.length > 0}
+												<div class="short-msg-warnings">
+													{#each composeShortResult.warnings as w}
+														<div class="short-msg-warning">⚠ {w}</div>
+													{/each}
+												</div>
+											{/if}
+											{#if composeShortResult.fits}
+												<div class="short-msg-preview">
+													<span>Preview:</span> {composeShortResult.decoded_preview}
+												</div>
+												<div class="short-msg-hex-row">
+													<button
+														class="short-msg-hex-toggle"
+														type="button"
+														on:click={() => composeShortShowHex = !composeShortShowHex}
+													>
+														{composeShortShowHex ? "Hide Hex" : "Show Hex"}
+													</button>
+													{#if composeShortShowHex}
+														<span class="short-msg-hex mono">{composeShortResult.hex}</span>
+													{/if}
+												</div>
+											{/if}
+										{/if}
+									</div>
+								{/if}
 
-                            {#if messagesError}
-                                <div class="messages-status error">
-                                    {messagesError}
-                                </div>
-                            {/if}
+								<div class="compose-field">
+									<label for="compose-expire">Expire Time (UTC timestamp, optional)</label>
+									<input
+										id="compose-expire"
+										type="text"
+										bind:value={composeExpireTime}
+										placeholder="e.g. 1737500000"
+										disabled={composeBroadcasting || composeSent || !!composePreview}
+									/>
+								</div>
 
-                            {#if messagesLoading}
-                                <div class="messages-loading">Loading messages...</div>
-                            {:else if filteredMessages.length === 0}
-                                <div class="messages-empty">
-                                    No messages for this asset channel.
-                                </div>
-                            {:else}
-                                <div class="messages-list">
-                                    {#each filteredMessages as msg (msg.asset_name + msg.time + msg.message)}
-                                        <div class="message-entry" class:unread={msg.status === 'UNREAD'}>
-                                            <div class="message-channel">{msg.asset_name}</div>
-                                            <div class="message-hash">
-                                                <IpfsReference hash={msg.message} compact={true} />
-                                            </div>
-                                            <div class="message-meta">
-                                                <span class="message-time">{msg.time}</span>
-                                                <span class="message-block">Block {msg.block_height}</span>
-                                                <span class="message-status" class:unread={msg.status === 'UNREAD'}>
-                                                    {msg.status}
-                                                </span>
-                                            </div>
-                                            {#if msg.expire_time}
-                                                <div class="message-expire">Expires: {msg.expire_time}</div>
-                                            {/if}
-                                        </div>
-                                    {/each}
-                                </div>
-                            {/if}
-                        </div>
+								{#if composeError}
+									<div class="compose-error">{composeError}</div>
+								{/if}
 
-                        {#if composeOpen}
-                            <div class="compose-overlay" transition:fade={{ duration: 150 }}>
-                                <div class="compose-panel">
-                                    <div class="compose-header">
-                                        <span>Send Announcement on {asset.name}</span>
-                                        <button class="modal-close-sub" on:click={cancelCompose}>×</button>
-                                    </div>
+								{#if composePreview}
+									<div class="compose-preview">
+										<div class="preview-label">Preview</div>
+										<div class="preview-row">
+											<span>Channel:</span> {composePreview.channel_name}
+										</div>
+										<div class="preview-row">
+											<span>Content:</span>
+											{#if composeMode === "short" && composeShortResult}
+												{composeShortResult.decoded_preview}
+												<span class="short-msg-preview-badge">SHORT MSG</span>
+											{:else}
+												{composePreview.ipfs_hash}
+											{/if}
+										</div>
+										<div class="preview-row">
+											<span>Ownership:</span> {composePreview.has_ownership ? 'Confirmed' : 'Not confirmed'}
+										</div>
+										{#if composePreview.warnings.length > 0}
+											<div class="preview-warnings">
+												{#each composePreview.warnings as w}
+													<div class="preview-warning">⚠ {w}</div>
+												{/each}
+											</div>
+										{/if}
+									</div>
+								{/if}
 
-                                    <div class="compose-body">
-                                        <div class="compose-field">
-                                            <div class="compose-label-row">
-                                                <label for="compose-ipfs">MESSAGE CID / HASH</label>
-                                                <HelpHitbox title="Asset Messages">
-                                                    <p>Asset messages store a CID/hash reference on-chain, not the full package body.</p>
-                                                    <p>Create content in Content Library, then publish or link it before selecting that CID here.</p>
-                                                </HelpHitbox>
-                                            </div>
-                                            <IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || composeSent || !!composePreview} />
-                                            <button class="compose-library-link" type="button" on:click={openContentLibrary}>
-                                                Go to Content Library
-                                            </button>
-                                        </div>
-                                        <div class="compose-field">
-                                            <label for="compose-expire">Expire Time (UTC timestamp, optional)</label>
-                                            <input
-                                                id="compose-expire"
-                                                type="text"
-                                                bind:value={composeExpireTime}
-                                                placeholder="e.g. 1737500000"
-                                                disabled={composeBroadcasting || composeSent || !!composePreview}
-                                            />
-                                        </div>
+								{#if composeSent}
+									<div class="compose-sent">Announcement broadcast!</div>
+								{/if}
 
-                                        {#if composeError}
-                                            <div class="compose-error">{composeError}</div>
-                                        {/if}
+								<div class="compose-actions">
+									{#if !composePreview && !composeSent}
+										<button
+											class="action-btn primary"
+											on:click={previewAnnouncement}
+											disabled={composePreviewing || !composeIpfsHash.trim()}
+										>
+											{composePreviewing ? "PREVIEWING..." : "PREVIEW"}
+										</button>
+									{:else if composePreview && !composeSent}
+										<button
+											class="action-btn primary"
+											on:click={broadcastAnnouncement}
+											disabled={composeBroadcasting}
+										>
+											{composeBroadcasting ? "BROADCASTING..." : "BROADCAST"}
+										</button>
+										<button class="action-btn" on:click={cancelCompose}>
+											CANCEL
+										</button>
+									{:else if composeSent}
+										<button class="action-btn" on:click={cancelCompose}>
+											CLOSE
+										</button>
+									{/if}
+								</div>
+							</div>
+						</div>
+					{:else}
+						<div class="messages-panel">
+							<div class="messages-header">
+								<div class="messages-title">MESSAGES</div>
+								<div class="messages-actions">
+									<button
+										class="action-btn subscribe-btn"
+										class:subscribed={isSubscribed}
+										on:click={toggleSubscription}
+										disabled={messagesLoading}
+									>
+										{isSubscribed ? "UNSUBSCRIBE" : "SUBSCRIBE"}
+									</button>
+									{#if asset.hasOwner}
+										<button
+											class="action-btn primary"
+											on:click={() => (composeOpen = true)}
+										>
+											<span class="action-icon">✉</span> SEND
+										</button>
+									{/if}
+								</div>
+							</div>
 
-                                        {#if composePreview}
-                                            <div class="compose-preview">
-                                                <div class="preview-label">Preview</div>
-                                                <div class="preview-row">
-                                                    <span>Channel:</span> {composePreview.channel_name}
-                                                </div>
-                                                <div class="preview-row">
-                                                    <span>CID:</span> {composePreview.ipfs_hash}
-                                                </div>
-                                                <div class="preview-row">
-                                                    <span>Ownership:</span> {composePreview.has_ownership ? 'Confirmed' : 'Not confirmed'}
-                                                </div>
-                                                {#if composePreview.warnings.length > 0}
-                                                    <div class="preview-warnings">
-                                                        {#each composePreview.warnings as w}
-                                                            <div class="preview-warning">⚠ {w}</div>
-                                                        {/each}
-                                                    </div>
-                                                {/if}
-                                            </div>
-                                        {/if}
+							{#if messagesInfo && !messagesInfo.enabled}
+								<div class="messages-status warn">
+									Messaging is disabled on this node. Enable it by removing -disablemessaging or waiting for BIP9 activation.
+								</div>
+							{/if}
 
-                                        {#if composeSent}
-                                            <div class="compose-sent">Announcement broadcast!</div>
-                                        {/if}
-                                    </div>
+							{#if messagesError}
+								<div class="messages-status error">
+									{messagesError}
+								</div>
+							{/if}
 
-                                    <div class="compose-actions">
-                                        {#if !composePreview && !composeSent}
-                                            <button
-                                                class="action-btn primary"
-                                                on:click={previewAnnouncement}
-                                                disabled={composePreviewing || !composeIpfsHash.trim()}
-                                            >
-                                                {composePreviewing ? "PREVIEWING..." : "PREVIEW"}
-                                            </button>
-                                        {:else if composePreview && !composeSent}
-                                            <button
-                                                class="action-btn primary"
-                                                on:click={broadcastAnnouncement}
-                                                disabled={composeBroadcasting}
-                                            >
-                                                {composeBroadcasting ? "BROADCASTING..." : "BROADCAST"}
-                                            </button>
-                                            <button class="action-btn" on:click={cancelCompose}>
-                                                CANCEL
-                                            </button>
-                                        {:else if composeSent}
-                                            <button class="action-btn" on:click={cancelCompose}>
-                                                CLOSE
-                                            </button>
-                                        {/if}
-                                    </div>
-                                </div>
-                            </div>
-                        {/if}
-                        {/if}
-                    </div>
+							{#if messagesLoading}
+								<div class="messages-loading">Loading messages...</div>
+							{:else if filteredMessages.length === 0}
+								<div class="messages-empty">
+									No messages for this asset channel.
+								</div>
+							{:else}
+								<div class="messages-list">
+									{#each filteredMessages as msg (msg.asset_name + msg.time + msg.message)}
+										{@const sm = shortMessageCache[msg.message]}
+										<div class="message-entry" class:unread={msg.status === 'UNREAD'}>
+											<div class="message-channel">{msg.asset_name}</div>
+											{#if sm?.is_short_message}
+												<div class="short-msg-badge">SHORT MSG</div>
+												<div class="short-msg-text">{sm.text}</div>
+												<div class="short-msg-raw">
+													<IpfsReference hash={msg.message} compact={true} />
+												</div>
+											{:else}
+												<div class="message-hash">
+													<IpfsReference hash={msg.message} compact={true} />
+												</div>
+											{/if}
+											<div class="message-meta">
+												<span class="message-time">{msg.time}</span>
+												<span class="message-block">Block {msg.block_height}</span>
+												<span class="message-status" class:unread={msg.status === 'UNREAD'}>
+													{msg.status}
+												</span>
+											</div>
+											{#if msg.expire_time}
+												<div class="message-expire">Expires: {msg.expire_time}</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
+                    {/if}
+                </div>
             {/snippet}
-
             {#if inline}
                 <div class="detail-panel" in:fade={{ duration: 150 }}>
                     {@render panelContent()}
@@ -1000,7 +1210,7 @@
     .detail-tabs {
         display: flex;
         gap: 0;
-        margin-bottom: 1rem;
+        margin-bottom: 0.35rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
     .tab-btn {
@@ -1118,77 +1328,123 @@
         margin-top: 0.15rem;
     }
 
-    /* Compose Overlay */
-    .compose-overlay {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.9);
+    .short-textarea-wrap textarea {
+        background: #000;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        padding: 0.45rem 0.55rem;
+        color: #e0e0e0;
+        font-size: 0.72rem;
+        line-height: 1.4;
+        font-family: var(--font-mono);
+        resize: vertical;
+        width: 100%;
+        outline: none;
+        transition: border-color 0.15s;
+    }
+    .short-textarea-wrap textarea:focus {
+        border-color: var(--color-primary);
+    }
+    .short-textarea-wrap textarea::placeholder {
+        color: #555;
+    }
+
+    /* Opaque full-panel compose pane */
+    .compose-pane {
+        flex: 1;
         display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 10;
-        border-radius: 8px;
+        flex-direction: column;
+        background: rgba(8, 12, 10, 0.98);
+        border: none;
+        border-radius: 0;
+        overflow: hidden;
     }
-    .compose-panel {
-        background: rgba(10, 15, 12, 0.98);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 8px;
-        padding: 1rem;
-        width: 90%;
-        max-width: 400px;
-    }
-    .compose-header {
+    .compose-pane-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        font-size: 0.7rem;
+        padding: 0.4rem 0.7rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+    }
+    .compose-pane-title {
+        font-size: 0.72rem;
         font-weight: 600;
         color: var(--color-primary);
-        letter-spacing: 1px;
-        margin-bottom: 0.75rem;
+        letter-spacing: 1.5px;
     }
-    .modal-close-sub {
-        background: transparent;
-        border: none;
-        color: #555;
-        font-size: 1.2rem;
-        cursor: pointer;
-    }
-    .modal-close-sub:hover {
-        color: #fff;
-    }
-    .compose-body {
+    .compose-pane-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 0.75rem 1rem;
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.6rem;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
+    .compose-pane-body::-webkit-scrollbar {
+        width: 8px;
+    }
+    .compose-pane-body::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .compose-pane-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+    }
+    .compose-pane-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 255, 65, 0.55);
+    }
+
+    /* Mode toggle bar — cleaner pill-style buttons */
+    .compose-mode-bar {
+        display: flex;
+        gap: 0.4rem;
+        flex-shrink: 0;
+    }
+    .mode-btn {
+        padding: 0.3rem 0.6rem;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        color: #888;
+        font-size: 0.6rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .mode-btn:hover:not(:disabled) {
+        border-color: rgba(255, 255, 255, 0.2);
+        color: #aaa;
+    }
+    .mode-btn.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .mode-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
     .compose-field {
         display: flex;
         flex-direction: column;
-        gap: 0.2rem;
-    }
-    .compose-library-link {
-        align-self: flex-start;
-        background: rgba(0, 255, 65, 0.08);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        color: var(--color-primary);
-        border-radius: 6px;
-        padding: 0.35rem 0.55rem;
-        font-size: 0.62rem;
-        cursor: pointer;
-    }
-    .compose-library-link:hover {
-        background: rgba(0, 255, 65, 0.14);
-    }
-    .compose-label-row {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
+        gap: 0.25rem;
     }
     .compose-field label {
         font-size: 0.62rem;
         color: #666;
         letter-spacing: 0.5px;
+    }
+    .compose-label-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
     .compose-field input {
         background: rgba(0, 0, 0, 0.5);
@@ -1202,6 +1458,124 @@
     .compose-field input:focus {
         outline: none;
         border-color: var(--color-primary);
+    }
+    .compose-field input::placeholder {
+        color: #555;
+    }
+    .compose-library-link {
+        align-self: flex-start;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+        border-radius: 6px;
+        padding: 0.35rem 0.55rem;
+        font-size: 0.62rem;
+        cursor: pointer;
+        margin-bottom: 0.2rem;
+    }
+    .compose-library-link:hover {
+        background: rgba(0, 255, 65, 0.14);
+    }
+
+    /* Short message */
+    .short-msg-status {
+        font-size: 0.62rem;
+        padding: 0.3rem;
+        border-radius: 6px;
+    }
+    .short-msg-status.fits {
+        color: #b9ffd0;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+    }
+    .short-msg-status.no-fits {
+        color: #ff8888;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.2);
+    }
+    .short-msg-status:not(.fits):not(.no-fits) {
+        color: #888;
+        font-style: italic;
+    }
+    .short-msg-warnings {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+    }
+    .short-msg-warning {
+        font-size: 0.55rem;
+        color: #ffaa00;
+    }
+    .short-msg-preview {
+        font-size: 0.62rem;
+        color: #ccc;
+    }
+    .short-msg-preview span {
+        color: #666;
+        font-size: 0.56rem;
+        letter-spacing: 0.5px;
+    }
+    .short-msg-hex-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .short-msg-hex-toggle {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        padding: 0.25rem 0.4rem;
+        color: #888;
+        font-size: 0.55rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .short-msg-hex-toggle:hover {
+        border-color: rgba(255, 255, 255, 0.2);
+        color: #ccc;
+    }
+    .short-msg-hex {
+        font-size: 0.55rem;
+        color: var(--color-primary);
+        background: rgba(0, 0, 0, 0.2);
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
+        border: 1px solid rgba(0, 255, 65, 0.15);
+    }
+    .short-msg-preview-badge {
+        display: inline-block;
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        color: var(--color-primary);
+        font-size: 0.5rem;
+        font-weight: 600;
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
+        margin-left: 0.4rem;
+        letter-spacing: 0.5px;
+    }
+    .short-msg-badge {
+        font-size: 0.5rem;
+        font-weight: 600;
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 4px;
+        padding: 0.15rem 0.35rem;
+        letter-spacing: 0.5px;
+        display: inline-block;
+        margin-bottom: 0.2rem;
+    }
+    .short-msg-text {
+        font-size: 0.72rem;
+        color: #ddd;
+        margin-bottom: 0.2rem;
+        line-height: 1.35;
+    }
+    .short-msg-raw {
+        margin-top: 0.15rem;
+        opacity: 0.7;
     }
     .compose-error {
         font-size: 0.62rem;
@@ -1251,14 +1625,30 @@
         display: flex;
         gap: 0.5rem;
         justify-content: flex-end;
-        margin-top: 0.75rem;
+        margin-top: 0.5rem;
+        flex-shrink: 0;
     }
     .compose-actions .action-btn {
         flex: none;
         padding: 0.4rem 0.8rem;
     }
-
-    /* Inline panel mode */
+    .autocomplete-toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.6rem;
+        color: #666;
+        margin-top: 0.15rem;
+        cursor: pointer;
+        letter-spacing: 0.3px;
+        user-select: none;
+    }
+    .autocomplete-toggle input {
+        accent-color: var(--color-primary);
+        width: 0.7rem;
+        height: 0.7rem;
+        cursor: pointer;
+    }
     .detail-panel {
         flex: 1;
         min-height: 0;
@@ -1299,11 +1689,24 @@
     .detail-header-bar .nav-arrow:hover {
         opacity: 1;
     }
+    .close-btn {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+    }
+    .close-btn:hover { color: #fff; }
     .detail-body-scroll {
-        padding: 0.6rem 0.9rem 1.2rem;
+        padding: 0.4rem 0.9rem 0.6rem;
         overflow-y: auto;
         overflow-x: hidden;
         flex: 1 1 0%;
+        display: flex;
+        flex-direction: column;
         scrollbar-width: thin;
         scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
@@ -1319,5 +1722,27 @@
     }
     .detail-body-scroll::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 255, 65, 0.55);
+    }
+    .short-textarea-wrap {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+    }
+    .autocomplete-toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.6rem;
+        color: #666;
+        margin-top: 0.15rem;
+        cursor: pointer;
+        letter-spacing: 0.3px;
+        user-select: none;
+    }
+    .autocomplete-toggle input {
+        accent-color: var(--color-primary);
+        width: 0.7rem;
+        height: 0.7rem;
+        cursor: pointer;
     }
 </style>

@@ -266,6 +266,21 @@
         if (text.includes("-32601") || /method not found/i.test(text)) {
             return "This Core build does not expose this asset messaging RPC. Update or start a Core build with messaging support, then refresh Commander and try again.";
         }
+        if (/connection refused/i.test(text) || /could not connect/i.test(text)) {
+            return "Core daemon is not running or RPC is unavailable. Start Core, then refresh Commander.";
+        }
+        if (/wallet.*locked|passphrase|unlock/i.test(text)) {
+            return "Wallet is locked. Unlock the wallet before sending messages.";
+        }
+        if (/channel authority|does not.*own/i.test(text)) {
+            return "Wallet does not hold the channel authority asset. Own the channel asset to send messages on this channel.";
+        }
+        if (/invalid.*channel/i.test(text)) {
+            return text;
+        }
+        if (/invalid.*hash|invalid.*cid|invalid.*payload/i.test(text)) {
+            return text;
+        }
         return text;
     }
 
@@ -686,7 +701,11 @@
 
     async function toggleSubscription() {
         if (!asset) return;
-        const channelName = asset.name;
+        const channelName = assetChannelNames.find((name) => channels.includes(name))
+            ?? assetChannelNames.find((name) => name.endsWith('!'))
+            ?? assetChannelNames[0]
+            ?? asset.name;
+        if (!channelName) return;
         try {
             if (isSubscribed) {
                 await core.invoke("unsubscribe_from_channel", { channelName });
@@ -700,7 +719,12 @@
     }
 
     async function previewAnnouncement() {
-        if (!composeIpfsHash.trim()) {
+        if (composeMode === "short") {
+            if (!composeShortResult?.fits) {
+                composeError = "Short message does not fit. Edit the message to make it shorter.";
+                return;
+            }
+        } else if (!composeIpfsHash.trim()) {
             composeError = "CID/hash is required";
             return;
         }
@@ -711,9 +735,12 @@
         composePreview = null;
         try {
             const channelName = asset.name;
+            const ipfsHash = composeMode === "short" && composeShortResult
+                ? composeShortResult.hex
+                : composeIpfsHash.trim();
             composePreview = await core.invoke("preview_send_announcement", {
                 channelName,
-                ipfsHash: composeIpfsHash.trim(),
+                ipfsHash,
                 expireTime,
             });
         } catch (err) {
@@ -725,14 +752,21 @@
 
     async function broadcastAnnouncement() {
         if (!composePreview) return;
+        if (composeMode === "short" && !composeShortResult?.fits) {
+            composeError = "Short message does not fit. Edit the message to make it shorter.";
+            return;
+        }
         const expireTime = composePreview.expire_time ?? null;
         composeBroadcasting = true;
         composeError = "";
         try {
             const channelName = asset.name;
+            const ipfsHash = composeMode === "short" && composeShortResult
+                ? composeShortResult.hex
+                : composeIpfsHash.trim();
             const txid = await core.invoke("send_announcement", {
                 channelName,
-                ipfsHash: composeIpfsHash.trim(),
+                ipfsHash,
                 expireTime,
             });
             composeSent = true;
@@ -746,6 +780,7 @@
                 body: `Message sent on channel ${asset.name}`,
                 action: { label: "Copy TXID", txid },
             });
+            await loadMessages();
         } catch (err) {
             composeError = messageRpcError(err);
             addNotification({
@@ -1264,7 +1299,7 @@
 										<button
 											class="action-btn primary"
 											on:click={previewAnnouncement}
-											disabled={composePreviewing || !composeIpfsHash.trim()}
+											disabled={composePreviewing || composeShortEncoding || (composeMode === "short" ? !composeShortResult?.fits : !composeIpfsHash.trim())}
 										>
 											{composePreviewing ? "PREVIEWING..." : "PREVIEW"}
 										</button>

@@ -3838,51 +3838,77 @@ fn wallet_owns_asset(asset_name: &str) -> bool {
   }
 }
 
+fn get_ci<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+  value.get(key).or_else(|| {
+    value.as_object().and_then(|obj| {
+      obj.iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value)
+    })
+  })
+}
+
+fn get_str_ci<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+  get_ci(value, key).and_then(|v| v.as_str())
+}
+
+fn get_i64_ci(value: &serde_json::Value, key: &str) -> Option<i64> {
+  get_ci(value, key).and_then(|v| v.as_i64())
+}
+
 fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
-  let expire_time = value.get("Expire Time").and_then(|v| v.as_str()).map(|s| s.to_string());
-  let expire_utc_time = value.get("Expire UTC Time").and_then(|v| v.as_i64());
+  let expire_time = get_str_ci(value, "Expire Time").map(|s| s.to_string());
+  let expire_utc_time = get_i64_ci(value, "Expire UTC Time");
   AssetMessageEntry {
-    asset_name: value.get("Asset Name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    message: value.get("Message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    time: value.get("Time").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    block_height: value.get("Block Height").and_then(|v| v.as_i64()).unwrap_or(0),
-    status: value.get("Status").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_string(),
+    asset_name: get_str_ci(value, "Asset Name").unwrap_or("").to_string(),
+    message: get_str_ci(value, "Message").unwrap_or("").to_string(),
+    time: get_str_ci(value, "Time").unwrap_or("").to_string(),
+    block_height: get_i64_ci(value, "Block Height").unwrap_or(0),
+    status: get_str_ci(value, "Status").unwrap_or("UNKNOWN").to_string(),
     expire_time,
     expire_utc_time,
   }
 }
 
 fn parse_channel_name_list(value: &serde_json::Value) -> Vec<String> {
-  value.as_array()
-    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-    .unwrap_or_default()
+  if let Some(arr) = value.as_array() {
+    return arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+  }
+  if value.is_object() {
+    for key in &["channels", "channel_names", "names"] {
+      if let Some(arr) = get_ci(value, key).and_then(|v| v.as_array()) {
+        return arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+      }
+    }
+  }
+  Vec::new()
+}
+
+fn boolish_ci(value: &serde_json::Value, key: &str) -> bool {
+  match get_ci(value, key) {
+    Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
+    Some(v) if v.is_number() => v.as_i64().unwrap_or(0) != 0,
+    _ => false,
+  }
 }
 
 fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
-  let warnings: Vec<String> = value.get("warnings")
+  let warnings: Vec<String> = get_ci(value, "warnings")
     .and_then(|w| w.as_array())
     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
     .unwrap_or_default();
 
-  fn boolish(value: &serde_json::Value, key: &str) -> bool {
-    match value.get(key) {
-      Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
-      Some(v) if v.is_number() => v.as_i64().unwrap_or(0) != 0,
-      _ => false,
-    }
-  }
-
   MessagingInfo {
-    enabled: boolish(value, "enabled"),
-    messaging_active: boolish(value, "messaging_active"),
-    restricted_active: boolish(value, "restricted_active"),
-    activation_block: value.get("activation_block").and_then(|v| v.as_i64()).unwrap_or(0),
-    databases_available: boolish(value, "databases_available"),
-    caches_available: boolish(value, "caches_available"),
-    message_count: value.get("message_count").and_then(|v| v.as_i64()).unwrap_or(0),
-    channel_count: value.get("channel_count").and_then(|v| v.as_i64()).unwrap_or(0),
-    dirty_cache_size_bytes: value.get("dirty_cache_size_bytes").and_then(|v| v.as_i64()).unwrap_or(0),
-    wallet_available: boolish(value, "wallet_available"),
+    enabled: boolish_ci(value, "enabled"),
+    messaging_active: boolish_ci(value, "messaging_active"),
+    restricted_active: boolish_ci(value, "restricted_active"),
+    activation_block: get_i64_ci(value, "activation_block").unwrap_or(0),
+    databases_available: boolish_ci(value, "databases_available"),
+    caches_available: boolish_ci(value, "caches_available"),
+    message_count: get_i64_ci(value, "message_count").unwrap_or(0),
+    channel_count: get_i64_ci(value, "channel_count").unwrap_or(0),
+    dirty_cache_size_bytes: get_i64_ci(value, "dirty_cache_size_bytes").unwrap_or(0),
+    wallet_available: boolish_ci(value, "wallet_available"),
     warnings,
   }
 }
@@ -3899,7 +3925,7 @@ fn legacy_messaging_info() -> Result<MessagingInfo, String> {
     (Ok(messages_raw), Ok(channels_raw)) => {
       let messages_value: serde_json::Value = serde_json::from_str(&messages_raw).map_err(|e| e.to_string())?;
       let channels_value: serde_json::Value = serde_json::from_str(&channels_raw).map_err(|e| e.to_string())?;
-      let message_count = messages_value.as_array().map(|arr| arr.len() as i64).unwrap_or(0);
+      let message_count = parse_message_list(&messages_value).len() as i64;
       let channel_count = parse_channel_name_list(&channels_value).len() as i64;
       Ok(MessagingInfo {
         enabled: true,
@@ -3942,28 +3968,82 @@ pub fn get_messaging_info() -> Result<MessagingInfo, String> {
   let raw = match run_cli(&[String::from("getmessaginginfo")]) {
     Ok(raw) => raw,
     Err(err) if is_method_not_found(&err) => return legacy_messaging_info(),
-    Err(err) => return Err(err),
+    Err(err) => return Err(format!("Core RPC error probing messaging: {err}")),
   };
-  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-  Ok(parse_messaging_info(&value))
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Ok(MessagingInfo {
+      enabled: false,
+      messaging_active: false,
+      restricted_active: false,
+      activation_block: 0,
+      databases_available: false,
+      caches_available: false,
+      message_count: 0,
+      channel_count: 0,
+      dirty_cache_size_bytes: 0,
+      wallet_available: false,
+      warnings: vec!["Core returned an empty response when probing messaging. The daemon may be starting up or messaging RPCs are unavailable.".to_string()],
+    });
+  }
+  match serde_json::from_str::<serde_json::Value>(trimmed) {
+    Ok(value) => Ok(parse_messaging_info(&value)),
+    Err(e) => {
+      let snippet: String = trimmed.chars().take(200).collect();
+      Ok(MessagingInfo {
+        enabled: false,
+        messaging_active: false,
+        restricted_active: false,
+        activation_block: 0,
+        databases_available: false,
+        caches_available: false,
+        message_count: 0,
+        channel_count: 0,
+        dirty_cache_size_bytes: 0,
+        wallet_available: false,
+        warnings: vec![format!("Core returned an unexpected response when probing messaging. JSON parse error: {e}. Raw (truncated): {snippet}")],
+      })
+    }
+  }
+}
+
+fn parse_message_list(value: &serde_json::Value) -> Vec<AssetMessageEntry> {
+  if let Some(arr) = value.as_array() {
+    return arr.iter().map(parse_message_entry).collect();
+  }
+  if value.is_object() {
+    for key in &["messages", "entries", "data"] {
+      if let Some(arr) = get_ci(value, key).and_then(|v| v.as_array()) {
+        return arr.iter().map(parse_message_entry).collect();
+      }
+    }
+  }
+  Vec::new()
 }
 
 #[tauri::command]
 pub fn view_asset_messages() -> Result<Vec<AssetMessageEntry>, String> {
   ensure_config()?;
   let raw = run_cli(&[String::from("viewallmessages")])?;
-  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-  let messages: Vec<AssetMessageEntry> = value.as_array()
-    .map(|arr| arr.iter().map(parse_message_entry).collect())
-    .unwrap_or_default();
-  Ok(messages)
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Ok(Vec::new());
+  }
+  let value: serde_json::Value = serde_json::from_str(trimmed)
+    .map_err(|e| format!("Core returned an unexpected response for viewallmessages. JSON parse error: {e}. Raw (truncated): {}", trimmed.chars().take(200).collect::<String>()))?;
+  Ok(parse_message_list(&value))
 }
 
 #[tauri::command]
 pub fn view_message_channels() -> Result<Vec<String>, String> {
   ensure_config()?;
   let raw = run_cli(&[String::from("viewallmessagechannels")])?;
-  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Ok(Vec::new());
+  }
+  let value: serde_json::Value = serde_json::from_str(trimmed)
+    .map_err(|e| format!("Core returned an unexpected response for viewallmessagechannels. JSON parse error: {e}. Raw (truncated): {}", trimmed.chars().take(200).collect::<String>()))?;
   Ok(parse_channel_name_list(&value))
 }
 
@@ -4123,7 +4203,7 @@ mod tests {
     hemp_to_sat,
     validate_channel_name, validate_ipfs_hash, validate_message_expire_time,
     message_authority_asset_name,
-    parse_message_entry, parse_channel_name_list, parse_messaging_info,
+    parse_message_entry, parse_message_list, parse_channel_name_list, parse_messaging_info,
     validate_ipfs_reference, build_ipfs_gateway_url, build_reissue_preview,
     validate_raw_tx_hex, validate_tx_input, normalize_raw_tx_outputs,
   };
@@ -5412,6 +5492,40 @@ mod tests {
     assert_eq!(entry.expire_time, None);
   }
 
+  #[test]
+  fn parses_message_entry_case_insensitive_keys() {
+    let json = serde_json::json!({
+      "asset name": "CASETEST!",
+      "message": "QmHash",
+      "time": "2025-01-15 10:30:00",
+      "block height": 77,
+      "status": "UNREAD",
+      "expire utc time": 1737500000
+    });
+    let entry = parse_message_entry(&json);
+    assert_eq!(entry.asset_name, "CASETEST!");
+    assert_eq!(entry.message, "QmHash");
+    assert_eq!(entry.block_height, 77);
+    assert_eq!(entry.expire_utc_time, Some(1737500000));
+  }
+
+  #[test]
+  fn parses_message_list_from_object_wrapper() {
+    let json = serde_json::json!({
+      "Messages": [
+        {
+          "Asset Name": "WRAPPED!",
+          "Message": "QmHash",
+          "Block Height": 8
+        }
+      ]
+    });
+    let list = parse_message_list(&json);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].asset_name, "WRAPPED!");
+    assert_eq!(list[0].block_height, 8);
+  }
+
   // --- Channel Name List Parsing Tests ---
 
   #[test]
@@ -5426,6 +5540,15 @@ mod tests {
     let json = serde_json::json!([]);
     let list = parse_channel_name_list(&json);
     assert_eq!(list.len(), 0);
+  }
+
+  #[test]
+  fn parses_channel_name_list_from_object_wrapper() {
+    let json = serde_json::json!({
+      "Channels": ["MESSAGING!", "TOKEN!"]
+    });
+    let list = parse_channel_name_list(&json);
+    assert_eq!(list, vec!["MESSAGING!", "TOKEN!"]);
   }
 
   #[test]
@@ -5505,6 +5628,30 @@ mod tests {
     assert!(!info.enabled);
     assert_eq!(info.warnings.len(), 1);
     assert_eq!(info.warnings[0], "Messaging is disabled via -disablemessaging");
+  }
+
+  #[test]
+  fn parses_messaging_info_case_insensitive_keys() {
+    let json = serde_json::json!({
+      "Enabled": true,
+      "Messaging_Active": true,
+      "Restricted_Active": false,
+      "Activation_Block": 11,
+      "Databases_Available": true,
+      "Caches_Available": true,
+      "Message_Count": 2,
+      "Channel_Count": 4,
+      "Dirty_Cache_Size_Bytes": 12,
+      "Wallet_Available": true,
+      "Warnings": ["ok"]
+    });
+    let info = parse_messaging_info(&json);
+    assert!(info.enabled);
+    assert!(info.messaging_active);
+    assert_eq!(info.activation_block, 11);
+    assert_eq!(info.message_count, 2);
+    assert_eq!(info.channel_count, 4);
+    assert_eq!(info.warnings, vec!["ok"]);
   }
 
   // --- IPFS Reference Tests ---

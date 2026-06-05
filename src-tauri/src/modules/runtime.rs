@@ -434,8 +434,7 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
         && lower.contains("validatewalletmigration")
         && lower.contains("restorewalletmigration");
 
-    let messaging = lower.contains("getmessaginginfo")
-        && lower.contains("viewallmessages")
+    let messaging = lower.contains("viewallmessages")
         && lower.contains("viewallmessagechannels");
 
     let restricted_assets = lower.contains("listrestrictedassets")

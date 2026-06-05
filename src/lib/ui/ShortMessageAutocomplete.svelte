@@ -9,6 +9,8 @@
     /** @type {(suggestion: string) => void} */
     export let onAccept = () => {};
     export let focused = false;
+    /** @type {number|null} */
+    export let preferredDict = null;
 
     let open = false;
     let activeIndex = -1;
@@ -46,6 +48,7 @@
             const result = await core.invoke("short_message_suggestions", {
                 prefix,
                 context: null,
+                preferredDict,
             });
             if (currentRequestId !== requestId) {
                 return;
@@ -107,6 +110,7 @@
         close();
     }
 
+    /** @param {string} nextText */
     export function suppressUntilText(nextText) {
         suppressForText = nextText || "";
         lastFetchedPrefix = suppressForText;

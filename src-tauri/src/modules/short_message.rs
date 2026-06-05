@@ -1,9 +1,7 @@
-use super::short_message_tables::{
-    ACRONYMS, ALPHABET_5BIT, ALPHABET_6BIT, DICTIONARIES,
-};
+use super::short_message_table_packs::{active_pack, fallback_alphabets, ValidatedTablePack};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 // Fixed-size 32-byte short-message frame with a two-byte "HS" prefix.
 const FRAME_SIZE: usize = 32;
@@ -27,25 +25,17 @@ const MODE_5BIT: u8 = 0x18;
 const PAYLOAD_LEN_INDEX: usize = 3;
 const PAYLOAD_INDEX: usize = 4;
 const CRC_INDEX: usize = FRAME_SIZE - 1;
-
-#[derive(Debug, Clone)]
-struct Candidate {
-    mode: u8,
-    dict_idx: u8,
-    payload: Vec<u8>,
-}
-
-pub(crate) struct DictionaryRuntime {
-    pub(crate) normalized: Vec<String>,
-    pub(crate) match_order: Vec<u8>,
-}
-
-static DICTIONARY_RUNTIMES: OnceLock<Vec<DictionaryRuntime>> = OnceLock::new();
-static ALPHABET_5BIT_REV: OnceLock<HashMap<u8, u8>> = OnceLock::new();
-static ALPHABET_6BIT_REV: OnceLock<HashMap<u8, u8>> = OnceLock::new();
+const DICT_LITERAL_ESCAPE: u8 = 255;
+const DICT_DIGIT_RUN_BASE: u8 = 0x80;
+const DICT_NUMERIC_RUN_BASE: u8 = 0xc0;
+const DICT_DIGIT_RUN_LEN_MASK: u8 = 0x3f;
 
 fn is_printable_ascii(byte: u8) -> bool {
     (32..=126).contains(&byte)
+}
+
+fn is_compact_punctuation(byte: u8) -> bool {
+    matches!(byte, b',' | b'.' | b'!' | b'?' | b';' | b':')
 }
 
 fn is_sentence_boundary(ch: char) -> bool {
@@ -67,39 +57,123 @@ fn crc8(data: &[u8]) -> u8 {
     crc
 }
 
-fn normalize_phrase(phrase: &str) -> String {
-    phrase.chars().flat_map(|c| c.to_lowercase()).collect()
+#[derive(Debug, Clone)]
+struct Candidate {
+    mode: u8,
+    dict_idx: u8,
+    payload: Vec<u8>,
 }
 
-fn dictionary_runtimes() -> &'static [DictionaryRuntime] {
-    DICTIONARY_RUNTIMES.get_or_init(|| {
-        DICTIONARIES
-            .iter()
-            .map(|(_, dict)| {
-                let normalized: Vec<String> =
-                    dict.iter().map(|phrase| normalize_phrase(phrase)).collect();
-                let mut match_order: Vec<u8> = normalized
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, phrase)| (!phrase.is_empty()).then_some(idx as u8))
-                    .collect();
-                match_order.sort_by(|a, b| {
-                    normalized[*b as usize]
-                        .len()
-                        .cmp(&normalized[*a as usize].len())
-                        .then((*a).cmp(b))
-                });
-                DictionaryRuntime {
-                    normalized,
-                    match_order,
-                }
-            })
-            .collect()
-    })
+#[derive(Clone)]
+pub(crate) struct DictionaryRuntime {
+    pub(crate) normalized: Vec<String>,
+    pub(crate) match_order: Vec<u8>,
+    suffix_order: Vec<u8>,
+    pub(crate) name: String,
 }
 
-pub(crate) fn get_dictionary_runtimes() -> &'static [DictionaryRuntime] {
-    dictionary_runtimes()
+pub(crate) struct ActiveRuntime {
+    runtimes: Vec<DictionaryRuntime>,
+    suffix_set: std::collections::HashSet<String>,
+    acronym_set: std::collections::HashSet<String>,
+    dict_names: Vec<String>,
+    #[allow(dead_code)]
+    origin: super::short_message_table_packs::TablePackOrigin,
+    #[allow(dead_code)]
+    pack_name: String,
+    #[allow(dead_code)]
+    pack_version: String,
+    pack_fingerprint: String,
+}
+
+static ACTIVE_RUNTIME: OnceLock<std::sync::Mutex<Option<Arc<ActiveRuntime>>>> = OnceLock::new();
+
+fn runtime_cache_cell() -> &'static std::sync::Mutex<Option<Arc<ActiveRuntime>>> {
+    ACTIVE_RUNTIME.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn current_runtime() -> Arc<ActiveRuntime> {
+    let view = active_runtime_view();
+    let mut guard = runtime_cache_cell().lock().expect("runtime cache poisoned");
+    let needs_refresh = match guard.as_ref() {
+        Some(cached) => cached.pack_fingerprint != view.pack_fingerprint,
+        None => true,
+    };
+    if needs_refresh {
+        *guard = Some(Arc::new(view));
+    }
+    Arc::clone(guard.as_ref().expect("just set"))
+}
+
+fn is_suffix_phrase(phrase: &str) -> bool {
+    let runtime = current_runtime();
+    runtime.suffix_set.contains(phrase)
+}
+
+fn build_dictionary_runtimes(pack: &ValidatedTablePack) -> Vec<DictionaryRuntime> {
+    let suffix_set: std::collections::HashSet<&str> =
+        pack.suffixes.iter().map(|s| s.as_str()).collect();
+
+    pack.dictionaries
+        .iter()
+        .enumerate()
+        .map(|(dict_idx, dict)| {
+            let normalized: Vec<String> = dict.clone();
+            let mut match_order: Vec<u8> = normalized
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, phrase)| {
+                    (idx != DICT_LITERAL_ESCAPE as usize && !phrase.is_empty()).then_some(idx as u8)
+                })
+                .collect();
+            match_order.sort_by(|a, b| {
+                normalized[*b as usize]
+                    .len()
+                    .cmp(&normalized[*a as usize].len())
+                    .then((*a).cmp(b))
+            });
+            let mut suffix_order: Vec<u8> = match_order
+                .iter()
+                .copied()
+                .filter(|tok| suffix_set.contains(normalized[*tok as usize].as_str()))
+                .collect();
+            suffix_order.sort_by(|a, b| {
+                normalized[*b as usize]
+                    .len()
+                    .cmp(&normalized[*a as usize].len())
+                    .then((*a).cmp(b))
+            });
+            let name = pack
+                .dictionary_names
+                .get(dict_idx)
+                .cloned()
+                .unwrap_or_else(|| ((b'A' + dict_idx as u8) as char).to_string());
+            DictionaryRuntime {
+                normalized,
+                match_order,
+                suffix_order,
+                name,
+            }
+        })
+        .collect()
+}
+
+fn active_runtime_view() -> ActiveRuntime {
+    let pack = active_pack();
+    let runtimes = build_dictionary_runtimes(&pack);
+    let suffix_set: std::collections::HashSet<String> = pack.suffixes.iter().cloned().collect();
+    let acronym_set: std::collections::HashSet<String> = pack.acronyms.iter().cloned().collect();
+    let dict_names: Vec<String> = pack.dictionary_names.clone();
+    ActiveRuntime {
+        runtimes,
+        suffix_set,
+        acronym_set,
+        dict_names,
+        origin: pack.origin,
+        pack_name: pack.name.clone(),
+        pack_version: pack.version.clone(),
+        pack_fingerprint: pack.fingerprint_sha256.clone(),
+    }
 }
 
 pub(crate) fn normalize_text_for_autocomplete(text: &str) -> String {
@@ -110,20 +184,22 @@ pub(crate) fn restore_case_pub(raw: &str) -> String {
     restore_case(raw)
 }
 
-fn alphabet_5bit_rev() -> &'static HashMap<u8, u8> {
-    ALPHABET_5BIT_REV.get_or_init(|| build_rev_map(&ALPHABET_5BIT))
-}
-
-fn alphabet_6bit_rev() -> &'static HashMap<u8, u8> {
-    ALPHABET_6BIT_REV.get_or_init(|| build_rev_map(&ALPHABET_6BIT))
-}
-
-fn build_rev_map(alphabet: &[u8]) -> HashMap<u8, u8> {
+fn fallback_alphabet_rev(alphabet: &[u8]) -> HashMap<u8, u8> {
     let mut map = HashMap::with_capacity(alphabet.len());
     for (idx, &ch) in alphabet.iter().enumerate() {
         map.insert(ch, idx as u8);
     }
     map
+}
+
+fn alphabet_5bit_rev() -> HashMap<u8, u8> {
+    let (a5, _a6) = fallback_alphabets();
+    fallback_alphabet_rev(a5)
+}
+
+fn alphabet_6bit_rev() -> HashMap<u8, u8> {
+    let (_a5, a6) = fallback_alphabets();
+    fallback_alphabet_rev(a6)
 }
 
 fn normalize(input: &str) -> (String, Vec<String>) {
@@ -210,7 +286,7 @@ fn render_word(word: &str, sentence_start: bool) -> String {
         let mut chars = lower.chars();
         let _ = chars.next();
         format!("I{}", chars.as_str())
-    } else if ACRONYMS.contains(&lower.as_str()) {
+    } else if current_runtime().acronym_set.contains(&lower) {
         lower.to_uppercase()
     } else if sentence_start {
         capitalize_word(&lower)
@@ -268,6 +344,9 @@ pub struct ShortMessageEncodeResult {
     pub normalized_text: String,
     pub raw_len: usize,
     pub encoded_payload_len: usize,
+    pub encoding_mode: String,
+    pub dictionary_index: Option<u8>,
+    pub dictionary_name: Option<String>,
     pub fits: bool,
     pub warnings: Vec<String>,
 }
@@ -280,42 +359,318 @@ pub struct ShortMessageDecodeResult {
     pub warnings: Vec<String>,
 }
 
+fn find_dict_match(
+    bytes: &[u8],
+    offset: usize,
+    runtime: &DictionaryRuntime,
+) -> Option<(u8, usize)> {
+    let remaining = &bytes[offset..];
+    for &tok in &runtime.match_order {
+        let phrase_bytes = runtime.normalized[tok as usize].as_bytes();
+        if remaining.starts_with(phrase_bytes) {
+            return Some((tok, phrase_bytes.len()));
+        }
+
+        // Allow terminal phrases stored with a trailing space to also match at
+        // end-of-message. The decoded text is collapsed later, so this recovers
+        // codebook utility without needing duplicate no-space dictionary terms.
+        if phrase_bytes.len() > 1
+            && phrase_bytes.ends_with(b" ")
+            && remaining == &phrase_bytes[..phrase_bytes.len() - 1]
+        {
+            return Some((tok, remaining.len()));
+        }
+
+        // Normalization removes spaces before punctuation, but most word and
+        // phrase dictionary entries intentionally carry trailing spaces. Let
+        // those entries still match directly before punctuation so "thank you!"
+        // can encode as "thank you " + "!" instead of falling back to literals.
+        if phrase_bytes.len() > 1
+            && phrase_bytes.ends_with(b" ")
+            && remaining.len() >= phrase_bytes.len()
+            && remaining[..phrase_bytes.len() - 1] == phrase_bytes[..phrase_bytes.len() - 1]
+            && is_compact_punctuation(remaining[phrase_bytes.len() - 1])
+        {
+            return Some((tok, phrase_bytes.len() - 1));
+        }
+    }
+    None
+}
+
+fn suffix_match_len(remaining: &[u8], suffix_bytes: &[u8]) -> Option<usize> {
+    if remaining.starts_with(suffix_bytes) {
+        return Some(suffix_bytes.len());
+    }
+
+    if suffix_bytes.len() <= 1 || !suffix_bytes.ends_with(b" ") {
+        return None;
+    }
+
+    let suffix_without_space = &suffix_bytes[..suffix_bytes.len() - 1];
+    if remaining == suffix_without_space {
+        return Some(remaining.len());
+    }
+
+    if remaining.len() >= suffix_bytes.len()
+        && remaining[..suffix_without_space.len()] == *suffix_without_space
+        && is_compact_punctuation(remaining[suffix_without_space.len()])
+    {
+        return Some(suffix_without_space.len());
+    }
+
+    None
+}
+
+fn find_stem_suffix_match(
+    bytes: &[u8],
+    offset: usize,
+    runtime: &DictionaryRuntime,
+) -> Option<(u8, u8, usize)> {
+    let remaining = &bytes[offset..];
+    for &stem_tok in &runtime.match_order {
+        let stem_bytes = runtime.normalized[stem_tok as usize].as_bytes();
+        if stem_bytes.len() <= 1 || !stem_bytes.ends_with(b" ") {
+            continue;
+        }
+
+        let stem_without_space = &stem_bytes[..stem_bytes.len() - 1];
+        if !remaining.starts_with(stem_without_space) {
+            continue;
+        }
+
+        let suffix_offset = stem_without_space.len();
+        let suffix_remaining = &remaining[suffix_offset..];
+        if suffix_remaining.is_empty() {
+            continue;
+        }
+
+        for &suffix_tok in &runtime.suffix_order {
+            let suffix_bytes = runtime.normalized[suffix_tok as usize].as_bytes();
+            if let Some(suffix_len) = suffix_match_len(suffix_remaining, suffix_bytes) {
+                return Some((stem_tok, suffix_tok, suffix_offset + suffix_len));
+            }
+        }
+    }
+    None
+}
+
+fn push_ascii_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+    if bytes.is_empty() || bytes.iter().any(|&byte| !is_printable_ascii(byte)) {
+        return None;
+    }
+
+    if bytes.len() == 1 {
+        if payload.len() + 2 > PAYLOAD_MAX {
+            return None;
+        }
+        payload.push(DICT_LITERAL_ESCAPE);
+        payload.push(bytes[0]);
+        return Some(());
+    }
+
+    if bytes.len() > u8::MAX as usize || payload.len() + 2 + bytes.len() > PAYLOAD_MAX {
+        return None;
+    }
+    payload.push(DICT_LITERAL_ESCAPE);
+    payload.push(bytes.len() as u8);
+    payload.extend_from_slice(bytes);
+    Some(())
+}
+
+fn push_digit_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+    if bytes.len() < 3
+        || bytes.len() > DICT_DIGIT_RUN_LEN_MASK as usize
+        || bytes.iter().any(|byte| !byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let packed_len = bytes.len().div_ceil(2);
+    if payload.len() + 2 + packed_len > PAYLOAD_MAX {
+        return None;
+    }
+
+    payload.push(DICT_LITERAL_ESCAPE);
+    payload.push(DICT_DIGIT_RUN_BASE | bytes.len() as u8);
+    for chunk in bytes.chunks(2) {
+        let hi = chunk[0] - b'0';
+        let lo = chunk.get(1).map_or(0x0f, |byte| byte - b'0');
+        payload.push((hi << 4) | lo);
+    }
+    Some(())
+}
+
+fn numeric_symbol_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'.' => Some(10),
+        b'/' => Some(11),
+        b':' => Some(12),
+        b'-' => Some(13),
+        b',' => Some(14),
+        _ => None,
+    }
+}
+
+fn numeric_symbol_byte(nibble: u8) -> Option<u8> {
+    match nibble {
+        0..=9 => Some(b'0' + nibble),
+        10 => Some(b'.'),
+        11 => Some(b'/'),
+        12 => Some(b':'),
+        13 => Some(b'-'),
+        14 => Some(b','),
+        _ => None,
+    }
+}
+
+fn push_numeric_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+    if bytes.len() < 3
+        || bytes.len() > DICT_DIGIT_RUN_LEN_MASK as usize
+        || !bytes.iter().any(|byte| byte.is_ascii_digit())
+        || bytes
+            .iter()
+            .any(|&byte| numeric_symbol_nibble(byte).is_none())
+    {
+        return None;
+    }
+
+    let packed_len = bytes.len().div_ceil(2);
+    if payload.len() + 2 + packed_len > PAYLOAD_MAX {
+        return None;
+    }
+
+    payload.push(DICT_LITERAL_ESCAPE);
+    payload.push(DICT_NUMERIC_RUN_BASE | bytes.len() as u8);
+    for chunk in bytes.chunks(2) {
+        let hi = numeric_symbol_nibble(chunk[0])?;
+        let lo = chunk
+            .get(1)
+            .map_or(0x0f, |byte| numeric_symbol_nibble(*byte).unwrap_or(0x0f));
+        payload.push((hi << 4) | lo);
+    }
+    Some(())
+}
+
+fn digit_run_len(bytes: &[u8], offset: usize) -> usize {
+    bytes[offset..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count()
+}
+
+fn numeric_run_len(bytes: &[u8], offset: usize) -> usize {
+    let mut has_digit = false;
+    let mut len = 0;
+    for &byte in &bytes[offset..] {
+        if numeric_symbol_nibble(byte).is_none() {
+            break;
+        }
+        has_digit |= byte.is_ascii_digit();
+        len += 1;
+    }
+    if has_digit {
+        len
+    } else {
+        0
+    }
+}
+
+fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+    if bytes.is_empty() || bytes.iter().any(|&byte| !is_printable_ascii(byte)) {
+        return None;
+    }
+
+    let mut i = 0;
+    while i < bytes.len() {
+        let numeric = numeric_run_len(bytes, i);
+        let digits = digit_run_len(bytes, i);
+        if numeric >= 3 && numeric > digits {
+            push_numeric_literal(payload, &bytes[i..i + numeric])?;
+            i += numeric;
+            continue;
+        }
+        if digits >= 3 {
+            push_digit_literal(payload, &bytes[i..i + digits])?;
+            i += digits;
+            continue;
+        }
+
+        let literal_start = i;
+        i += digits.max(1);
+        while i < bytes.len() {
+            let next_numeric = numeric_run_len(bytes, i);
+            if next_numeric >= 3 {
+                break;
+            }
+            let next_digits = digit_run_len(bytes, i);
+            if next_digits >= 3 {
+                break;
+            }
+            i += next_digits.max(1);
+        }
+        push_ascii_literal(payload, &bytes[literal_start..i])?;
+    }
+    Some(())
+}
+
 fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     let mut payload = Vec::with_capacity(PAYLOAD_MAX);
     let mut i = 0;
 
     while i < bytes.len() {
-        let mut matched = false;
-        for &tok in &runtime.match_order {
-            let phrase_bytes = runtime.normalized[tok as usize].as_bytes();
-            let remaining = &bytes[i..];
-            if remaining.starts_with(phrase_bytes) {
-                payload.push(tok);
-                i += phrase_bytes.len();
-                matched = true;
-                break;
+        if let Some((tok, len)) = find_dict_match(bytes, i, runtime) {
+            debug_assert!(len > 0, "dictionary token made no progress");
+            if payload.len() + 1 > PAYLOAD_MAX {
+                return None;
             }
+            payload.push(tok);
+            i += len;
+            continue;
+        }
 
-            // Allow terminal phrases stored with a trailing space to also match at
-            // end-of-message. The decoded text is collapsed later, so this
-            // recovers codebook utility without changing the public wire format.
-            if phrase_bytes.ends_with(b" ") && remaining == &phrase_bytes[..phrase_bytes.len() - 1]
+        if let Some((stem_tok, suffix_tok, len)) = find_stem_suffix_match(bytes, i, runtime) {
+            debug_assert!(len > 0, "stem+suffix match made no progress");
+            if payload.len() + 2 > PAYLOAD_MAX {
+                return None;
+            }
+            payload.push(stem_tok);
+            payload.push(suffix_tok);
+            i += len;
+            continue;
+        }
+
+        // Keep compact number-like strings together. Without this, a value
+        // like "10.50" can split around the dictionary "." token and lose the
+        // packed numeric-run encoding.
+        let numeric = numeric_run_len(bytes, i);
+        let digits = digit_run_len(bytes, i);
+        if numeric >= 3 && numeric > digits {
+            push_numeric_literal(&mut payload, &bytes[i..i + numeric])?;
+            i += numeric;
+            continue;
+        }
+        if digits >= 3 {
+            push_digit_literal(&mut payload, &bytes[i..i + digits])?;
+            i += digits;
+            continue;
+        }
+
+        let literal_start = i;
+        while i < bytes.len() {
+            if !is_printable_ascii(bytes[i]) {
+                return None;
+            }
+            if i > literal_start
+                && (find_dict_match(bytes, i, runtime).is_some()
+                    || find_stem_suffix_match(bytes, i, runtime).is_some())
             {
-                payload.push(tok);
-                i = bytes.len();
-                matched = true;
                 break;
             }
+            i += 1;
         }
-
-        if !matched {
-            return None;
-        }
-
-        if payload.len() > PAYLOAD_MAX {
-            return None;
-        }
+        push_dict_literal(&mut payload, &bytes[literal_start..i])?;
     }
 
     Some(payload)
@@ -366,12 +721,88 @@ fn encode_nbit(
 
 fn decode_dict(payload: &[u8], runtime: &DictionaryRuntime) -> Option<String> {
     let mut out = String::with_capacity(payload.len() * 4);
-    for &tok in payload {
+    let mut i = 0;
+    while i < payload.len() {
+        let tok = payload[i];
+        if tok == DICT_LITERAL_ESCAPE {
+            let marker = *payload.get(i + 1)?;
+            if is_printable_ascii(marker) {
+                out.push(marker as char);
+                i += 2;
+                continue;
+            }
+
+            if marker & DICT_NUMERIC_RUN_BASE == DICT_NUMERIC_RUN_BASE {
+                let len = (marker & DICT_DIGIT_RUN_LEN_MASK) as usize;
+                let packed_len = len.div_ceil(2);
+                if len == 0 || i + 2 + packed_len > payload.len() {
+                    return None;
+                }
+
+                for digit_idx in 0..len {
+                    let packed = payload[i + 2 + digit_idx / 2];
+                    let nibble = if digit_idx % 2 == 0 {
+                        packed >> 4
+                    } else {
+                        packed & 0x0f
+                    };
+                    out.push(numeric_symbol_byte(nibble)? as char);
+                }
+                if len % 2 == 1 && (payload[i + 2 + packed_len - 1] & 0x0f) != 0x0f {
+                    return None;
+                }
+                i += 2 + packed_len;
+                continue;
+            }
+
+            if marker & DICT_DIGIT_RUN_BASE == DICT_DIGIT_RUN_BASE {
+                let len = (marker & DICT_DIGIT_RUN_LEN_MASK) as usize;
+                let packed_len = len.div_ceil(2);
+                if len == 0 || i + 2 + packed_len > payload.len() {
+                    return None;
+                }
+
+                for digit_idx in 0..len {
+                    let packed = payload[i + 2 + digit_idx / 2];
+                    let nibble = if digit_idx % 2 == 0 {
+                        packed >> 4
+                    } else {
+                        packed & 0x0f
+                    };
+                    if nibble > 9 {
+                        return None;
+                    }
+                    out.push((b'0' + nibble) as char);
+                }
+                if len % 2 == 1 && (payload[i + 2 + packed_len - 1] & 0x0f) != 0x0f {
+                    return None;
+                }
+                i += 2 + packed_len;
+                continue;
+            }
+
+            let len = marker as usize;
+            if len == 0 || i + 2 + len > payload.len() {
+                return None;
+            }
+            let literal = &payload[i + 2..i + 2 + len];
+            if literal.iter().any(|&byte| !is_printable_ascii(byte)) {
+                return None;
+            }
+            out.push_str(std::str::from_utf8(literal).ok()?);
+            i += 2 + len;
+            continue;
+        }
+
         let phrase = runtime.normalized.get(tok as usize)?;
         if phrase.is_empty() {
             return None;
         }
+        if is_suffix_phrase(phrase) && out.ends_with(' ') {
+            out.pop();
+        }
         out.push_str(phrase);
+        i += 1;
     }
     Some(out)
 }
@@ -434,13 +865,22 @@ fn mode_priority(mode: u8) -> u8 {
     }
 }
 
-fn select_candidate(
-    text: &str,
-    rev5: &HashMap<u8, u8>,
-    rev6: &HashMap<u8, u8>,
-) -> Option<Candidate> {
+fn mode_label(mode: u8) -> &'static str {
+    match mode {
+        MODE_DICT => "dictionary",
+        MODE_RAW => "raw",
+        MODE_5BIT => "5bit",
+        MODE_6BIT => "6bit",
+        _ => "unknown",
+    }
+}
+
+fn select_candidate(text: &str) -> Option<Candidate> {
     let mut best: Option<Candidate> = None;
-    let runtimes = dictionary_runtimes();
+    let runtime = current_runtime();
+    let runtimes = runtime.runtimes.clone();
+    let rev5 = alphabet_5bit_rev();
+    let rev6 = alphabet_6bit_rev();
 
     let mut consider = |candidate: Candidate| {
         let take = match &best {
@@ -453,8 +893,8 @@ fn select_candidate(
         }
     };
 
-    for (dict_idx, runtime) in runtimes.iter().enumerate() {
-        if let Some(payload) = encode_dict(text, runtime) {
+    for (dict_idx, rt) in runtimes.iter().enumerate() {
+        if let Some(payload) = encode_dict(text, rt) {
             consider(Candidate {
                 mode: MODE_DICT,
                 dict_idx: dict_idx as u8,
@@ -471,7 +911,7 @@ fn select_candidate(
         });
     }
 
-    if let Some(payload) = encode_nbit(text, rev5, 5, PAYLOAD_MAX * 8 / 5) {
+    if let Some(payload) = encode_nbit(text, &rev5, 5, PAYLOAD_MAX * 8 / 5) {
         consider(Candidate {
             mode: MODE_5BIT,
             dict_idx: 0,
@@ -479,7 +919,7 @@ fn select_candidate(
         });
     }
 
-    if let Some(payload) = encode_nbit(text, rev6, 6, PAYLOAD_MAX * 8 / 6) {
+    if let Some(payload) = encode_nbit(text, &rev6, 6, PAYLOAD_MAX * 8 / 6) {
         consider(Candidate {
             mode: MODE_6BIT,
             dict_idx: 0,
@@ -519,9 +959,11 @@ fn not_short_message() -> ShortMessageDecodeResult {
 fn decode_payload(header: u8, payload: &[u8]) -> Option<String> {
     let mode = header & MODE_MASK;
     let dict_idx = (header >> DICT_SHIFT) as usize;
+    let (a5, a6) = fallback_alphabets();
 
     match mode {
-        MODE_DICT => dictionary_runtimes()
+        MODE_DICT => current_runtime()
+            .runtimes
             .get(dict_idx)
             .and_then(|runtime| decode_dict(payload, runtime)),
         MODE_RAW => {
@@ -531,8 +973,8 @@ fn decode_payload(header: u8, payload: &[u8]) -> Option<String> {
                 None
             }
         }
-        MODE_5BIT => decode_nbit(payload, &ALPHABET_5BIT, 5),
-        MODE_6BIT => decode_nbit(payload, &ALPHABET_6BIT, 6),
+        MODE_5BIT => decode_nbit(payload, a5, 5),
+        MODE_6BIT => decode_nbit(payload, a6, 6),
         _ => None,
     }
 }
@@ -551,7 +993,7 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
         return Err("Message is empty after normalization".to_string());
     }
 
-    let candidate = select_candidate(&normalized_text, alphabet_5bit_rev(), alphabet_6bit_rev())
+    let candidate = select_candidate(&normalized_text)
         .ok_or_else(|| "Message too long for any encoding mode".to_string())?;
 
     if candidate.payload.len() > PAYLOAD_MAX {
@@ -581,9 +1023,29 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
         normalized_text,
         raw_len: text.len(),
         encoded_payload_len: candidate.payload.len(),
+        encoding_mode: mode_label(candidate.mode).to_string(),
+        dictionary_index: (candidate.mode == MODE_DICT).then_some(candidate.dict_idx),
+        dictionary_name: (candidate.mode == MODE_DICT).then(|| {
+            let runtime = current_runtime();
+            runtime
+                .dict_names
+                .get(candidate.dict_idx as usize)
+                .cloned()
+                .unwrap_or_else(|| {
+                    runtime
+                        .runtimes
+                        .get(candidate.dict_idx as usize)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_default()
+                })
+        }),
         fits: true,
         warnings,
     })
+}
+
+pub(crate) fn warm_runtime_cache() {
+    let _ = current_runtime();
 }
 
 pub fn decode(hex: &str) -> ShortMessageDecodeResult {
@@ -663,7 +1125,7 @@ pub fn short_message_decode(hex: String) -> ShortMessageDecodeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::short_message_tables::{DICT_A, DICT_B, DICT_C, DICT_D, DICT_E};
+    use crate::modules::short_message_table_packs::built_in_table_pack;
 
     fn decode_frame(text: &str) -> ShortMessageDecodeResult {
         let enc = encode(text).expect("encode");
@@ -673,6 +1135,32 @@ mod tests {
 
     fn frame_bytes(text: &str) -> Vec<u8> {
         hex::decode(encode(text).expect("encode").hex).expect("hex")
+    }
+
+    fn dict_payload(dict_idx: usize, text: &str) -> Vec<u8> {
+        let (normalized, _) = normalize(text);
+        encode_dict(&normalized, &current_runtime().runtimes[dict_idx]).unwrap_or_else(|| {
+            panic!("dictionary payload failed for dict {dict_idx}: {normalized:?}")
+        })
+    }
+
+    fn best_dict_payload(text: &str) -> (usize, Vec<u8>) {
+        let (normalized, _) = normalize(text);
+        current_runtime()
+            .runtimes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, runtime)| {
+                encode_dict(&normalized, runtime).map(|payload| (idx, payload))
+            })
+            .min_by_key(|(_, payload)| payload.len())
+            .unwrap_or_else(|| panic!("no dictionary payload for {normalized:?}"))
+    }
+
+    fn decode_dict_preview(dict_idx: usize, payload: &[u8]) -> String {
+        let decoded =
+            decode_dict(payload, &current_runtime().runtimes[dict_idx]).expect("decode dict");
+        restore_case(&collapse(&decoded))
     }
 
     fn header_mode(bytes: &[u8]) -> u8 {
@@ -685,28 +1173,42 @@ mod tests {
 
     #[test]
     fn dictionary_shapes() {
-        let lengths = [
-            DICT_A.len(),
-            DICT_B.len(),
-            DICT_C.len(),
-            DICT_D.len(),
-            DICT_E.len(),
-        ];
-        assert_eq!(lengths, [256, 256, 256, 256, 256]);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let pack = built_in_table_pack();
+        assert!(
+            pack.dictionaries.len() <= 8,
+            "header stores dictionary index in three bits"
+        );
 
-        for dict in [
-            &DICT_A[..],
-            &DICT_B[..],
-            &DICT_C[..],
-            &DICT_D[..],
-            &DICT_E[..],
-        ] {
-            assert!(dict.iter().all(|phrase| !phrase.is_empty()));
+        for (idx, dict) in pack.dictionaries.iter().enumerate() {
+            let name = ((b'A' + idx as u8) as char).to_string();
+            assert!(
+                dict.len() <= 256,
+                "dictionary {name} exceeds one-byte token space"
+            );
+            for (tok, phrase) in dict.iter().enumerate() {
+                if tok == DICT_LITERAL_ESCAPE as usize {
+                    assert!(
+                        phrase.is_empty(),
+                        "dictionary {name} token 255 must stay empty"
+                    );
+                } else {
+                    assert!(
+                        !phrase.is_empty(),
+                        "dictionary {name} token {tok} is unexpectedly empty"
+                    );
+                }
+            }
         }
     }
 
     #[test]
     fn roundtrip_general_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("i think the hemp token launch is soon");
         assert!(dec.is_short_message);
         assert_eq!(
@@ -717,6 +1219,9 @@ mod tests {
 
     #[test]
     fn restores_case_and_acronyms() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("payment sent. check cid and ipfs.");
         assert_eq!(
             dec.text.as_deref(),
@@ -726,52 +1231,261 @@ mod tests {
 
     #[test]
     fn selects_business_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let bytes = frame_bytes("invoice paid payment received amount due");
-        assert_eq!(header_mode(&bytes), MODE_DICT);
-        assert_eq!(header_dict(&bytes), 1);
-    }
-
-    #[test]
-    fn selects_tech_dictionary() {
-        let bytes = frame_bytes("build failed code review runtime cache");
-        assert_eq!(header_mode(&bytes), MODE_DICT);
-        assert_eq!(header_dict(&bytes), 2);
-    }
-
-    #[test]
-    fn selects_social_dictionary() {
-        let bytes = frame_bytes("gm anon 😂");
         assert_eq!(header_mode(&bytes), MODE_DICT);
         assert_eq!(header_dict(&bytes), 3);
     }
 
     #[test]
-    fn selects_news_dictionary() {
-        let bytes = frame_bytes("breaking news market update");
+    fn encode_result_reports_active_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("invoice paid payment received amount due").expect("encode");
+        assert_eq!(enc.encoding_mode, "dictionary");
+        assert_eq!(enc.dictionary_index, Some(3));
+        assert_eq!(enc.dictionary_name.as_deref(), Some("D"));
+    }
+
+    #[test]
+    fn dictionary_mode_allows_short_literal_gaps() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(1, "payment sent bob");
+        assert!(payload.contains(&DICT_LITERAL_ESCAPE));
+        assert_eq!(decode_dict_preview(1, &payload), "Payment sent bob");
+    }
+
+    #[test]
+    fn dictionary_mode_packs_literal_runs() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(1, "payment sent bob123");
+        assert!(payload.contains(&DICT_LITERAL_ESCAPE));
+        assert_eq!(decode_dict_preview(1, &payload), "Payment sent bob123");
+    }
+
+    #[test]
+    fn dictionary_mode_packs_digit_runs() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(1, "payment sent invoice 123456789");
+        let digit_marker = DICT_DIGIT_RUN_BASE | 9;
+        assert!(payload
+            .windows(2)
+            .any(|window| window == [DICT_LITERAL_ESCAPE, digit_marker]));
+        assert_eq!(
+            decode_dict_preview(1, &payload),
+            "Payment sent invoice 123456789"
+        );
+    }
+
+    #[test]
+    fn dictionary_mode_packs_numeric_symbol_runs() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(1, "payment sent amount 10.50");
+        let numeric_marker = DICT_NUMERIC_RUN_BASE | 5;
+        assert!(payload
+            .windows(2)
+            .any(|window| window == [DICT_LITERAL_ESCAPE, numeric_marker]));
+        assert_eq!(
+            decode_dict_preview(1, &payload),
+            "Payment sent amount 10.50"
+        );
+    }
+
+    #[test]
+    fn dictionary_mode_prefers_full_numeric_symbol_runs() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(1, "payment sent amount 1000.25");
+        let numeric_marker = DICT_NUMERIC_RUN_BASE | 7;
+        assert!(payload
+            .windows(2)
+            .any(|window| window == [DICT_LITERAL_ESCAPE, numeric_marker]));
+        assert_eq!(
+            decode_dict_preview(1, &payload),
+            "Payment sent amount 1000.25"
+        );
+    }
+
+    #[test]
+    fn dictionary_phrases_match_before_punctuation() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let plain = dict_payload(1, "thank you");
+        let excited = dict_payload(1, "thank you!");
+        assert_eq!(plain.len(), 1);
+        assert_eq!(excited.len(), 2);
+        assert_eq!(decode_dict_preview(1, &excited), "Thank you!");
+
+        let auto = encode("thank you!").expect("encode excited");
+        assert_eq!(auto.encoded_payload_len, 2);
+        assert_eq!(auto.encoding_mode, "dictionary");
+        let dec = decode(&auto.hex);
+        assert_eq!(dec.text.as_deref(), Some("Thank you!"));
+    }
+
+    #[test]
+    fn dictionary_words_match_before_questions() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let plain = dict_payload(3, "payment");
+        let question = dict_payload(3, "payment?");
+        assert_eq!(plain.len(), 1);
+        assert_eq!(question.len(), 2);
+        assert_eq!(decode_dict_preview(3, &question), "Payment?");
+
+        let auto = encode("payment?").expect("encode question");
+        assert_eq!(auto.encoded_payload_len, 2);
+        assert_eq!(auto.encoding_mode, "dictionary");
+        let dec = decode(&auto.hex);
+        assert_eq!(dec.text.as_deref(), Some("Payment?"));
+    }
+
+    #[test]
+    fn dictionary_suffixes_attach_to_stems() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        for text in [
+            "started", "starting", "working", "charged", "received", "updated",
+        ] {
+            let expected = capitalize_word(text);
+            let (dict_idx, payload) = best_dict_payload(text);
+            assert!(
+                payload.len() <= 2,
+                "{text} should encode as direct token or stem+suffix"
+            );
+            assert_eq!(decode_dict_preview(dict_idx, &payload), expected);
+
+            let auto = encode(text).unwrap_or_else(|err| panic!("{text}: {err}"));
+            assert_eq!(auto.encoding_mode, "dictionary", "{text}");
+            assert!(auto.encoded_payload_len <= 2, "{text}");
+            let dec = decode(&auto.hex);
+            assert_eq!(dec.text.as_deref(), Some(expected.as_str()));
+        }
+    }
+
+    #[test]
+    fn dictionary_suffixes_attach_before_punctuation() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let (dict_idx, payload) = best_dict_payload("started!");
+        assert_eq!(payload.len(), 3);
+        assert_eq!(decode_dict_preview(dict_idx, &payload), "Started!");
+
+        let auto = encode("started?").expect("encode");
+        assert_eq!(auto.encoding_mode, "dictionary");
+        assert_eq!(auto.encoded_payload_len, 3);
+        let dec = decode(&auto.hex);
+        assert_eq!(dec.text.as_deref(), Some("Started?"));
+    }
+
+    #[test]
+    fn selects_workflow_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("assign project request status");
+        assert_eq!(header_mode(&bytes), MODE_DICT);
+        assert_eq!(header_dict(&bytes), 2);
+    }
+
+    #[test]
+    fn selects_general_chat_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("gm anon 😂");
+        assert_eq!(header_mode(&bytes), MODE_DICT);
+        assert_eq!(header_dict(&bytes), 0);
+    }
+
+    #[test]
+    fn selects_phrase_pack_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("are you ready");
         assert_eq!(header_mode(&bytes), MODE_DICT);
         assert_eq!(header_dict(&bytes), 4);
     }
 
     #[test]
+    fn selects_asset_holder_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("holder update ipfs file");
+        assert_eq!(header_mode(&bytes), MODE_DICT);
+        assert_eq!(header_dict(&bytes), 5);
+    }
+
+    #[test]
+    fn selects_logistics_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("shipment source verified received at");
+        assert_eq!(header_mode(&bytes), MODE_DICT);
+        assert_eq!(header_dict(&bytes), 6);
+    }
+
+    #[test]
+    fn selects_chain_wallet_dictionary() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let bytes = frame_bytes("wallet unlock transaction confirmed");
+        assert_eq!(header_mode(&bytes), MODE_DICT);
+        assert_eq!(header_dict(&bytes), 7);
+    }
+
+    #[test]
     fn raw_mode_for_ascii_noise() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let bytes = frame_bytes("abc|def{ghi}");
         assert_eq!(header_mode(&bytes), MODE_RAW);
     }
 
     #[test]
     fn six_bit_mode_for_digits() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let bytes = frame_bytes("abcdefghijklmnopqrstuvwxyz 012345");
         assert_eq!(header_mode(&bytes), MODE_6BIT);
     }
 
     #[test]
     fn five_bit_mode_for_simple_text() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let bytes = frame_bytes("an easy short line for testing");
         assert_eq!(header_mode(&bytes), MODE_5BIT);
     }
 
     #[test]
     fn exact_frame_size_and_magic() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let bytes = frame_bytes("hello world");
         assert_eq!(bytes.len(), 32);
         assert_eq!(bytes[0], MAGIC_0);
@@ -781,6 +1495,9 @@ mod tests {
 
     #[test]
     fn bad_magic_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let mut bytes = frame_bytes("hello world");
         bytes[0] = 0;
         assert!(!decode(&hex::encode(bytes)).is_short_message);
@@ -788,6 +1505,9 @@ mod tests {
 
     #[test]
     fn bad_crc_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let mut bytes = frame_bytes("hello world");
         bytes[CRC_INDEX] ^= 1;
         assert!(!decode(&hex::encode(bytes)).is_short_message);
@@ -795,6 +1515,9 @@ mod tests {
 
     #[test]
     fn bad_version_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let mut bytes = frame_bytes("hello world");
         bytes[2] = (bytes[2] & !VERSION_MASK) | 0x02;
         assert!(!decode(&hex::encode(bytes)).is_short_message);
@@ -802,6 +1525,9 @@ mod tests {
 
     #[test]
     fn prefix_0x_supported() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let enc = encode("short message").unwrap();
         let dec = decode(&format!("0x{}", enc.hex));
         assert!(dec.is_short_message);
@@ -809,6 +1535,9 @@ mod tests {
 
     #[test]
     fn control_chars_warn_and_roundtrip() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let enc = encode("Hello\x00world\t!").unwrap();
         assert!(enc
             .warnings
@@ -820,12 +1549,18 @@ mod tests {
 
     #[test]
     fn emoji_roundtrip_in_dictionary_mode() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("gm anon 😂");
         assert_eq!(dec.text.as_deref(), Some("GM anon 😂"));
     }
 
     #[test]
     fn trailing_space_phrase_can_close_message() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("invoice paid payment received amount due");
         assert_eq!(
             dec.text.as_deref(),
@@ -835,6 +1570,9 @@ mod tests {
 
     #[test]
     fn phrase_coverage() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let cases = [
             ("payment sent check cid", "Payment sent check CID"),
             ("reward paid to holders", "Reward paid to holders"),
@@ -863,16 +1601,25 @@ mod tests {
 
     #[test]
     fn empty_message_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         assert!(encode("   ").is_err());
     }
 
     #[test]
     fn long_message_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         assert!(encode(&"a".repeat(513)).is_err());
     }
 
     #[test]
     fn never_panics() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         for i in 0u8..=255 {
             let mut frame = [i; FRAME_SIZE];
             frame[0] = MAGIC_0;
@@ -886,6 +1633,9 @@ mod tests {
 
     #[test]
     fn normalized_text_is_lowercase() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let enc = encode("Hello World").unwrap();
         assert_eq!(enc.normalized_text, "hello world");
         assert_eq!(enc.decoded_preview, "Hello world");
@@ -893,13 +1643,99 @@ mod tests {
 
     #[test]
     fn long_dict_phrase_matches() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("i think the wallet reward sent");
         assert!(dec.text.unwrap().starts_with("I think"));
     }
 
     #[test]
     fn collapse_spacing_before_punctuation() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let dec = decode_frame("hello , world . how are you ?");
         assert_eq!(dec.text.as_deref(), Some("Hello, world. How are you?"));
+    }
+
+    fn make_custom_pack_dict(entries: &[&str]) -> Vec<String> {
+        let mut dict = vec![String::new(); 256];
+        for (i, e) in entries.iter().enumerate() {
+            dict[i] = e.to_string();
+        }
+        dict
+    }
+
+    fn install_custom_pack(
+        name: &str,
+        version: &str,
+        dict_entries: &[&str],
+    ) -> crate::modules::short_message_table_packs::ValidatedTablePack {
+        let dict = make_custom_pack_dict(dict_entries);
+        let dicts = vec![
+            dict,
+            make_custom_pack_dict(&[" ", "!"]),
+            make_custom_pack_dict(&[" ", "!"]),
+        ];
+        let file = crate::modules::short_message_table_packs::TablePackFile {
+            magic: crate::modules::short_message_table_packs::TABLE_PACK_FILE_MAGIC.to_string(),
+            file_version: crate::modules::short_message_table_packs::TABLE_PACK_FILE_VERSION,
+            name: name.to_string(),
+            version: version.to_string(),
+            description: Some("integration test custom pack".to_string()),
+            dictionary_titles: vec!["DICT_A: integration test dictionary.".to_string()],
+            dictionaries: dicts,
+            suffixes: vec!["ed ".to_string()],
+            acronyms: vec!["lol".to_string()],
+        };
+        let (pack, _warnings) =
+            crate::modules::short_message_table_packs::validate_table_pack(&file)
+                .expect("custom pack must validate");
+        crate::modules::short_message_table_packs::set_active_pack_for_tests(pack.clone());
+        pack
+    }
+
+    #[test]
+    fn custom_pack_roundtrips_custom_phrase() {
+        let _pack = install_custom_pack(
+            "Hemp0x-Test-Pack",
+            "1.0",
+            &[" ", "hemp ", "ops ", "alert ", "ping "],
+        );
+
+        let enc = encode("hemp ops alert ping").expect("encode with custom pack");
+        assert_eq!(enc.encoding_mode, "dictionary");
+        assert_eq!(enc.dictionary_index, Some(0));
+        assert_eq!(enc.dictionary_name.as_deref(), Some("A"));
+        assert!(enc.fits);
+        assert_eq!(enc.decoded_preview, "Hemp ops alert ping");
+
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("Hemp ops alert ping"));
+
+        crate::modules::short_message_table_packs::reset_to_built_in_table_pack()
+            .expect("reset to built-in");
+    }
+
+    #[test]
+    fn reset_returns_to_built_in_pack() {
+        let _pack = install_custom_pack("Temp-Pack", "1.0", &[" ", "alpha ", "beta "]);
+
+        let active_before = crate::modules::short_message_table_packs::active_table_pack_summary();
+        assert_eq!(active_before.name, "Temp-Pack");
+
+        crate::modules::short_message_table_packs::reset_to_built_in_table_pack()
+            .expect("reset to built-in");
+
+        let active_after = crate::modules::short_message_table_packs::active_table_pack_summary();
+        let builtin = crate::modules::short_message_table_packs::built_in_summary();
+        assert_eq!(active_after.fingerprint_sha256, builtin.fingerprint_sha256);
+        assert_eq!(active_after.name, builtin.name);
+        assert_eq!(active_after.version, builtin.version);
+
+        let enc = encode("thank you payment sent").expect("encode after reset");
+        assert!(enc.fits);
     }
 }

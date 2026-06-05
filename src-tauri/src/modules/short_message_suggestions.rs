@@ -1,11 +1,13 @@
 use super::short_message;
+use super::short_message_table_packs::active_pack;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const MAX: usize = 6;
-const DICT_COUNT: usize = 5;
 const RECENT_CONTEXT_TOKENS: usize = 3;
 const DOMAIN_HINT_MIN_SCORE: u16 = 2;
+const PREFERRED_DICT_BOOST: i32 = 34;
+const PREFERRED_DICT_PENALTY: i32 = 10;
 
 struct Meta {
     display: String,
@@ -23,13 +25,90 @@ struct Node {
 struct Suggester {
     root: Node,
     phrases: Vec<Meta>,
-    token_domains: HashMap<String, [u16; DICT_COUNT]>,
+    dict_count: usize,
+    token_domains: HashMap<String, Vec<u16>>,
 }
 
-static SUGGESTER: OnceLock<Suggester> = OnceLock::new();
+type FingerprintedSuggester = Option<(String, Arc<Suggester>)>;
+type FingerprintedEmojis = Option<(String, Arc<Vec<String>>)>;
+type SuggesterCache = Mutex<FingerprintedSuggester>;
+type EmojiCache = Mutex<FingerprintedEmojis>;
 
-fn suggester() -> &'static Suggester {
-    SUGGESTER.get_or_init(build_suggester)
+static SUGGESTER: OnceLock<SuggesterCache> = OnceLock::new();
+static DICTIONARY_EMOJIS: OnceLock<EmojiCache> = OnceLock::new();
+
+fn suggester_cache_cell() -> &'static SuggesterCache {
+    SUGGESTER.get_or_init(|| Mutex::new(None))
+}
+
+fn emojis_cache_cell() -> &'static EmojiCache {
+    DICTIONARY_EMOJIS.get_or_init(|| Mutex::new(None))
+}
+
+fn current_suggester() -> Arc<Suggester> {
+    let pack = active_pack();
+    let fingerprint = pack.fingerprint_sha256.clone();
+    {
+        let guard = suggester_cache_cell()
+            .lock()
+            .expect("suggester cache poisoned");
+        if let Some((fp, cached)) = guard.as_ref() {
+            if *fp == fingerprint {
+                return Arc::clone(cached);
+            }
+        }
+    }
+    let built = Arc::new(build_suggester(&pack));
+    let mut guard = suggester_cache_cell()
+        .lock()
+        .expect("suggester cache poisoned");
+    *guard = Some((fingerprint, Arc::clone(&built)));
+    built
+}
+
+fn current_emojis() -> Arc<Vec<String>> {
+    let pack = active_pack();
+    let fingerprint = pack.fingerprint_sha256.clone();
+    {
+        let guard = emojis_cache_cell().lock().expect("emojis cache poisoned");
+        if let Some((fp, cached)) = guard.as_ref() {
+            if *fp == fingerprint {
+                return Arc::clone(cached);
+            }
+        }
+    }
+    let built = Arc::new(build_emojis(&pack));
+    let mut guard = emojis_cache_cell().lock().expect("emojis cache poisoned");
+    *guard = Some((fingerprint, Arc::clone(&built)));
+    built
+}
+
+fn is_emoji_like(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1F300..=0x1FAFF | 0x2600..=0x27BF | 0xFE0F
+    )
+}
+
+fn build_emojis(pack: &super::short_message_table_packs::ValidatedTablePack) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut emojis = Vec::new();
+    for dict in &pack.dictionaries {
+        for phrase in dict.iter() {
+            let trimmed = phrase.trim();
+            if trimmed.is_empty() || trimmed.chars().any(|ch| ch.is_ascii()) {
+                continue;
+            }
+            if !trimmed.chars().any(is_emoji_like) {
+                continue;
+            }
+            if seen.insert(trimmed.to_string()) {
+                emojis.push(trimmed.to_string());
+            }
+        }
+    }
+    emojis.sort();
+    emojis
 }
 
 fn new_node(capacity: usize) -> Node {
@@ -39,15 +118,15 @@ fn new_node(capacity: usize) -> Node {
     }
 }
 
-fn build_suggester() -> Suggester {
-    let runtimes = short_message::get_dictionary_runtimes();
+fn build_suggester(pack: &super::short_message_table_packs::ValidatedTablePack) -> Suggester {
+    let dict_count = pack.dictionaries.len();
     let mut root = new_node(32);
     let mut phrases = Vec::with_capacity(1280);
-    let mut token_domains = HashMap::with_capacity(1024);
+    let mut token_domains: HashMap<String, Vec<u16>> = HashMap::with_capacity(1024);
     let mut phrase_id: u16 = 0;
 
-    for (dict_idx, runtime) in runtimes.iter().enumerate() {
-        for norm in &runtime.normalized {
+    for (dict_idx, dict) in pack.dictionaries.iter().enumerate() {
+        for norm in dict.iter() {
             if norm.trim().is_empty() {
                 continue;
             }
@@ -71,9 +150,12 @@ fn build_suggester() -> Suggester {
             let mut seen = HashSet::new();
             for token in norm.split_whitespace() {
                 if seen.insert(token) {
-                    token_domains
+                    let entry = token_domains
                         .entry(token.to_string())
-                        .or_insert([0; DICT_COUNT])[dict_idx] += 1;
+                        .or_insert_with(|| vec![0u16; dict_count]);
+                    if dict_idx < entry.len() {
+                        entry[dict_idx] += 1;
+                    }
                 }
             }
 
@@ -91,6 +173,7 @@ fn build_suggester() -> Suggester {
     Suggester {
         root,
         phrases,
+        dict_count,
         token_domains,
     }
 }
@@ -141,24 +224,30 @@ fn leading_context_overlap(meta: &Meta, context: &[String]) -> usize {
 }
 
 fn domain_hint(suggester: &Suggester, context: &[String]) -> Option<u8> {
-    let mut scores = [0u16; DICT_COUNT];
+    let mut scores = vec![0u16; suggester.dict_count];
     for token in recent_context_tokens(context) {
         if let Some(weights) = suggester.token_domains.get(token) {
             for (idx, weight) in weights.iter().enumerate() {
-                scores[idx] += *weight;
+                if idx < scores.len() {
+                    scores[idx] += *weight;
+                }
             }
         }
     }
 
-    let (best_idx, best_score) = scores
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, score)| *score)?;
+    let (best_idx, best_score) = scores.iter().enumerate().max_by_key(|(_, score)| *score)?;
     (best_score >= &DOMAIN_HINT_MIN_SCORE).then_some(best_idx as u8)
 }
 
 fn phrase_bonus(word_count: u8) -> i32 {
-    6 * i32::from(word_count.saturating_sub(1).min(3))
+    8 * i32::from(word_count.saturating_sub(1).min(4))
+}
+
+fn compression_bonus(meta: &Meta) -> i32 {
+    // A selected dictionary phrase costs one payload byte no matter how many
+    // text bytes it expands to. Longer phrases are therefore more valuable as
+    // user-facing suggestions, especially while staying inside one dictionary.
+    (meta.norm.len().saturating_sub(3).min(24) as i32) / 2
 }
 
 fn overlap_bonus(meta: &Meta, context: &[String]) -> i32 {
@@ -175,7 +264,13 @@ fn sequence_bonus(meta: &Meta, context: &[String]) -> i32 {
 
     if meta.first == last_token {
         24
-    } else if meta.word_count > 1 && meta.norm.split_whitespace().skip(1).any(|word| word == last_token) {
+    } else if meta.word_count > 1
+        && meta
+            .norm
+            .split_whitespace()
+            .skip(1)
+            .any(|word| word == last_token)
+    {
         12
     } else {
         0
@@ -189,7 +284,13 @@ fn continuation_bonus(meta: &Meta, context: &[String]) -> i32 {
     }
 }
 
-fn score_candidate(meta: &Meta, partial: Option<&str>, context: &[String], hint: Option<u8>) -> i32 {
+fn score_candidate(
+    meta: &Meta,
+    partial: Option<&str>,
+    context: &[String],
+    hint: Option<u8>,
+    preferred_dict: Option<u8>,
+) -> i32 {
     if is_punctuation_only(&meta.display) {
         return 0;
     }
@@ -215,7 +316,10 @@ fn score_candidate(meta: &Meta, partial: Option<&str>, context: &[String], hint:
         if partial_len <= 1 && meta.display.len() <= 2 {
             score -= 18;
         }
-        if partial_len <= 1 && matches!(hint, Some(dict) if dict != meta.dict) {
+        if partial_len <= 1
+            && (matches!(hint, Some(dict) if dict != meta.dict)
+                || matches!(preferred_dict, Some(dict) if dict != meta.dict))
+        {
             score -= 10;
         }
     }
@@ -224,13 +328,24 @@ fn score_candidate(meta: &Meta, partial: Option<&str>, context: &[String], hint:
     let overlap = overlap_bonus(meta, context);
     let sequence = sequence_bonus(meta, context);
     let domain = if hint == Some(meta.dict) { 18 } else { 0 };
+    let preferred = match preferred_dict {
+        Some(dict) if dict == meta.dict => PREFERRED_DICT_BOOST,
+        Some(_) => -PREFERRED_DICT_PENALTY,
+        None => 0,
+    };
 
-    if partial.is_none() && continuation == 0 && overlap == 0 && sequence == 0 && domain == 0 {
+    if partial.is_none()
+        && continuation == 0
+        && overlap == 0
+        && sequence == 0
+        && domain == 0
+        && preferred <= 0
+    {
         return 0;
     }
 
-    score += phrase_bonus(meta.word_count);
-    score += continuation + overlap + sequence + domain;
+    score += phrase_bonus(meta.word_count) + compression_bonus(meta);
+    score += continuation + overlap + sequence + domain + preferred;
     score.max(0)
 }
 
@@ -279,7 +394,11 @@ fn collect_context(prefix: &str, context: Option<String>) -> (String, Vec<String
 }
 
 #[tauri::command]
-pub fn short_message_suggestions(prefix: String, context: Option<String>) -> Vec<String> {
+pub fn short_message_suggestions(
+    prefix: String,
+    context: Option<String>,
+    preferred_dict: Option<u8>,
+) -> Vec<String> {
     if prefix.trim().is_empty() {
         return Vec::new();
     }
@@ -289,8 +408,9 @@ pub fn short_message_suggestions(prefix: String, context: Option<String>) -> Vec
         return Vec::new();
     }
 
-    let suggester = suggester();
-    let hint = domain_hint(suggester, &context);
+    let suggester = current_suggester();
+    let hint = domain_hint(&suggester, &context);
+    let preferred_dict = preferred_dict.filter(|idx| (*idx as usize) < suggester.dict_count);
     let phrase_ids = if partial.is_empty() {
         &suggester.root.subtree_ids
     } else {
@@ -305,12 +425,29 @@ pub fn short_message_suggestions(prefix: String, context: Option<String>) -> Vec
                 (!partial.is_empty()).then_some(partial.as_str()),
                 &context,
                 hint,
+                preferred_dict,
             );
             (score > 0).then_some((score, id))
         })
         .collect();
 
-    sort_and_dedupe(suggester, scored)
+    sort_and_dedupe(&suggester, scored)
+}
+
+#[tauri::command]
+pub fn short_message_emojis() -> Vec<String> {
+    current_emojis().as_ref().clone()
+}
+
+#[tauri::command]
+pub async fn short_message_prepare_active_table_pack() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _suggester = current_suggester();
+        let _emojis = current_emojis();
+        crate::modules::short_message::warm_runtime_cache();
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -319,53 +456,95 @@ mod tests {
 
     #[test]
     fn empty_prefix() {
-        assert!(short_message_suggestions(String::new(), None).is_empty());
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        assert!(short_message_suggestions(String::new(), None, None).is_empty());
     }
 
     #[test]
     fn whitespace_prefix() {
-        assert!(short_message_suggestions("   ".to_string(), None).is_empty());
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        assert!(short_message_suggestions("   ".to_string(), None, None).is_empty());
     }
 
     #[test]
     fn prefix_completion() {
-        let result = short_message_suggestions("pay".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("pay".to_string(), None, None);
         assert!(!result.is_empty());
         assert!(result.len() <= MAX);
-        assert!(result.iter().any(|item| item.to_lowercase().contains("pay")));
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().contains("pay")));
     }
 
     #[test]
     fn business_context() {
-        let result = short_message_suggestions("inv".to_string(), Some("payment invoice balance".to_string()));
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions(
+            "inv".to_string(),
+            Some("payment invoice balance".to_string()),
+            None,
+        );
         assert!(!result.is_empty());
-        assert!(result.iter().any(|item| item.to_lowercase().contains("invoice")));
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().contains("invoice")));
     }
 
     #[test]
     fn dev_context() {
-        let result = short_message_suggestions("build".to_string(), Some("code review deploy".to_string()));
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions(
+            "build".to_string(),
+            Some("code review deploy".to_string()),
+            None,
+        );
         assert!(!result.is_empty());
         assert!(result.len() <= MAX);
     }
 
     #[test]
     fn social_context() {
-        let result = short_message_suggestions("gm".to_string(), Some("gm anon".to_string()));
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("gm".to_string(), Some("gm anon".to_string()), None);
         assert!(!result.is_empty());
         assert!(result.len() <= MAX);
     }
 
     #[test]
     fn news_context() {
-        let result = short_message_suggestions("market".to_string(), Some("news update launch market".to_string()));
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions(
+            "market".to_string(),
+            Some("news update launch market".to_string()),
+            None,
+        );
         assert!(!result.is_empty());
-        assert!(result.iter().any(|item| item.to_lowercase().contains("market")));
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().contains("market")));
     }
 
     #[test]
     fn no_duplicates() {
-        let result = short_message_suggestions("the".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("the".to_string(), None, None);
         let mut lowered: Vec<String> = result.iter().map(|item| item.to_lowercase()).collect();
         lowered.sort();
         let unique: HashSet<_> = lowered.iter().collect();
@@ -374,13 +553,19 @@ mod tests {
 
     #[test]
     fn bounded_count() {
-        let result = short_message_suggestions("a".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("a".to_string(), None, None);
         assert!(result.len() <= MAX);
     }
 
     #[test]
     fn casing() {
-        let result = short_message_suggestions("i think the".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("i think the".to_string(), None, None);
         for item in &result {
             assert!(!item.starts_with("i "), "lowercase 'i': {}", item);
         }
@@ -388,29 +573,70 @@ mod tests {
 
     #[test]
     fn no_panic() {
-        short_message_suggestions("test\x00foo".to_string(), None);
-        short_message_suggestions("😂".to_string(), None);
-        short_message_suggestions("test".to_string(), Some(String::new()));
-        short_message_suggestions("a".repeat(500), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        short_message_suggestions("test\x00foo".to_string(), None, None);
+        short_message_suggestions("😂".to_string(), None, None);
+        short_message_suggestions("test".to_string(), Some(String::new()), None);
+        short_message_suggestions("a".repeat(500), None, None);
     }
 
     #[test]
     fn phrase_completion() {
-        let result = short_message_suggestions("i".to_string(), Some("check cid on".to_string()));
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result =
+            short_message_suggestions("i".to_string(), Some("check cid on".to_string()), None);
         assert!(result.len() <= MAX);
     }
 
     #[test]
     fn next_word_respects_trailing_space() {
-        let result = short_message_suggestions("payment ".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("payment ".to_string(), None, None);
         assert!(!result.is_empty());
-        assert!(result.iter().any(|item| item.to_lowercase().starts_with("payment ")));
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().starts_with("payment ")));
     }
 
     #[test]
     fn continuation_prefers_phrase_prefix_overlap() {
-        let result = short_message_suggestions("check cid ".to_string(), None);
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("are you ".to_string(), None, None);
         assert!(!result.is_empty());
-        assert!(result[0].to_lowercase().starts_with("cid "));
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().contains("ready")));
+    }
+
+    #[test]
+    fn preferred_dictionary_biases_results() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_suggestions("pay".to_string(), None, Some(1));
+        assert!(!result.is_empty());
+        assert!(result
+            .iter()
+            .any(|item| item.to_lowercase().contains("payment")));
+    }
+
+    #[test]
+    fn dictionary_emojis_are_deduped() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let result = short_message_emojis();
+        assert!(result.contains(&"😂".to_string()));
+        assert!(result.contains(&"🚀".to_string()));
+        let unique: HashSet<_> = result.iter().collect();
+        assert_eq!(result.len(), unique.len());
     }
 }

@@ -1,7 +1,8 @@
 <script>
     import { fly, fade } from "svelte/transition";
-    import { createEventDispatcher } from "svelte";
+    import { createEventDispatcher, tick } from "svelte";
     import { core } from "@tauri-apps/api";
+    import { open, save } from "@tauri-apps/plugin-dialog";
     import { formatBalance, insertSuggestion } from "../utils.js";
     import "../../components.css";
     import Tooltip from "../ui/Tooltip.svelte";
@@ -15,8 +16,59 @@
 
     const dispatch = createEventDispatcher();
 
-    export let asset;
-    export let metadata;
+    /**
+     * @typedef {{
+     *   name: string;
+     *   balance?: number|string;
+     *   units?: number;
+     *   type?: string;
+     *   isSubAsset?: boolean;
+     *   hasOwner?: boolean;
+     * }} AssetDetail
+     * @typedef {{
+     *   amount?: number;
+     *   units?: number;
+     *   reissuable?: boolean;
+     *   block_height?: number;
+     *   has_ipfs?: boolean;
+     *   ipfs_hash?: string;
+     * }} AssetMetadata
+     * @typedef {{ enabled?: boolean }} MessagesInfo
+     * @typedef {{
+     *   asset_name: string;
+     *   message: string;
+     *   time?: string|number;
+     *   block_height?: string|number;
+     *   status?: string;
+     *   expire_time?: string|number|null;
+     * }} AssetMessage
+     * @typedef {{
+     *   channel_name?: string;
+     *   ipfs_hash?: string;
+     *   expire_time?: number|null;
+     *   has_ownership?: boolean;
+     *   warnings?: string[];
+     * }} ComposePreview
+     * @typedef {{
+     *   is_short_message?: boolean;
+     *   text?: string;
+     * }} ShortMessageDecodeResult
+     * @typedef {{
+     *   fits: boolean;
+     *   hex: string;
+     *   decoded_preview: string;
+     *   encoded_payload_len: number;
+     *   warnings: string[];
+     *   dictionary_index?: number|null;
+     *   dictionary_name?: string|null;
+     * }} ShortMessageEncodeResult
+     * @typedef {"cid"|"short"} ComposeMode
+     */
+
+    /** @type {AssetDetail | null} */
+    export let asset = null;
+    /** @type {AssetMetadata | null} */
+    export let metadata = null;
     export let loading = false;
     export let slideDirection = 0;
     export let hasMultipleAssets = false;
@@ -27,8 +79,11 @@
 
     let activeTab = initialActiveTab;
 
+    /** @type {MessagesInfo | null} */
     let messagesInfo = null;
+    /** @type {AssetMessage[]} */
     let messages = [];
+    /** @type {string[]} */
     let channels = [];
     let messagesLoading = false;
     let messagesError = "";
@@ -37,6 +92,7 @@
     let composeOpen = false;
     let composeIpfsHash = "";
     let composeExpireTime = "";
+    /** @type {ComposePreview | null} */
     let composePreview = null;
     let composeError = "";
     let composePreviewing = false;
@@ -45,16 +101,175 @@
     let currentAssetName = "";
 
     // Short message compose state
-    let composeMode = "cid"; // "cid" | "short"
+    /** @type {ComposeMode} */
+    let composeMode = "cid";
     let composeShortText = "";
+    /** @type {ShortMessageEncodeResult | null} */
     let composeShortResult = null;
     let composeShortEncoding = false;
     let composeShortShowHex = false;
+    /** @type {ReturnType<typeof setTimeout> | null} */
     let composeShortDebounce = null;
+    /** @type {HTMLTextAreaElement | null} */
     let composeShortTextarea = null;
     let autocompleteEnabled = true;
     let composeShortFocused = false;
+    /** @type {string[]} */
+    let composeShortEmojis = [];
+    let composeShortEmojiOpen = false;
+    /** @type {HTMLDivElement | null} */
+    let composeShortEmojiWrap = null;
 
+    /**
+     * @typedef {{
+     *   name: string,
+     *   version: string,
+     *   fingerprint_sha256: string,
+     *   origin?: "builtin"|"custom",
+     *   active?: boolean,
+     *   builtin?: boolean,
+     *   path?: string|null
+     * }} TablePackSummary
+     * @typedef {{
+     *   active?: TablePackSummary,
+     *   built_in?: TablePackSummary,
+     *   packs_dir?: string,
+     *   selection_path?: string
+     * }} TablePackStatus
+     */
+    /** @type {TablePackStatus | null} */
+    let activeTablePack = null;
+    /** @type {TablePackSummary[]} */
+    let tablePacks = [];
+    let tablePackPanelOpen = false;
+    let tablePackBusy = false;
+    let tablePackError = "";
+    let tablePackStatus = "";
+    let tablePackSelectionFingerprint = "";
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let tablePackStatusTimer = null;
+
+    /** @param {TablePackSummary | null | undefined} pack */
+    function tablePackLabel(pack) {
+        if (!pack) return "Official HOXSHTV1.0";
+        if (pack.builtin || pack.origin !== "custom") return pack.name;
+        const version = pack.version && pack.version !== pack.name ? ` v${pack.version}` : "";
+        return `Custom - ${pack.name}${version}`;
+    }
+
+    function displayedTablePack() {
+        if (tablePackSelectionFingerprint) {
+            const selected = tablePacks.find((pack) => pack.fingerprint_sha256 === tablePackSelectionFingerprint);
+            if (selected) return selected;
+        }
+        return activeTablePack?.active || null;
+    }
+
+    function activePackLabel() {
+        const pack = displayedTablePack();
+        return tablePackLabel(pack);
+    }
+
+    function activePackFingerprint() {
+        return displayedTablePack()?.fingerprint_sha256 || "";
+    }
+
+    function activePackFingerprintShort() {
+        const fp = activePackFingerprint();
+        return fp ? `${fp.slice(0, 12)}...${fp.slice(-8)}` : "";
+    }
+
+    function activePackStatusTitle() {
+        const pack = activeTablePack?.active;
+        const displayed = displayedTablePack();
+        const fp = activePackFingerprint();
+        const suffix = fp ? `\nFingerprint: ${fp}` : "";
+        if (pack && displayed && pack.fingerprint_sha256 !== displayed.fingerprint_sha256) {
+            return `Selected: ${tablePackLabel(displayed)}${suffix}\nActive status is refreshing.`;
+        }
+        return `${activePackLabel()}${suffix}`;
+    }
+
+    function selectedTablePack() {
+        const fp = tablePackSelectionFingerprint || activeTablePack?.active?.fingerprint_sha256 || "";
+        return tablePacks.find((pack) => pack.fingerprint_sha256 === fp) || null;
+    }
+
+    /** @param {TablePackSummary} pack */
+    function setActivePackSummary(pack) {
+        activeTablePack = {
+            ...(activeTablePack || {}),
+            active: pack,
+        };
+        tablePackSelectionFingerprint = pack.fingerprint_sha256;
+        tablePacks = tablePacks.map((item) => ({
+            ...item,
+            active: item.fingerprint_sha256 === pack.fingerprint_sha256,
+        }));
+    }
+
+    function waitForPaint() {
+        return new Promise((resolve) => {
+            requestAnimationFrame(() => {
+                requestAnimationFrame(resolve);
+            });
+        });
+    }
+
+    /** @param {string} message */
+    async function showTablePackBusy(message) {
+        if (tablePackStatusTimer) {
+            clearTimeout(tablePackStatusTimer);
+            tablePackStatusTimer = null;
+        }
+        tablePackBusy = true;
+        tablePackError = "";
+        tablePackStatus = message;
+        await tick();
+        await waitForPaint();
+    }
+
+    /** @param {string} message */
+    function finishTablePackBusy(message = "") {
+        tablePackBusy = false;
+        tablePackStatus = message;
+        if (tablePackStatusTimer) clearTimeout(tablePackStatusTimer);
+        if (message) {
+            tablePackStatusTimer = setTimeout(() => {
+                tablePackStatus = "";
+                tablePackStatusTimer = null;
+            }, 1400);
+        }
+    }
+
+    async function prepareShortMessagePack() {
+        tablePackStatus = "Preparing text prediction...";
+        await tick();
+        await waitForPaint();
+        try {
+            await core.invoke("short_message_prepare_active_table_pack");
+            const emojis = await core.invoke("short_message_emojis");
+            composeShortEmojis = Array.isArray(emojis) ? emojis : [];
+        } catch (err) {
+            // The next encode/suggestion request will surface any real issue.
+        }
+    }
+
+    function refreshShortMessageAfterPackChange() {
+        setTimeout(() => {
+            queueEncodeShortMessage();
+        }, 0);
+    }
+
+    function messageRpcError(err) {
+        const text = String(err);
+        if (text.includes("-32601") || /method not found/i.test(text)) {
+            return "This Core build does not expose this asset messaging RPC. Update or start a Core build with messaging support, then refresh Commander and try again.";
+        }
+        return text;
+    }
+
+    /** @param {string} suggestion */
     function handleShortSuggestion(suggestion) {
         const nextText = insertSuggestion(composeShortText, suggestion);
         composeShortText = nextText;
@@ -62,16 +277,231 @@
         return nextText;
     }
 
+    async function ensureShortEmojis() {
+        if (composeShortEmojis.length > 0) return;
+        try {
+            const result = await core.invoke("short_message_emojis");
+            composeShortEmojis = Array.isArray(result) ? result : [];
+        } catch (err) {
+            composeShortEmojis = [];
+        }
+    }
+
+    async function refreshActiveTablePack() {
+        try {
+            const status = await core.invoke("short_message_get_active_table_pack");
+            activeTablePack = status;
+            tablePackSelectionFingerprint = status?.active?.fingerprint_sha256 || "";
+        } catch (err) {
+            activeTablePack = null;
+            tablePackSelectionFingerprint = "";
+        }
+    }
+
+    async function refreshTablePacks() {
+        try {
+            const [status, packs] = await Promise.all([
+                core.invoke("short_message_get_active_table_pack"),
+                core.invoke("short_message_list_table_packs"),
+            ]);
+            activeTablePack = status;
+            tablePacks = Array.isArray(packs) ? packs : [];
+            tablePackSelectionFingerprint = status?.active?.fingerprint_sha256 || "";
+            tablePackError = "";
+            tablePackStatus = "";
+        } catch (err) {
+            tablePackError = String(err);
+            tablePackStatus = "";
+        }
+    }
+
+    async function toggleTablePackPanel() {
+        tablePackPanelOpen = !tablePackPanelOpen;
+        if (!tablePackPanelOpen) return;
+        await showTablePackBusy("Loading table packs...");
+        try {
+            await refreshTablePacks();
+            finishTablePackBusy();
+        } catch (err) {
+            tablePackError = String(err);
+            finishTablePackBusy();
+        }
+    }
+
+    async function exportOfficialTablePack() {
+        tablePackBusy = true;
+        tablePackError = "";
+        try {
+            const targetPath = await save({
+                title: "Export Official Short Message Table Pack",
+                defaultPath: "HOXSHTV1.0-table-pack.json",
+                filters: [{ name: "JSON", extensions: ["json"] }],
+            });
+            if (!targetPath) return;
+            await core.invoke("short_message_export_built_in_table_pack", { targetPath });
+            await refreshTablePacks();
+        } catch (err) {
+            tablePackError = String(err);
+        } finally {
+            tablePackBusy = false;
+        }
+    }
+
+    async function importTablePack() {
+        try {
+            const sourcePath = await open({
+                title: "Import Short Message Table Pack",
+                multiple: false,
+                filters: [{ name: "JSON", extensions: ["json"] }],
+            });
+            if (!sourcePath || Array.isArray(sourcePath)) return;
+            await showTablePackBusy("Importing table pack...");
+            await core.invoke("short_message_import_table_pack", { sourcePath });
+            await refreshTablePacks();
+            finishTablePackBusy("Table pack imported.");
+        } catch (err) {
+            tablePackError = String(err);
+            finishTablePackBusy();
+        }
+    }
+
+    /** @param {Event} event */
+    async function selectTablePack(event) {
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement) || !target.value) return;
+        const pack = tablePacks.find((p) => p.fingerprint_sha256 === target.value);
+        if (!pack) return;
+        tablePackSelectionFingerprint = pack.fingerprint_sha256;
+        await showTablePackBusy("Loading table pack...");
+        try {
+            let selected;
+            if (pack.builtin) {
+                selected = await core.invoke("short_message_reset_table_pack");
+            } else {
+                selected = await core.invoke("short_message_select_table_pack", {
+                    name: pack.name,
+                    version: pack.version,
+                    fingerprintSha256: pack.fingerprint_sha256,
+                });
+            }
+            if (selected && typeof selected === "object") {
+                setActivePackSummary(/** @type {TablePackSummary} */ (selected));
+            }
+            composeShortResult = null;
+            await prepareShortMessagePack();
+            refreshShortMessageAfterPackChange();
+            finishTablePackBusy("Table pack loaded.");
+        } catch (err) {
+            tablePackError = String(err);
+            tablePackSelectionFingerprint = activeTablePack?.active?.fingerprint_sha256 || "";
+            finishTablePackBusy();
+        }
+    }
+
+    async function resetTablePack() {
+        await showTablePackBusy("Loading official table pack...");
+        try {
+            const selected = await core.invoke("short_message_reset_table_pack");
+            if (selected && typeof selected === "object") {
+                setActivePackSummary(/** @type {TablePackSummary} */ (selected));
+            }
+            composeShortResult = null;
+            await prepareShortMessagePack();
+            refreshShortMessageAfterPackChange();
+            finishTablePackBusy("Official table pack loaded.");
+        } catch (err) {
+            tablePackError = String(err);
+            finishTablePackBusy();
+        }
+    }
+
+    async function deleteSelectedTablePack() {
+        const pack = selectedTablePack();
+        if (!pack || pack.builtin) return;
+        const confirmed = window.confirm(`Delete custom table pack "${pack.name}" v${pack.version}?`);
+        if (!confirmed) return;
+        await showTablePackBusy("Deleting table pack...");
+        try {
+            const selected = await core.invoke("short_message_delete_table_pack", {
+                name: pack.name,
+                version: pack.version,
+                fingerprintSha256: pack.fingerprint_sha256,
+            });
+            if (selected && typeof selected === "object") {
+                setActivePackSummary(/** @type {TablePackSummary} */ (selected));
+            }
+            composeShortResult = null;
+            await prepareShortMessagePack();
+            refreshShortMessageAfterPackChange();
+            finishTablePackBusy("Table pack deleted.");
+        } catch (err) {
+            tablePackError = String(err);
+            finishTablePackBusy();
+        }
+    }
+
+    /** @param {ComposeMode} mode */
+    function switchComposeMode(mode) {
+        composeMode = mode;
+        composeError = "";
+        if (mode === "cid") {
+            composeShortText = "";
+            composeShortResult = null;
+            composeShortEmojiOpen = false;
+            composeIpfsHash = "";
+            return;
+        }
+        composeIpfsHash = "";
+        ensureShortEmojis();
+        refreshActiveTablePack();
+    }
+
+    /** @param {string} emoji */
+    function insertShortEmoji(emoji) {
+        if (!emoji || composeBroadcasting || composeSent || composePreview) return;
+        const textarea = composeShortTextarea;
+        if (!textarea) {
+            composeShortText = `${composeShortText}${emoji}`;
+            queueEncodeShortMessage();
+            return;
+        }
+
+        const start = textarea.selectionStart ?? composeShortText.length;
+        const end = textarea.selectionEnd ?? composeShortText.length;
+        composeShortText =
+            composeShortText.slice(0, start) + emoji + composeShortText.slice(end);
+        queueEncodeShortMessage();
+        requestAnimationFrame(() => {
+            textarea.focus();
+            const next = start + emoji.length;
+            textarea.setSelectionRange(next, next);
+        });
+    }
+
+    /** @param {FocusEvent} event */
     function handleTextareaFocusOut(event) {
         const related = event.relatedTarget;
         const wrap = event.currentTarget;
-        if (!wrap.contains(related)) {
+        if (
+            wrap instanceof HTMLElement &&
+            (!(related instanceof Node) || !wrap.contains(related))
+        ) {
             composeShortFocused = false;
         }
     }
 
+    /** @param {MouseEvent} event */
+    function handleWindowClick(event) {
+        if (!composeShortEmojiOpen || !composeShortEmojiWrap) return;
+        const target = event.target instanceof Node ? event.target : null;
+        if (target && composeShortEmojiWrap.contains(target)) return;
+        composeShortEmojiOpen = false;
+    }
+
     // Short message decode cache for received messages
+    /** @type {Record<string, ShortMessageDecodeResult | undefined>} */
     let shortMessageCache = {};
+    /** @type {Set<string>} */
     let shortMessagePending = new Set();
 
     $: if (activeTab) {
@@ -82,6 +512,7 @@
         decodePendingShortMessages(filteredMessages);
     }
 
+    /** @param {AssetMessage[]} msgs */
     async function decodePendingShortMessages(msgs) {
         const toDecode = [];
         for (const msg of msgs) {
@@ -161,6 +592,7 @@
         cancelCompose();
     }
 
+    /** @param {string} name */
     function channelNamesForAsset(name) {
         if (!name) return [];
         const names = new Set([name]);
@@ -182,16 +614,21 @@
         messagesLoading = true;
         messagesError = "";
         try {
-            const [info, msgs, chans] = await Promise.all([
-                core.invoke("get_messaging_info"),
+            const info = await core.invoke("get_messaging_info");
+            messagesInfo = info;
+            if (!info.enabled) {
+                messages = [];
+                channels = [];
+                return;
+            }
+            const [msgs, chans] = await Promise.all([
                 core.invoke("view_asset_messages"),
                 core.invoke("view_message_channels"),
             ]);
-            messagesInfo = info;
             messages = msgs;
             channels = chans;
         } catch (err) {
-            messagesError = String(err);
+            messagesError = messageRpcError(err);
             messages = [];
             channels = [];
         } finally {
@@ -258,7 +695,7 @@
             }
             await loadMessages();
         } catch (err) {
-            messagesError = String(err);
+            messagesError = messageRpcError(err);
         }
     }
 
@@ -280,7 +717,7 @@
                 expireTime,
             });
         } catch (err) {
-            composeError = String(err);
+            composeError = messageRpcError(err);
         } finally {
             composePreviewing = false;
         }
@@ -310,12 +747,12 @@
                 action: { label: "Copy TXID", txid },
             });
         } catch (err) {
-            composeError = String(err);
+            composeError = messageRpcError(err);
             addNotification({
                 type: "message",
                 severity: "error",
                 title: "Announcement Failed",
-                body: String(err),
+                body: messageRpcError(err),
             });
         } finally {
             composeBroadcasting = false;
@@ -359,6 +796,8 @@
         return parsed;
     }
 </script>
+
+<svelte:window on:click={handleWindowClick} />
 
 {#if asset}
     {#snippet panelContent()}
@@ -591,13 +1030,13 @@
 									<button
 										class="mode-btn"
 										class:active={composeMode === "cid"}
-										on:click={() => { composeMode = "cid"; composeShortText = ""; composeShortResult = null; composeIpfsHash = ""; composeError = ""; }}
+										on:click={() => switchComposeMode("cid")}
 										disabled={composeBroadcasting || composeSent || !!composePreview}
 									>CID / Hash</button>
 									<button
 										class="mode-btn"
 										class:active={composeMode === "short"}
-										on:click={() => { composeMode = "short"; composeIpfsHash = ""; composeError = ""; }}
+										on:click={() => switchComposeMode("short")}
 										disabled={composeBroadcasting || composeSent || !!composePreview}
 									>Short Message</button>
 								</div>
@@ -625,6 +1064,7 @@
 													<p>The codec auto-selects the best fit from dictionary, raw, 5-bit, and 6-bit modes to compress short public updates as efficiently as possible.</p>
 													<p>Messages are public, permanent, and not encrypted. Commander restores a readable preview locally, but other wallets may only show the raw hex unless they support this format.</p>
 													<p>Text prediction uses the same dictionary families as the codec, so suggestions are biased toward phrases that compress well. For anything longer or richer than a short status/update, use Content Library and send a CID instead.</p>
+													<p>Active table pack: {activePackLabel()}{activePackFingerprintShort() ? ` (${activePackFingerprintShort()})` : ""}. Custom packs change local encode/decode tables only; both sender and receiver need the same pack to read custom-table messages correctly.</p>
 												</HelpHitbox>
 											</div>
 										<div class="short-textarea-wrap"
@@ -638,30 +1078,110 @@
 												on:input={queueEncodeShortMessage}
 												placeholder="Type a short message..."
 												rows="3"
-												disabled={composeBroadcasting || composeSent || !!composePreview}
+												disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
 											></textarea>
-											{#if autocompleteEnabled && !composeBroadcasting && !composeSent && !composePreview}
+											{#if autocompleteEnabled && !tablePackBusy && !composeBroadcasting && !composeSent && !composePreview}
 												<ShortMessageAutocomplete
 													text={composeShortText}
-													disabled={composeBroadcasting || composeSent || !!composePreview}
+													disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
 													targetElement={composeShortTextarea}
 													onAccept={handleShortSuggestion}
 													focused={composeShortFocused}
+													preferredDict={composeShortResult?.dictionary_index ?? null}
 												/>
 											{/if}
 										</div>
-										<label class="autocomplete-toggle">
-											<input type="checkbox" bind:checked={autocompleteEnabled} />
-											<span>Enable text prediction</span>
-										</label>
+										<div class="short-tools-row">
+											<label class="autocomplete-toggle">
+												<input type="checkbox" bind:checked={autocompleteEnabled} disabled={tablePackBusy} />
+												<span>Enable text prediction</span>
+											</label>
+											{#if composeShortEmojis.length > 0}
+												<div class="emoji-picker-wrap" bind:this={composeShortEmojiWrap}>
+													<button
+														class="emoji-toggle"
+														type="button"
+														aria-label="Open emoji picker"
+														title="Emoji picker"
+														on:click|stopPropagation={() => (composeShortEmojiOpen = !composeShortEmojiOpen)}
+														disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+													>
+														☺
+													</button>
+													{#if composeShortEmojiOpen}
+														<div class="short-emoji-picker">
+															{#each composeShortEmojis as emoji}
+																<button
+																	type="button"
+																	class="short-emoji-btn"
+																	on:click={() => insertShortEmoji(emoji)}
+																	disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+																>
+																	{emoji}
+																</button>
+															{/each}
+														</div>
+													{/if}
+												</div>
+											{/if}
+											{#if composeShortResult?.dictionary_name}
+												<span class="short-dict-chip">DICT {composeShortResult.dictionary_name}</span>
+											{/if}
+											<button class="table-pack-toggle" type="button" on:click={toggleTablePackPanel} disabled={tablePackBusy}>
+												TABLES
+											</button>
+										</div>
+										{#if tablePackPanelOpen}
+											<div class="table-pack-panel">
+												<div class="table-pack-head">
+													<span title={activePackStatusTitle()}>Active: {activePackLabel()}</span>
+													{#if activePackFingerprintShort()}
+														<span class="mono" title={activePackFingerprint()}>{activePackFingerprintShort()}</span>
+													{/if}
+												</div>
+												<div class="table-pack-controls">
+													<select
+														class="table-pack-select"
+														style="background-color: #020604; color: #9cffad;"
+														on:change={selectTablePack}
+														disabled={tablePackBusy}
+														value={tablePackSelectionFingerprint}
+													>
+														{#each tablePacks as pack}
+															<option value={pack.fingerprint_sha256}>
+																{tablePackLabel(pack)}
+															</option>
+														{/each}
+													</select>
+													<button type="button" on:click={exportOfficialTablePack} disabled={tablePackBusy}>EXPORT OFFICIAL</button>
+													<button type="button" on:click={importTablePack} disabled={tablePackBusy}>IMPORT PACK</button>
+													<button type="button" on:click={resetTablePack} disabled={tablePackBusy}>USE OFFICIAL</button>
+													<button
+														type="button"
+														class="danger-action"
+														on:click={deleteSelectedTablePack}
+														disabled={tablePackBusy || !selectedTablePack() || selectedTablePack()?.builtin}
+													>DELETE</button>
+												</div>
+												<div class="table-pack-note">
+													Export the official JSON, edit it, then import it as a custom pack. Token 255 must stay empty in every dictionary.
+												</div>
+												{#if tablePackStatus}
+													<div class="table-pack-status" class:busy={tablePackBusy}>{tablePackStatus}</div>
+												{/if}
+												{#if tablePackError}
+													<div class="table-pack-error">{tablePackError}</div>
+												{/if}
+											</div>
+										{/if}
 										{#if composeShortEncoding}
 											<div class="short-msg-status">Encoding...</div>
 										{:else if composeShortResult}
 											<div class="short-msg-status" class:fits={composeShortResult.fits} class:no-fits={!composeShortResult.fits}>
 												{#if composeShortResult.fits}
-													✓ Fits ({composeShortResult.encoded_payload_len} / 29 bytes used)
+													✓ Fits ({composeShortResult.encoded_payload_len} / 27 bytes used)
 												{:else}
-													✗ Does not fit ({composeShortResult.encoded_payload_len} / 29 bytes)
+													✗ Does not fit ({composeShortResult.encoded_payload_len} / 27 bytes)
 												{/if}
 											</div>
 											{#if composeShortResult.warnings.length > 0}
@@ -793,7 +1313,11 @@
 
 							{#if messagesInfo && !messagesInfo.enabled}
 								<div class="messages-status warn">
-									Messaging is disabled on this node. Enable it by removing -disablemessaging or waiting for BIP9 activation.
+									{#if messagesInfo.warnings.length > 0}
+										{messagesInfo.warnings[0]}
+									{:else}
+										Messaging is disabled on this node. Enable it by removing -disablemessaging or waiting for BIP9 activation.
+									{/if}
 								</div>
 							{/if}
 
@@ -1496,6 +2020,230 @@
     .short-msg-status:not(.fits):not(.no-fits) {
         color: #888;
         font-style: italic;
+    }
+    .short-tools-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.1rem;
+    }
+    .emoji-picker-wrap {
+        position: relative;
+        display: inline-flex;
+    }
+    .emoji-toggle {
+        width: 1.75rem;
+        height: 1.55rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 5px;
+        color: var(--color-primary);
+        cursor: pointer;
+        font-size: 0.88rem;
+        font-weight: 600;
+        padding: 0;
+        transition: all 0.15s;
+    }
+    .emoji-toggle:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: rgba(0, 255, 65, 0.35);
+    }
+    .emoji-toggle:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+    }
+    .short-dict-chip {
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 999px;
+        color: #8cff9f;
+        font-family: var(--font-mono);
+        font-size: 0.5rem;
+        letter-spacing: 0.5px;
+        padding: 0.16rem 0.42rem;
+    }
+    .table-pack-toggle {
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        background: rgba(0, 255, 65, 0.04);
+        color: #8cff9f;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.5rem;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        padding: 0.22rem 0.5rem;
+    }
+    .table-pack-toggle:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.32);
+    }
+    .table-pack-toggle:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+    .table-pack-panel {
+        border: 1px solid rgba(0, 255, 65, 0.14);
+        border-radius: 6px;
+        background: rgba(0, 255, 65, 0.035);
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        margin-top: 0.35rem;
+        padding: 0.55rem;
+    }
+    .table-pack-head {
+        align-items: center;
+        color: #b9ffd0;
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 0.68rem;
+        gap: 0.5rem;
+        justify-content: space-between;
+    }
+    .table-pack-controls {
+        display: grid;
+        gap: 0.35rem;
+        grid-template-columns: minmax(10rem, 0.8fr) repeat(4, auto);
+    }
+    .table-pack-controls select,
+    .table-pack-controls button {
+        background: rgba(0, 10, 4, 0.92);
+        background-color: rgba(0, 10, 4, 0.92);
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        color: #cfd8cf;
+        font-family: var(--font-mono);
+        font-size: 0.58rem;
+        min-height: 1.8rem;
+        padding: 0.25rem 0.45rem;
+    }
+    .table-pack-controls select,
+    .table-pack-select {
+        appearance: none;
+        -webkit-appearance: none;
+        background: #020604 !important;
+        background-color: #020604 !important;
+        color: #9cffad !important;
+        color-scheme: dark;
+        max-width: 23rem;
+        padding-right: 1.6rem;
+    }
+    .table-pack-controls select option,
+    .table-pack-select option {
+        background: #020604;
+        color: #d8f7dd;
+    }
+    .table-pack-controls button {
+        color: var(--color-primary);
+        cursor: pointer;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+    }
+    .table-pack-controls button:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.1);
+    }
+    .table-pack-controls button.danger-action {
+        border-color: rgba(255, 84, 84, 0.32);
+        color: #ff8080;
+    }
+    .table-pack-controls button.danger-action:hover:not(:disabled) {
+        background: rgba(255, 84, 84, 0.1);
+    }
+    .table-pack-controls button:disabled,
+    .table-pack-controls select:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+    .table-pack-note {
+        color: #8d968d;
+        font-size: 0.62rem;
+        line-height: 1.35;
+    }
+    .table-pack-status {
+        align-items: center;
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        color: #9cffad;
+        display: flex;
+        font-size: 0.62rem;
+        gap: 0.45rem;
+        margin-top: 0.35rem;
+        padding: 0.35rem 0.45rem;
+    }
+    .table-pack-status.busy::before {
+        animation: table-pack-spin 0.8s linear infinite;
+        border: 2px solid rgba(0, 255, 65, 0.18);
+        border-top-color: var(--color-primary);
+        border-radius: 999px;
+        content: "";
+        display: inline-block;
+        flex: 0 0 auto;
+        height: 0.75rem;
+        width: 0.75rem;
+    }
+    @keyframes table-pack-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+    .table-pack-error {
+        border: 1px solid rgba(255, 80, 80, 0.25);
+        border-radius: 5px;
+        color: #ff8a8a;
+        font-size: 0.62rem;
+        padding: 0.35rem 0.45rem;
+    }
+    @media (max-width: 880px) {
+        .table-pack-controls {
+            grid-template-columns: 1fr;
+        }
+    }
+    .short-emoji-picker {
+        position: absolute;
+        left: 0;
+        top: calc(100% + 0.35rem);
+        z-index: 30;
+        width: min(18rem, 70vw);
+        max-height: 9.5rem;
+        overflow-y: auto;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+        background: rgba(8, 12, 10, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 6px;
+        padding: 0.35rem;
+        box-shadow:
+            0 10px 28px rgba(0, 0, 0, 0.65),
+            0 0 0 1px rgba(0, 255, 65, 0.08);
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
+    }
+    .short-emoji-btn {
+        width: 1.9rem;
+        height: 1.8rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 1rem;
+        line-height: 1;
+        transition: all 0.12s;
+    }
+    .short-emoji-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: rgba(0, 255, 65, 0.35);
+    }
+    .short-emoji-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
     }
     .short-msg-warnings {
         display: flex;

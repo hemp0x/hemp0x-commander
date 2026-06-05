@@ -3887,10 +3887,63 @@ fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
   }
 }
 
+fn is_method_not_found(err: &str) -> bool {
+  err.contains("-32601") || err.to_lowercase().contains("method not found")
+}
+
+fn legacy_messaging_info() -> Result<MessagingInfo, String> {
+  let messages_raw = run_cli(&[String::from("viewallmessages")]);
+  let channels_raw = run_cli(&[String::from("viewallmessagechannels")]);
+
+  match (messages_raw, channels_raw) {
+    (Ok(messages_raw), Ok(channels_raw)) => {
+      let messages_value: serde_json::Value = serde_json::from_str(&messages_raw).map_err(|e| e.to_string())?;
+      let channels_value: serde_json::Value = serde_json::from_str(&channels_raw).map_err(|e| e.to_string())?;
+      let message_count = messages_value.as_array().map(|arr| arr.len() as i64).unwrap_or(0);
+      let channel_count = parse_channel_name_list(&channels_value).len() as i64;
+      Ok(MessagingInfo {
+        enabled: true,
+        messaging_active: true,
+        restricted_active: true,
+        activation_block: 0,
+        databases_available: true,
+        caches_available: true,
+        message_count,
+        channel_count,
+        dirty_cache_size_bytes: 0,
+        wallet_available: true,
+        warnings: vec!["This Core build exposes legacy asset messaging RPCs but does not expose getmessaginginfo. Commander will use the legacy message commands.".to_string()],
+      })
+    }
+    (Err(messages_err), Err(channels_err))
+      if is_method_not_found(&messages_err) && is_method_not_found(&channels_err) =>
+    {
+      Ok(MessagingInfo {
+        enabled: false,
+        messaging_active: false,
+        restricted_active: false,
+        activation_block: 0,
+        databases_available: false,
+        caches_available: false,
+        message_count: 0,
+        channel_count: 0,
+        dirty_cache_size_bytes: 0,
+        wallet_available: false,
+        warnings: vec!["This Core build does not expose asset messaging RPCs. Start a messaging-capable Hemp0x Core build, then refresh Commander.".to_string()],
+      })
+    }
+    (Err(err), _) | (_, Err(err)) => Err(err),
+  }
+}
+
 #[tauri::command]
 pub fn get_messaging_info() -> Result<MessagingInfo, String> {
   ensure_config()?;
-  let raw = run_cli(&[String::from("getmessaginginfo")])?;
+  let raw = match run_cli(&[String::from("getmessaginginfo")]) {
+    Ok(raw) => raw,
+    Err(err) if is_method_not_found(&err) => return legacy_messaging_info(),
+    Err(err) => return Err(err),
+  };
   let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
   Ok(parse_messaging_info(&value))
 }

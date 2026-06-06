@@ -7,7 +7,7 @@ export const searchQuery = writable("");
 export const statusFilter = writable("all");
 export const currentFolder = writable(null); // null = root, '' = unsorted, 'name' = folder
 export const ipfsHubSection = writable("library");
-export const cidViewerTarget = writable(null);
+export const cidViewerTarget = writable(/** @type {string | null} */ (null));
 export const packageSortMode = writable("updated-desc"); // alpha-asc, alpha-desc, updated-newest, updated-oldest
 
 export function sortByUpdatedDesc(packages) {

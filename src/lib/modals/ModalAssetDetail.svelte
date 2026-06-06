@@ -33,7 +33,7 @@
      *   has_ipfs?: boolean;
      *   ipfs_hash?: string;
      * }} AssetMetadata
-     * @typedef {{ enabled?: boolean }} MessagesInfo
+     * @typedef {{ enabled?: boolean, warnings?: string[] }} MessagesInfo
      * @typedef {{
      *   asset_name: string;
      *   message: string;
@@ -52,6 +52,7 @@
      * @typedef {{
      *   is_short_message?: boolean;
      *   text?: string;
+     *   warnings?: string[];
      * }} ShortMessageDecodeResult
      * @typedef {{
      *   fits: boolean;
@@ -99,7 +100,6 @@
     let composeError = "";
     let composePreviewing = false;
     let composeBroadcasting = false;
-    let composeSent = false;
     let showMessageUnlockModal = false;
     let messageUnlockPassword = "";
     let messageUnlocking = false;
@@ -278,6 +278,7 @@
         }, 0);
     }
 
+    /** @param {unknown} err */
     function messageRpcError(err) {
         const text = String(err);
         if (text.includes("-32601") || /method not found/i.test(text)) {
@@ -301,6 +302,7 @@
         return text;
     }
 
+    /** @param {unknown} err */
     function isWalletUnlockError(err) {
         const text = String(err || "");
         const lower = text.toLowerCase();
@@ -516,7 +518,7 @@
 
     /** @param {string} emoji */
     function insertShortEmoji(emoji) {
-        if (!emoji || composeBroadcasting || composeSent || composePreview) return;
+        if (!emoji || composeBroadcasting || composePreview) return;
         const textarea = composeShortTextarea;
         if (!textarea) {
             composeShortText = `${composeShortText}${emoji}`;
@@ -610,7 +612,10 @@
     }
     loadMessageLocalState();
 
-    /** @param {string} key @param {Set<string>} ids */
+    /**
+     * @param {string} key
+     * @param {Set<string>} ids
+     */
     function saveMessageIdSet(key, ids) {
         try {
             localStorage.setItem(key, JSON.stringify(Array.from(ids)));
@@ -751,6 +756,7 @@
         selectedMessageIds = new Set();
     }
 
+    /** @param {AssetMessage} msg */
     function openMessageDetail(msg) {
         selectedMessage = msg;
         markMessageRead(msg);
@@ -779,6 +785,7 @@
         pendingConfirmAction = null;
     }
 
+    /** @param {string|number|null|undefined} isoLike */
     function formatMessageTime(isoLike) {
         if (!isoLike) return "";
         let d = new Date(isoLike);
@@ -797,6 +804,7 @@
         });
     }
 
+    /** @param {string|number|null|undefined} isoLike */
     function formatExpireTime(isoLike) {
         if (!isoLike) return "";
         let d = new Date(isoLike);
@@ -850,6 +858,7 @@
         });
     })();
 
+    /** @param {Event} event */
     async function selectInboxTablePack(event) {
         const target = event.target;
         if (!(target instanceof HTMLSelectElement) || !target.value) return;
@@ -991,6 +1000,7 @@
         messagesInfo = null;
         messagesError = "";
         selectedMessage = null;
+        selectedMessageIds = new Set();
         messageExplorerMode = false;
         cancelCompose();
     }
@@ -1107,6 +1117,7 @@
     }
 
     async function previewAnnouncement() {
+        if (!asset) return;
         if (composeMode === "short") {
             if (!composeShortResult?.fits) {
                 composeError = "Short message does not fit. Edit the message to make it shorter.";
@@ -1139,7 +1150,7 @@
     }
 
     async function broadcastAnnouncement() {
-        if (!composePreview) return;
+        if (!asset || !composePreview) return;
         if (composeMode === "short" && !composeShortResult?.fits) {
             composeError = "Short message does not fit. Edit the message to make it shorter.";
             return;
@@ -1177,7 +1188,6 @@
             } catch (journalErr) {
                 console.warn("Failed to record asset message journal entry:", journalErr);
             }
-            composeSent = false;
             composeOpen = false;
             composePreview = null;
             composeIpfsHash = "";
@@ -1238,7 +1248,6 @@
         composeError = "";
         composeIpfsHash = "";
         clearComposeExpire();
-        composeSent = false;
         showMessageUnlockModal = false;
         messageUnlockPassword = "";
         messageUnlockError = "";
@@ -1418,7 +1427,7 @@
                 <div class="detail-stat">
                     <div class="stat-label">YOUR BALANCE</div>
                     <div class="stat-value neon-text">
-                        {formatBalance(asset.balance)}
+                        {formatBalance(asset.balance ?? 0)}
                     </div>
                 </div>
                 <div class="detail-stat">
@@ -1478,7 +1487,7 @@
                                                 on:keydown={(e) =>
                                                     e.key === "Enter" &&
                                                     (showAlert = true)}
-                                            >{metadata.amount.toLocaleString()}</span>
+                                            >{metadata.amount?.toLocaleString() ?? "--"}</span>
                                         </Tooltip>
                                     </div>
                                     <div class="meta-row">
@@ -1489,7 +1498,7 @@
                                     </div>
                                     <div class="meta-row">
                                         <span class="meta-label">CREATED AT BLOCK</span>
-                                        <span class="meta-value">{metadata.block_height.toLocaleString()}</span>
+                                        <span class="meta-value">{metadata.block_height?.toLocaleString() ?? "--"}</span>
                                     </div>
                                 </div>
 
@@ -1600,13 +1609,13 @@
 										class="mode-btn"
 										class:active={composeMode === "cid"}
 										on:click={() => switchComposeMode("cid")}
-										disabled={composeBroadcasting || composeSent || !!composePreview}
+										disabled={composeBroadcasting || !!composePreview}
 									>CID / Hash</button>
 									<button
 										class="mode-btn"
 										class:active={composeMode === "short"}
 										on:click={() => switchComposeMode("short")}
-										disabled={composeBroadcasting || composeSent || !!composePreview}
+										disabled={composeBroadcasting || !!composePreview}
 									>Short Message</button>
 								</div>
 
@@ -1619,7 +1628,7 @@
 												<p>Create content in Content Library, then publish or link it before selecting that CID here.</p>
 											</HelpHitbox>
 										</div>
-										<IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || composeSent || !!composePreview} />
+										<IpfsHashField id="compose-ipfs" bind:value={composeIpfsHash} disabled={composeBroadcasting || !!composePreview} />
 										<button class="compose-library-link" type="button" on:click={openContentLibrary}>
 											Go to Content Library
 										</button>
@@ -1647,12 +1656,12 @@
 												on:input={queueEncodeShortMessage}
 												placeholder="Type a short message..."
 												rows="3"
-												disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+												disabled={tablePackBusy || composeBroadcasting || !!composePreview}
 											></textarea>
-											{#if autocompleteEnabled && !tablePackBusy && !composeBroadcasting && !composeSent && !composePreview}
+											{#if autocompleteEnabled && !tablePackBusy && !composeBroadcasting && !composePreview}
 												<ShortMessageAutocomplete
 													text={composeShortText}
-													disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+													disabled={tablePackBusy || composeBroadcasting || !!composePreview}
 													targetElement={composeShortTextarea}
 													onAccept={handleShortSuggestion}
 													focused={composeShortFocused}
@@ -1673,7 +1682,7 @@
 														aria-label="Open emoji picker"
 														title="Emoji picker"
 														on:click|stopPropagation={() => (composeShortEmojiOpen = !composeShortEmojiOpen)}
-														disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+														disabled={tablePackBusy || composeBroadcasting || !!composePreview}
 													>
 														☺
 													</button>
@@ -1684,7 +1693,7 @@
 																	type="button"
 																	class="short-emoji-btn"
 																	on:click={() => insertShortEmoji(emoji)}
-																	disabled={tablePackBusy || composeBroadcasting || composeSent || !!composePreview}
+																	disabled={tablePackBusy || composeBroadcasting || !!composePreview}
 																>
 																	{emoji}
 																</button>
@@ -1807,7 +1816,7 @@
 												}
 											}}
 											placeholder="mm/dd/yyyy"
-											disabled={composeBroadcasting || composeSent || !!composePreview}
+											disabled={composeBroadcasting || !!composePreview}
 											aria-label="Expire date"
 										/>
 										<input
@@ -1823,13 +1832,13 @@
 												}
 											}}
 											placeholder="HH:MM"
-											disabled={composeBroadcasting || composeSent || !!composePreview}
+											disabled={composeBroadcasting || !!composePreview}
 											aria-label="Expire time"
 										/>
-										<button type="button" on:click={() => setComposeExpireOffset(86400)} disabled={composeBroadcasting || composeSent || !!composePreview}>+1D</button>
-										<button type="button" on:click={() => setComposeExpireOffset(604800)} disabled={composeBroadcasting || composeSent || !!composePreview}>+7D</button>
-										<button type="button" on:click={() => setComposeExpireOffset(2592000)} disabled={composeBroadcasting || composeSent || !!composePreview}>+30D</button>
-										<button type="button" on:click={clearComposeExpire} disabled={composeBroadcasting || composeSent || !!composePreview || (!composeExpireDateInput && !composeExpireTimeInput)}>CLEAR</button>
+										<button type="button" on:click={() => setComposeExpireOffset(86400)} disabled={composeBroadcasting || !!composePreview}>+1D</button>
+										<button type="button" on:click={() => setComposeExpireOffset(604800)} disabled={composeBroadcasting || !!composePreview}>+7D</button>
+										<button type="button" on:click={() => setComposeExpireOffset(2592000)} disabled={composeBroadcasting || !!composePreview}>+30D</button>
+										<button type="button" on:click={clearComposeExpire} disabled={composeBroadcasting || !!composePreview || (!composeExpireDateInput && !composeExpireTimeInput)}>CLEAR</button>
 									</div>
                                     <div class="expire-note" class:has-expiry={composeExpireTime}>
                                         {#if composeExpireTime}
@@ -1867,9 +1876,9 @@
 											<span>Expires:</span> {composePreview.expire_time}
 										</div>
 									{/if}
-									{#if composePreview.warnings.length > 0}
+									{#if (composePreview.warnings || []).length > 0}
 											<div class="preview-warnings">
-												{#each composePreview.warnings as w}
+												{#each composePreview.warnings || [] as w}
 													<div class="preview-warning">⚠ {w}</div>
 												{/each}
 											</div>
@@ -1877,12 +1886,8 @@
 									</div>
 								{/if}
 
-								{#if composeSent}
-									<div class="compose-sent">Announcement broadcast!</div>
-								{/if}
-
 								<div class="compose-actions">
-									{#if !composePreview && !composeSent}
+									{#if !composePreview}
 										<button
 											class="action-btn primary"
 											on:click={previewAnnouncement}
@@ -1890,7 +1895,7 @@
 										>
 											{composePreviewing ? "PREVIEWING..." : "PREVIEW"}
 										</button>
-									{:else if composePreview && !composeSent}
+									{:else}
 										<button
 											class="action-btn primary"
 											on:click={broadcastAnnouncement}
@@ -1900,10 +1905,6 @@
 										</button>
 										<button class="action-btn" on:click={cancelComposePreview}>
 											CANCEL
-										</button>
-									{:else if composeSent}
-										<button class="action-btn" on:click={cancelCompose}>
-											CLOSE
 										</button>
 									{/if}
 								</div>
@@ -2047,9 +2048,10 @@
 							{/if}
 
 							{#if messagesInfo && !messagesInfo.enabled}
+								{@const messagingWarnings = messagesInfo.warnings || []}
 								<div class="messages-status warn">
-									{#if messagesInfo.warnings.length > 0}
-										{messagesInfo.warnings[0]}
+									{#if messagingWarnings.length > 0}
+										{messagingWarnings[0]}
 									{:else}
 										Messaging is disabled on this node. Enable it by removing -disablemessaging or waiting for BIP9 activation.
 									{/if}
@@ -2099,7 +2101,7 @@
 													<div class="message-row-preview">
 														{#if row.decoded}
 															<span class="row-short-badge">SHORT</span>
-															<span class="row-short-text">{row.sm.text}</span>
+															<span class="row-short-text">{row.sm?.text}</span>
 														{:else if row.msg.message.length > 12}
 															<span class="row-hash">{row.msg.message.slice(0, 8)}...{row.msg.message.slice(-8)}</span>
 														{:else}
@@ -2108,11 +2110,11 @@
 													</div>
 												</div>
 												<div class="message-row-right">
-													<div class="message-row-time" title={row.msg.time}>{formatMessageTime(row.msg.time)}</div>
+													<div class="message-row-time" title={String(row.msg.time ?? "")}>{formatMessageTime(row.msg.time)}</div>
 													<div class="message-row-meta">
 														<span class="row-block">#{row.msg.block_height}</span>
 														{#if row.msg.expire_time}
-															<span class="row-expire" title={row.msg.expire_time}>{formatExpireTime(row.msg.expire_time)}</span>
+															<span class="row-expire" title={String(row.msg.expire_time)}>{formatExpireTime(row.msg.expire_time)}</span>
 														{/if}
 													</div>
 												</div>
@@ -2218,10 +2220,10 @@
 											<div class="detail-divider"></div>
 
 										<div class="detail-actions-row">
-											<button class="action-btn" on:click={() => { togglePin(selectedMessage); }}>
-												{isPinned(selectedMessage) ? "★ Unpin" : "☆ Pin"}
+											<button class="action-btn" on:click={() => { if (selectedMessage) togglePin(selectedMessage); }}>
+												{selectedMessage && isPinned(selectedMessage) ? "★ Unpin" : "☆ Pin"}
 											</button>
-											<button class="action-btn" on:click={() => { markMessageUnread(selectedMessage); closeMessageDetail(); }}>
+											<button class="action-btn" on:click={() => { if (selectedMessage) markMessageUnread(selectedMessage); closeMessageDetail(); }}>
 												Mark Unread
 											</button>
 											<button class="action-btn" on:click={closeMessageDetail}>
@@ -3742,12 +3744,6 @@
         font-size: 0.5rem;
         color: #ffaa00;
     }
-    .compose-sent {
-        font-size: 0.65rem;
-        color: var(--color-primary);
-        text-align: center;
-        padding: 0.5rem;
-    }
     .message-unlock-overlay {
         position: fixed;
         inset: 0;
@@ -3970,23 +3966,6 @@
         position: relative;
         display: flex;
         flex-direction: column;
-    }
-    .autocomplete-toggle {
-        display: flex;
-        align-items: center;
-        gap: 0.35rem;
-        font-size: 0.6rem;
-        color: #666;
-        margin-top: 0.15rem;
-        cursor: pointer;
-        letter-spacing: 0.3px;
-        user-select: none;
-    }
-    .autocomplete-toggle input {
-        accent-color: var(--color-primary);
-        width: 0.7rem;
-        height: 0.7rem;
-        cursor: pointer;
     }
     @media (max-width: 760px) {
         .expire-control-row {

@@ -1706,6 +1706,9 @@ mod tests {
 
     #[test]
     fn custom_pack_roundtrips_custom_phrase() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let _pack = install_custom_pack(
             "Hemp0x-Test-Pack",
             "1.0",
@@ -1729,6 +1732,9 @@ mod tests {
 
     #[test]
     fn reset_returns_to_built_in_pack() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
         let _pack = install_custom_pack("Temp-Pack", "1.0", &[" ", "alpha ", "beta "]);
 
         let active_before = crate::modules::short_message_table_packs::active_table_pack_summary();

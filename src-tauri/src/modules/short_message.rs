@@ -264,8 +264,8 @@ fn collapse(text: &str) -> String {
     out.trim().to_string()
 }
 
-fn should_extend_word(ch: char, prev_was_alpha: bool) -> bool {
-    ch.is_alphabetic() || (ch == '\'' && prev_was_alpha)
+fn should_extend_word(ch: char, prev_was_word: bool) -> bool {
+    ch.is_alphanumeric() || (ch == '\'' && prev_was_word)
 }
 
 fn capitalize_word(word: &str) -> String {
@@ -286,6 +286,8 @@ fn render_word(word: &str, sentence_start: bool) -> String {
         let mut chars = lower.chars();
         let _ = chars.next();
         format!("I{}", chars.as_str())
+    } else if lower == "hemp0x" {
+        lower
     } else if current_runtime().acronym_set.contains(&lower) {
         lower.to_uppercase()
     } else if sentence_start {
@@ -314,12 +316,12 @@ fn restore_case(raw: &str) -> String {
     let mut word = String::new();
     let mut sentence_start = true;
 
-    let mut prev_was_alpha = false;
+    let mut prev_was_word = false;
 
     for ch in raw.chars() {
-        if should_extend_word(ch, prev_was_alpha) {
+        if should_extend_word(ch, prev_was_word) {
             word.push(ch);
-            prev_was_alpha = ch.is_alphabetic();
+            prev_was_word = ch.is_alphanumeric();
             continue;
         }
 
@@ -329,7 +331,7 @@ fn restore_case(raw: &str) -> String {
         if is_sentence_boundary(ch) {
             sentence_start = true;
         }
-        prev_was_alpha = false;
+        prev_was_word = false;
     }
 
     let _ = flush_word(&mut word, sentence_start, &mut out);
@@ -1226,6 +1228,12 @@ mod tests {
         assert_eq!(
             dec.text.as_deref(),
             Some("Payment sent. Check CID and IPFS.")
+        );
+
+        let dec = decode_frame("this is a test of the hemp0x on chain message system.");
+        assert_eq!(
+            dec.text.as_deref(),
+            Some("This is a test of the hemp0x on chain message system.")
         );
     }
 

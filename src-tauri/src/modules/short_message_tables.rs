@@ -376,7 +376,7 @@ pub const DICT_H: [&str; 256] = [
     "txid ", "unlock ", "until ", "updat ", "upgrade ", "us ", "use ", "valid ",
     "verify ", "version ", "wallet ", "wallet address ", "want ", "we ", "web ", "week ",
     "when ", "where ", "which ", "while ", "why ", "will ", "with ", "withdraw ",
-    "without ", "work ", "ecosystem ", "would ", "yes ", "you ", "your ", "",
+    "without ", "work ", "system ", "would ", "yes ", "you ", "your ", "",
 ];
 
 #[rustfmt::skip]

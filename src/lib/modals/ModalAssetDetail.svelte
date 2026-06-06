@@ -92,12 +92,18 @@
     let composeOpen = false;
     let composeIpfsHash = "";
     let composeExpireTime = "";
+    let composeExpireDateInput = "";
+    let composeExpireTimeInput = "";
     /** @type {ComposePreview | null} */
     let composePreview = null;
     let composeError = "";
     let composePreviewing = false;
     let composeBroadcasting = false;
     let composeSent = false;
+    let showMessageUnlockModal = false;
+    let messageUnlockPassword = "";
+    let messageUnlocking = false;
+    let messageUnlockError = "";
     let currentAssetName = "";
 
     // Short message compose state
@@ -146,6 +152,7 @@
     let tablePackError = "";
     let tablePackStatus = "";
     let tablePackSelectionFingerprint = "";
+    let preparedTablePackFingerprint = "";
     /** @type {ReturnType<typeof setTimeout> | null} */
     let tablePackStatusTimer = null;
 
@@ -202,6 +209,7 @@
             active: pack,
         };
         tablePackSelectionFingerprint = pack.fingerprint_sha256;
+        preparedTablePackFingerprint = "";
         tablePacks = tablePacks.map((item) => ({
             ...item,
             active: item.fingerprint_sha256 === pack.fingerprint_sha256,
@@ -250,9 +258,18 @@
             await core.invoke("short_message_prepare_active_table_pack");
             const emojis = await core.invoke("short_message_emojis");
             composeShortEmojis = Array.isArray(emojis) ? emojis : [];
+            preparedTablePackFingerprint = activePackFingerprint();
         } catch (err) {
             // The next encode/suggestion request will surface any real issue.
         }
+    }
+
+    async function ensureShortMessagePackPrepared() {
+        const activeFingerprint = activePackFingerprint();
+        if (tablePackBusy || (activeFingerprint && preparedTablePackFingerprint === activeFingerprint)) return;
+        await showTablePackBusy("Preparing text prediction...");
+        await prepareShortMessagePack();
+        finishTablePackBusy();
     }
 
     function refreshShortMessageAfterPackChange() {
@@ -282,6 +299,23 @@
             return text;
         }
         return text;
+    }
+
+    function isWalletUnlockError(err) {
+        const text = String(err || "");
+        const lower = text.toLowerCase();
+        return text.includes("ERROR CODE: -13")
+            || lower.includes("walletpassphrase")
+            || lower.includes("wallet passphrase")
+            || lower.includes("please enter the wallet passphrase")
+            || /wallet.*locked|passphrase|unlock/i.test(text);
+    }
+
+    function requestMessageWalletUnlock() {
+        messageUnlockPassword = "";
+        messageUnlockError = "";
+        showMessageUnlockModal = true;
+        composeError = "Wallet unlock required before broadcasting this message.";
     }
 
     /** @param {string} suggestion */
@@ -456,7 +490,7 @@
     }
 
     /** @param {ComposeMode} mode */
-    function switchComposeMode(mode) {
+    async function switchComposeMode(mode) {
         composeMode = mode;
         composeError = "";
         if (mode === "cid") {
@@ -467,8 +501,17 @@
             return;
         }
         composeIpfsHash = "";
-        ensureShortEmojis();
-        refreshActiveTablePack();
+        await refreshActiveTablePack();
+        await ensureShortMessagePackPrepared();
+        refreshShortMessageAfterPackChange();
+    }
+
+    async function openCompose() {
+        composeOpen = true;
+        await tick();
+        if (composeMode === "short") {
+            await ensureShortMessagePackPrepared();
+        }
     }
 
     /** @param {string} emoji */
@@ -507,10 +550,10 @@
 
     /** @param {MouseEvent} event */
     function handleWindowClick(event) {
-        if (!composeShortEmojiOpen || !composeShortEmojiWrap) return;
         const target = event.target instanceof Node ? event.target : null;
-        if (target && composeShortEmojiWrap.contains(target)) return;
-        composeShortEmojiOpen = false;
+        if (composeShortEmojiOpen && composeShortEmojiWrap && (!target || !composeShortEmojiWrap.contains(target))) {
+            composeShortEmojiOpen = false;
+        }
     }
 
     // Short message decode cache for received messages
@@ -772,7 +815,7 @@
             composeSent = true;
             composePreview = null;
             composeIpfsHash = "";
-            composeExpireTime = "";
+            clearComposeExpire();
             addNotification({
                 type: "message",
                 severity: "success",
@@ -782,6 +825,10 @@
             });
             await loadMessages();
         } catch (err) {
+            if (isWalletUnlockError(err)) {
+                requestMessageWalletUnlock();
+                return;
+            }
             composeError = messageRpcError(err);
             addNotification({
                 type: "message",
@@ -794,13 +841,38 @@
         }
     }
 
+    async function unlockAndBroadcastAnnouncement() {
+        if (!messageUnlockPassword.trim() || messageUnlocking) return;
+        messageUnlocking = true;
+        messageUnlockError = "";
+        try {
+            await core.invoke("wallet_unlock", { password: messageUnlockPassword, duration: 300 });
+            messageUnlockPassword = "";
+            showMessageUnlockModal = false;
+            composeError = "";
+            await broadcastAnnouncement();
+        } catch (err) {
+            if (isWalletUnlockError(err)) {
+                messageUnlockError = "Wallet unlock failed. Check the passphrase and try again.";
+                showMessageUnlockModal = true;
+            } else {
+                messageUnlockError = messageRpcError(err);
+            }
+        } finally {
+            messageUnlocking = false;
+        }
+    }
+
     function cancelCompose() {
         composeOpen = false;
         composePreview = null;
         composeError = "";
         composeIpfsHash = "";
-        composeExpireTime = "";
+        clearComposeExpire();
         composeSent = false;
+        showMessageUnlockModal = false;
+        messageUnlockPassword = "";
+        messageUnlockError = "";
         composeMode = "cid";
         composeShortText = "";
         composeShortResult = null;
@@ -809,6 +881,98 @@
             clearTimeout(composeShortDebounce);
             composeShortDebounce = null;
         }
+    }
+
+    function cancelComposePreview() {
+        composePreview = null;
+        composeError = "";
+    }
+
+    /** @param {Date} date */
+    function formatDateMMDDYYYY(date) {
+        const pad = (/** @type {number} */ n) => String(n).padStart(2, "0");
+        return `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()}`;
+    }
+
+    /** @param {Date} date */
+    function formatTimeHHMM(date) {
+        const pad = (/** @type {number} */ n) => String(n).padStart(2, "0");
+        return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    /** @param {string} str */
+    function parseMMDDYYYY(str) {
+        const parts = str.trim().split("/");
+        if (parts.length !== 3) return null;
+        const month = parseInt(parts[0], 10) - 1;
+        const day = parseInt(parts[1], 10);
+        const year = parseInt(parts[2], 10);
+        const date = new Date(year, month, day);
+        if (isNaN(date.getTime())) return null;
+        if (date.getMonth() !== month || date.getDate() !== day || date.getFullYear() !== year) return null;
+        return date;
+    }
+
+    /** @param {string} str */
+    function parseHHMM(str) {
+        const parts = str.trim().split(":");
+        if (parts.length !== 2) return null;
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || !Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+        return { hours, minutes };
+    }
+
+    function validateExpireInputs() {
+        const dateStr = composeExpireDateInput.trim();
+        const timeStr = composeExpireTimeInput.trim();
+        if (!dateStr && !timeStr) {
+            composeExpireTime = "";
+            composeError = "";
+            return;
+        }
+        if (!dateStr) {
+            composeExpireTime = "";
+            composeError = "Date is required. Use mm/dd/yyyy.";
+            return;
+        }
+        const date = parseMMDDYYYY(dateStr);
+        if (!date) {
+            composeExpireTime = "";
+            composeError = "Invalid date. Use mm/dd/yyyy.";
+            return;
+        }
+        const time = parseHHMM(timeStr || "00:00");
+        if (!time) {
+            composeExpireTime = "";
+            composeError = "Invalid time. Use HH:MM (24h).";
+            return;
+        }
+        date.setHours(time.hours, time.minutes, 0, 0);
+        const ms = date.getTime();
+        const now = Date.now();
+        if (!Number.isFinite(ms) || ms <= now) {
+            composeExpireTime = "";
+            composeError = "Expire time must be in the future.";
+            return;
+        }
+        composeExpireTime = String(Math.floor(ms / 1000));
+        composeError = "";
+    }
+
+    /** @param {number} seconds */
+    function setComposeExpireOffset(seconds) {
+        const date = new Date(Date.now() + seconds * 1000);
+        composeExpireDateInput = formatDateMMDDYYYY(date);
+        composeExpireTimeInput = formatTimeHHMM(date);
+        validateExpireInputs();
+    }
+
+    function clearComposeExpire() {
+        composeExpireDateInput = "";
+        composeExpireTimeInput = "";
+        composeExpireTime = "";
+        composeError = "";
     }
 
     function openContentLibrary() {
@@ -820,12 +984,13 @@
         const raw = composeExpireTime.trim();
         if (!raw) return null;
         if (!/^\d+$/.test(raw)) {
-            composeError = "Expire time must be a positive UTC timestamp.";
+            composeError = "Expire time must be a valid future date and time.";
             return undefined;
         }
         const parsed = Number(raw);
-        if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-            composeError = "Expire time must be a positive UTC timestamp.";
+        const now = Math.floor(Date.now() / 1000);
+        if (!Number.isSafeInteger(parsed) || parsed <= now) {
+            composeError = "Expire time must be in the future.";
             return undefined;
         }
         return parsed;
@@ -1208,6 +1373,8 @@
 													<div class="table-pack-error">{tablePackError}</div>
 												{/if}
 											</div>
+										{:else if tablePackStatus}
+											<div class="table-pack-status standalone" class:busy={tablePackBusy}>{tablePackStatus}</div>
 										{/if}
 										{#if composeShortEncoding}
 											<div class="short-msg-status">Encoding...</div>
@@ -1248,14 +1415,60 @@
 								{/if}
 
 								<div class="compose-field">
-									<label for="compose-expire">Expire Time (UTC timestamp, optional)</label>
-									<input
-										id="compose-expire"
-										type="text"
-										bind:value={composeExpireTime}
-										placeholder="e.g. 1737500000"
-										disabled={composeBroadcasting || composeSent || !!composePreview}
-									/>
+									<div class="compose-label-row">
+										<label for="compose-expire-date">EXPIRES</label>
+										<HelpHitbox title="Message Expiry">
+											<p>Expiry is optional metadata stored with the on-chain message. It tells wallets the message should be treated as valid until that UTC time.</p>
+											<p>The transaction itself stays on-chain. Expiry does not delete the message from blockchain history.</p>
+											<p>Leave this blank for a normal persistent announcement. Use expiry for temporary notices such as short-term status, event, or service updates.</p>
+										</HelpHitbox>
+									</div>
+									<div class="expire-control-row">
+										<input
+											id="compose-expire-date"
+											class="expire-date-text"
+											type="text"
+											bind:value={composeExpireDateInput}
+											on:input={validateExpireInputs}
+											on:change={validateExpireInputs}
+											on:keydown={(e) => {
+												if (e.key === "Escape") {
+													e.stopPropagation();
+													e.currentTarget.blur();
+												}
+											}}
+											placeholder="mm/dd/yyyy"
+											disabled={composeBroadcasting || composeSent || !!composePreview}
+											aria-label="Expire date"
+										/>
+										<input
+											class="expire-time-text"
+											type="text"
+											bind:value={composeExpireTimeInput}
+											on:input={validateExpireInputs}
+											on:change={validateExpireInputs}
+											on:keydown={(e) => {
+												if (e.key === "Escape") {
+													e.stopPropagation();
+													e.currentTarget.blur();
+												}
+											}}
+											placeholder="HH:MM"
+											disabled={composeBroadcasting || composeSent || !!composePreview}
+											aria-label="Expire time"
+										/>
+										<button type="button" on:click={() => setComposeExpireOffset(86400)} disabled={composeBroadcasting || composeSent || !!composePreview}>+1D</button>
+										<button type="button" on:click={() => setComposeExpireOffset(604800)} disabled={composeBroadcasting || composeSent || !!composePreview}>+7D</button>
+										<button type="button" on:click={() => setComposeExpireOffset(2592000)} disabled={composeBroadcasting || composeSent || !!composePreview}>+30D</button>
+										<button type="button" on:click={clearComposeExpire} disabled={composeBroadcasting || composeSent || !!composePreview || (!composeExpireDateInput && !composeExpireTimeInput)}>CLEAR</button>
+									</div>
+                                    <div class="expire-note" class:has-expiry={composeExpireTime}>
+                                        {#if composeExpireTime}
+                                            Sends UTC timestamp {composeExpireTime}. Leave blank for no expiry.
+                                        {:else}
+                                            No expiry set.
+                                        {/if}
+                                    </div>
 								</div>
 
 								{#if composeError}
@@ -1277,10 +1490,15 @@
 												{composePreview.ipfs_hash}
 											{/if}
 										</div>
+									<div class="preview-row">
+										<span>Ownership:</span> {composePreview.has_ownership ? 'Confirmed' : 'Not confirmed'}
+									</div>
+									{#if composePreview.expire_time}
 										<div class="preview-row">
-											<span>Ownership:</span> {composePreview.has_ownership ? 'Confirmed' : 'Not confirmed'}
+											<span>Expires:</span> {composePreview.expire_time}
 										</div>
-										{#if composePreview.warnings.length > 0}
+									{/if}
+									{#if composePreview.warnings.length > 0}
 											<div class="preview-warnings">
 												{#each composePreview.warnings as w}
 													<div class="preview-warning">⚠ {w}</div>
@@ -1311,7 +1529,7 @@
 										>
 											{composeBroadcasting ? "BROADCASTING..." : "BROADCAST"}
 										</button>
-										<button class="action-btn" on:click={cancelCompose}>
+										<button class="action-btn" on:click={cancelComposePreview}>
 											CANCEL
 										</button>
 									{:else if composeSent}
@@ -1338,7 +1556,7 @@
 									{#if asset.hasOwner}
 										<button
 											class="action-btn primary"
-											on:click={() => (composeOpen = true)}
+											on:click={openCompose}
 										>
 											<span class="action-icon">✉</span> SEND
 										</button>
@@ -1458,6 +1676,50 @@
                 message="Top 100 Holders list requires 'assetindex=1' node configuration. This feature is deferred."
                 on:close={() => (showAlert = false)}
             />
+            {#if showMessageUnlockModal}
+                <div
+                    class="message-unlock-overlay"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="message-unlock-title"
+                    tabindex="0"
+                    on:click={() => (showMessageUnlockModal = false)}
+                    on:keydown={(e) => e.key === "Escape" && (showMessageUnlockModal = false)}
+                >
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+                    <div class="message-unlock-modal" role="document" on:click|stopPropagation>
+                        <div class="message-unlock-header">
+                            <span class="message-unlock-icon">🔒</span>
+                            <h2 id="message-unlock-title">UNLOCK WALLET</h2>
+                        </div>
+                        <div class="message-unlock-body">
+                            <p>
+                                Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this asset message. Lock the wallet again when you are done sending transactions.
+                            </p>
+                            <input
+                                class="message-unlock-input"
+                                type="password"
+                                bind:value={messageUnlockPassword}
+                                placeholder="Wallet passphrase"
+                                autocomplete="current-password"
+                                on:keydown={(e) => e.key === "Enter" && unlockAndBroadcastAnnouncement()}
+                                disabled={messageUnlocking}
+                            />
+                            {#if messageUnlockError}
+                                <div class="message-unlock-error">{messageUnlockError}</div>
+                            {/if}
+                        </div>
+                        <div class="message-unlock-footer">
+                            <button type="button" class="message-unlock-cancel" on:click={() => (showMessageUnlockModal = false)} disabled={messageUnlocking}>
+                                CANCEL
+                            </button>
+                            <button type="button" class="message-unlock-confirm" on:click={unlockAndBroadcastAnnouncement} disabled={messageUnlocking || !messageUnlockPassword.trim()}>
+                                {messageUnlocking ? "UNLOCKING..." : "UNLOCK AND BROADCAST"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            {/if}
         {/if}
 
 <style>
@@ -2021,6 +2283,69 @@
     .compose-field input::placeholder {
         color: #555;
     }
+    .expire-control-row {
+        display: grid;
+        grid-template-columns: 1fr auto repeat(4, auto);
+        gap: 0.4rem;
+        align-items: center;
+    }
+    .expire-control-row .expire-date-text,
+    .expire-control-row .expire-time-text {
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        color: #e8f5e9;
+        cursor: text;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        min-height: 2rem;
+        padding: 0.35rem 0.5rem;
+        width: 100%;
+    }
+    .expire-control-row .expire-date-text:focus,
+    .expire-control-row .expire-time-text:focus {
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 1px rgba(0, 255, 65, 0.15);
+        outline: none;
+    }
+    .expire-control-row .expire-date-text::placeholder,
+    .expire-control-row .expire-time-text::placeholder {
+        color: #555;
+    }
+    .expire-control-row .expire-date-text:disabled,
+    .expire-control-row .expire-time-text:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+    .expire-control-row button {
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 6px;
+        color: var(--color-primary);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.58rem;
+        font-weight: 700;
+        min-height: 2rem;
+        padding: 0.35rem 0.5rem;
+        white-space: nowrap;
+    }
+    .expire-control-row button:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: rgba(0, 255, 65, 0.35);
+    }
+    .expire-control-row button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+    }
+    .expire-note {
+        color: #777;
+        font-size: 0.56rem;
+        line-height: 1.35;
+    }
+    .expire-note.has-expiry {
+        color: #9cffad;
+    }
     .compose-library-link {
         align-self: flex-start;
         background: rgba(0, 255, 65, 0.08);
@@ -2404,6 +2729,122 @@
         text-align: center;
         padding: 0.5rem;
     }
+    .message-unlock-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.82);
+        backdrop-filter: blur(3px);
+    }
+    .message-unlock-modal {
+        width: min(30rem, 92vw);
+        overflow: hidden;
+        border: 1px solid rgba(0, 255, 65, 0.32);
+        border-radius: 8px;
+        background: linear-gradient(180deg, #080b09 0%, #101310 100%);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
+    }
+    .message-unlock-header {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        padding: 0.85rem 1rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.18);
+        background: rgba(0, 255, 65, 0.07);
+    }
+    .message-unlock-icon {
+        color: var(--color-primary);
+        font-size: 1rem;
+    }
+    .message-unlock-header h2 {
+        margin: 0;
+        color: var(--color-primary);
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        letter-spacing: 1.8px;
+    }
+    .message-unlock-body {
+        display: grid;
+        gap: 0.75rem;
+        padding: 1rem;
+    }
+    .message-unlock-body p {
+        margin: 0;
+        color: #ffd36a;
+        font-size: 0.7rem;
+        line-height: 1.45;
+    }
+    .message-unlock-input {
+        width: 100%;
+        min-height: 2.35rem;
+        border: 1px solid rgba(0, 255, 65, 0.24);
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.62);
+        color: #fff;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        padding: 0.5rem 0.65rem;
+    }
+    .message-unlock-input:focus {
+        border-color: var(--color-primary);
+        outline: none;
+        box-shadow: 0 0 12px rgba(0, 255, 65, 0.16);
+    }
+    .message-unlock-error {
+        border: 1px solid rgba(255, 85, 85, 0.28);
+        border-radius: 5px;
+        background: rgba(255, 85, 85, 0.09);
+        color: #ff7777;
+        font-size: 0.64rem;
+        padding: 0.5rem 0.6rem;
+    }
+    .message-unlock-footer {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.7rem;
+        padding: 0.85rem 1rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(0, 0, 0, 0.28);
+    }
+    .message-unlock-cancel,
+    .message-unlock-confirm {
+        min-height: 2.35rem;
+        border-radius: 5px;
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        cursor: pointer;
+    }
+    .message-unlock-cancel {
+        border: 1px solid #666;
+        background: transparent;
+        color: #999;
+    }
+    .message-unlock-cancel:hover:not(:disabled) {
+        border-color: #ff5555;
+        color: #ff5555;
+    }
+    .message-unlock-confirm {
+        border: 1px solid var(--color-primary);
+        background: rgba(0, 255, 65, 0.1);
+        color: var(--color-primary);
+    }
+    .message-unlock-confirm:hover:not(:disabled) {
+        background: var(--color-primary);
+        color: #000;
+        box-shadow: 0 0 16px rgba(0, 255, 65, 0.38);
+    }
+    .message-unlock-cancel:disabled,
+    .message-unlock-confirm:disabled,
+    .message-unlock-input:disabled {
+        cursor: not-allowed;
+        opacity: 0.48;
+    }
     .compose-actions {
         display: flex;
         gap: 0.5rem;
@@ -2527,5 +2968,17 @@
         width: 0.7rem;
         height: 0.7rem;
         cursor: pointer;
+    }
+    @media (max-width: 760px) {
+        .expire-control-row {
+            grid-template-columns: 1fr auto;
+        }
+        .expire-control-row .expire-date-text,
+        .expire-control-row .expire-time-text {
+            grid-column: auto;
+        }
+        .expire-control-row button {
+            grid-column: auto;
+        }
     }
 </style>

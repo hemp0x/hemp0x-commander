@@ -562,12 +562,355 @@
     /** @type {Set<string>} */
     let shortMessagePending = new Set();
 
+    // Message inbox UI state
+    /** @type {AssetMessage | null} */
+    let selectedMessage = null;
+    let messageExplorerMode = false;
+    /** @type {Set<string>} */
+    let pinnedMessageIds = new Set();
+    /** @type {Set<string>} */
+    let hiddenMessageIds = new Set();
+    /** @type {Set<string>} */
+    let readMessageIds = new Set();
+    let inboxTablePackPanelOpen = false;
+    let inboxTablePackBusy = false;
+    let inboxTablePackStatus = "";
+    let inboxTablePackError = "";
+
+    /** @type {Set<string>} */
+    let selectedMessageIds = new Set();
+
+    /** @type {null | 'clearUnpinned' | 'deleteSelected'} */
+    let pendingConfirmAction = null;
+
+    const PINNED_MESSAGES_KEY = "hemp0x_pinnedMessageIds";
+    const HIDDEN_MESSAGES_KEY = "hemp0x_hiddenMessageIds";
+    const READ_MESSAGES_KEY = "hemp0x_readMessageIds";
+
+    /** @param {string} key */
+    function loadMessageIdSet(key) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    return new Set(parsed.filter((item) => typeof item === "string"));
+                }
+            }
+        } catch {
+            // Ignore corrupt local state and start clean.
+        }
+        return new Set();
+    }
+
+    function loadMessageLocalState() {
+        pinnedMessageIds = loadMessageIdSet(PINNED_MESSAGES_KEY);
+        hiddenMessageIds = loadMessageIdSet(HIDDEN_MESSAGES_KEY);
+        readMessageIds = loadMessageIdSet(READ_MESSAGES_KEY);
+    }
+    loadMessageLocalState();
+
+    /** @param {string} key @param {Set<string>} ids */
+    function saveMessageIdSet(key, ids) {
+        try {
+            localStorage.setItem(key, JSON.stringify(Array.from(ids)));
+        } catch {
+            // Local cleanup state is best effort.
+        }
+    }
+
+    /** @param {AssetMessage} msg */
+    function messageLocalId(msg) {
+        return `${msg.asset_name}|${msg.time}|${msg.message.slice(0, 24)}`;
+    }
+
+    /** @param {AssetMessage} msg */
+    function messagePinId(msg) {
+        return messageLocalId(msg);
+    }
+
+    /** @param {AssetMessage} msg */
+    function isPinned(msg) {
+        return pinnedMessageIds.has(messagePinId(msg));
+    }
+
+    /** @param {AssetMessage} msg */
+    function isHidden(msg) {
+        return hiddenMessageIds.has(messageLocalId(msg));
+    }
+
+    /** @param {AssetMessage} msg */
+    function displayMessageStatus(msg) {
+        if (readMessageIds.has(messageLocalId(msg))) return "READ";
+        return msg.status || "";
+    }
+
+    /** @param {AssetMessage} msg */
+    function togglePin(msg) {
+        const id = messagePinId(msg);
+        if (pinnedMessageIds.has(id)) {
+            pinnedMessageIds.delete(id);
+        } else {
+            pinnedMessageIds.add(id);
+        }
+        pinnedMessageIds = pinnedMessageIds;
+        saveMessageIdSet(PINNED_MESSAGES_KEY, pinnedMessageIds);
+    }
+
+    function closeMessageDetail() {
+        selectedMessage = null;
+    }
+
+    /** @param {AssetMessage} msg */
+    function markMessageRead(msg) {
+        const id = messageLocalId(msg);
+        readMessageIds.add(id);
+        readMessageIds = readMessageIds;
+        saveMessageIdSet(READ_MESSAGES_KEY, readMessageIds);
+        messages = messages.map((item) =>
+            messageLocalId(item) === id ? { ...item, status: "READ" } : item
+        );
+        selectedMessage = selectedMessage && messageLocalId(selectedMessage) === id
+            ? { ...selectedMessage, status: "READ" }
+            : selectedMessage;
+    }
+
+    /** @param {AssetMessage} msg */
+    function markMessageUnread(msg) {
+        readMessageIds.delete(messageLocalId(msg));
+        readMessageIds = readMessageIds;
+        saveMessageIdSet(READ_MESSAGES_KEY, readMessageIds);
+        messages = messages.map((item) =>
+            messageLocalId(item) === messageLocalId(msg) ? { ...item, status: "UNREAD" } : item
+        );
+        selectedMessage = selectedMessage && messageLocalId(selectedMessage) === messageLocalId(msg)
+            ? { ...selectedMessage, status: "UNREAD" }
+            : selectedMessage;
+    }
+
+    /** @param {AssetMessage} msg */
+    function msgSelectId(msg) {
+        return messageLocalId(msg);
+    }
+
+    /** @param {AssetMessage} msg */
+    function isSelected(msg) {
+        return selectedMessageIds.has(msgSelectId(msg));
+    }
+
+    /** @param {AssetMessage} msg */
+    function toggleSelect(msg) {
+        const id = msgSelectId(msg);
+        if (selectedMessageIds.has(id)) {
+            selectedMessageIds.delete(id);
+        } else {
+            selectedMessageIds.add(id);
+        }
+        selectedMessageIds = selectedMessageIds;
+    }
+
+    function selectAllDisplayed() {
+        displayedMessages.forEach((msg) => selectedMessageIds.add(msgSelectId(msg)));
+        selectedMessageIds = selectedMessageIds;
+    }
+
+    function clearSelection() {
+        selectedMessageIds = new Set();
+    }
+
+    function restoreHiddenMessages() {
+        hiddenMessageIds = new Set();
+        saveMessageIdSet(HIDDEN_MESSAGES_KEY, hiddenMessageIds);
+    }
+
+    /** @param {Set<string>} ids */
+    function hideMessageIds(ids) {
+        ids.forEach((id) => hiddenMessageIds.add(id));
+        ids.forEach((id) => pinnedMessageIds.delete(id));
+        hiddenMessageIds = hiddenMessageIds;
+        pinnedMessageIds = pinnedMessageIds;
+        saveMessageIdSet(HIDDEN_MESSAGES_KEY, hiddenMessageIds);
+        saveMessageIdSet(PINNED_MESSAGES_KEY, pinnedMessageIds);
+        selectedMessageIds = new Set();
+        if (selectedMessage && ids.has(messageLocalId(selectedMessage))) {
+            selectedMessage = null;
+        }
+    }
+
+    function markSelectedUnread() {
+        const ids = new Set(selectedMessageIds);
+        ids.forEach((id) => readMessageIds.delete(id));
+        readMessageIds = readMessageIds;
+        saveMessageIdSet(READ_MESSAGES_KEY, readMessageIds);
+        messages = messages.map((msg) => {
+            if (ids.has(msgSelectId(msg))) {
+                return { ...msg, status: 'UNREAD' };
+            }
+            return msg;
+        });
+        selectedMessageIds = new Set();
+    }
+
+    function openMessageDetail(msg) {
+        selectedMessage = msg;
+        markMessageRead(msg);
+    }
+
+    function requestClearUnpinned() {
+        pendingConfirmAction = 'clearUnpinned';
+    }
+
+    function requestDeleteSelected() {
+        pendingConfirmAction = 'deleteSelected';
+    }
+
+    function cancelConfirmAction() {
+        pendingConfirmAction = null;
+    }
+
+    function executeConfirmedAction() {
+        if (pendingConfirmAction === 'clearUnpinned') {
+            hideMessageIds(new Set(displayedMessages.filter((msg) => !isPinned(msg)).map(messageLocalId)));
+        } else if (pendingConfirmAction === 'deleteSelected') {
+            hideMessageIds(new Set(selectedMessageIds));
+        }
+        shortMessageCache = {};
+        shortMessagePending.clear();
+        pendingConfirmAction = null;
+    }
+
+    function formatMessageTime(isoLike) {
+        if (!isoLike) return "";
+        let d = new Date(isoLike);
+        if (isNaN(d.getTime())) {
+            const n = Number(isoLike);
+            if (!Number.isNaN(n) && n > 1000000000) {
+                d = new Date(n * 1000);
+            }
+        }
+        if (isNaN(d.getTime())) return isoLike;
+        return d.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    }
+
+    function formatExpireTime(isoLike) {
+        if (!isoLike) return "";
+        let d = new Date(isoLike);
+        if (isNaN(d.getTime())) {
+            const n = Number(isoLike);
+            if (!Number.isNaN(n) && n > 1000000000) {
+                d = new Date(n * 1000);
+            }
+        }
+        if (isNaN(d.getTime())) return isoLike;
+        const now = Date.now();
+        const diff = d.getTime() - now;
+        if (diff <= 0) return "Expired";
+        const mins = Math.floor(diff / 60000);
+        if (mins < 60) return `${mins}m`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+        const days = Math.floor(hrs / 24);
+        return `${days}d ${hrs % 24}h`;
+    }
+
+    function refreshMessages() {
+        loadMessages();
+    }
+
+    function toggleExplorer() {
+        messageExplorerMode = !messageExplorerMode;
+    }
+
+    $: displayedMessages = (() => {
+        const hidden = hiddenMessageIds;
+        return (messageExplorerMode ? messages : filteredMessages)
+            .filter((msg) => !hidden.has(messageLocalId(msg)));
+    })();
+
+    $: inboxRows = (() => {
+        const _p = pinnedMessageIds;
+        const _s = selectedMessageIds;
+        const _r = readMessageIds;
+        return displayedMessages.map((msg) => {
+            const sm = shortMessageCache[msg.message];
+            const id = messageLocalId(msg);
+            return {
+                msg,
+                pinned: _p.has(id),
+                selected: _s.has(id),
+                status: _r.has(id) ? "READ" : (msg.status || ""),
+                decoded: sm?.is_short_message && sm.text,
+                sm,
+            };
+        });
+    })();
+
+    async function selectInboxTablePack(event) {
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement) || !target.value) return;
+        const pack = tablePacks.find((p) => p.fingerprint_sha256 === target.value);
+        if (!pack) return;
+        inboxTablePackBusy = true;
+        inboxTablePackError = "";
+        inboxTablePackStatus = "Loading table pack...";
+        try {
+            let selected;
+            if (pack.builtin) {
+                selected = await core.invoke("short_message_reset_table_pack");
+            } else {
+                selected = await core.invoke("short_message_select_table_pack", {
+                    name: pack.name,
+                    version: pack.version,
+                    fingerprintSha256: pack.fingerprint_sha256,
+                });
+            }
+            if (selected && typeof selected === "object") {
+                setActivePackSummary(/** @type {TablePackSummary} */ (selected));
+            }
+            shortMessageCache = {};
+            shortMessagePending.clear();
+            await prepareShortMessagePack();
+            if (displayedMessages.length > 0) {
+                await decodePendingShortMessages(displayedMessages);
+            }
+            inboxTablePackStatus = "Table pack loaded.";
+            setTimeout(() => { inboxTablePackStatus = ""; }, 1400);
+        } catch (err) {
+            inboxTablePackError = String(err);
+            inboxTablePackStatus = "";
+        } finally {
+            inboxTablePackBusy = false;
+        }
+    }
+
+    async function openInboxTablePackPanel() {
+        inboxTablePackPanelOpen = !inboxTablePackPanelOpen;
+        if (!inboxTablePackPanelOpen) return;
+        inboxTablePackBusy = true;
+        inboxTablePackStatus = "Loading table packs...";
+        inboxTablePackError = "";
+        try {
+            await refreshTablePacks();
+            inboxTablePackStatus = "";
+        } catch (err) {
+            inboxTablePackError = String(err);
+            inboxTablePackStatus = "";
+        } finally {
+            inboxTablePackBusy = false;
+        }
+    }
+
     $: if (activeTab) {
         dispatch("tabChange", activeTab);
     }
 
-    $: if (filteredMessages.length > 0) {
-        decodePendingShortMessages(filteredMessages);
+    $: if (displayedMessages.length > 0) {
+        decodePendingShortMessages(displayedMessages);
     }
 
     /** @param {AssetMessage[]} msgs */
@@ -647,6 +990,8 @@
         channels = [];
         messagesInfo = null;
         messagesError = "";
+        selectedMessage = null;
+        messageExplorerMode = false;
         cancelCompose();
     }
 
@@ -812,9 +1157,33 @@
                 ipfsHash,
                 expireTime,
             });
-            composeSent = true;
+            try {
+                await core.invoke("add_tx_journal_entry", {
+                    input: {
+                        status: "Broadcasted",
+                        operation_type: "asset_message",
+                        summary: `Send message on ${channelName}`,
+                        txid,
+                        details: {
+                            channel_name: channelName,
+                            asset_name: asset.name,
+                            message_payload: ipfsHash,
+                            expire_time: expireTime,
+                            mode: composeMode,
+                            short_message_preview: composeMode === "short" ? composeShortResult?.decoded_preview ?? null : null,
+                        },
+                    },
+                });
+            } catch (journalErr) {
+                console.warn("Failed to record asset message journal entry:", journalErr);
+            }
+            composeSent = false;
+            composeOpen = false;
             composePreview = null;
             composeIpfsHash = "";
+            composeShortText = "";
+            composeShortResult = null;
+            composeShortShowHex = false;
             clearComposeExpire();
             addNotification({
                 type: "message",
@@ -1543,26 +1912,139 @@
 					{:else}
 						<div class="messages-panel">
 							<div class="messages-header">
-								<div class="messages-title">MESSAGES</div>
-								<div class="messages-actions">
-									<button
-										class="action-btn subscribe-btn"
-										class:subscribed={isSubscribed}
-										on:click={toggleSubscription}
-										disabled={messagesLoading}
-									>
-										{isSubscribed ? "UNSUBSCRIBE" : "SUBSCRIBE"}
-									</button>
-									{#if asset.hasOwner}
-										<button
-											class="action-btn primary"
-											on:click={openCompose}
-										>
-											<span class="action-icon">✉</span> SEND
-										</button>
+								<div class="messages-title">
+									{#if messageExplorerMode}
+										ALL MESSAGES
+									{:else}
+										MESSAGES
 									{/if}
+									<span class="messages-count">{displayedMessages.length}</span>
+								</div>
+								<div class="messages-header-right">
+									<button
+										class="table-pack-mini-btn"
+										class:active={inboxTablePackPanelOpen}
+										on:click={openInboxTablePackPanel}
+										title="Short message table packs"
+									>
+										<span class="mini-icon">🕮</span> {activePackLabel()}
+									</button>
+									<div class="messages-actions">
+										<button
+											class="action-btn subscribe-btn"
+											class:subscribed={isSubscribed}
+											on:click={toggleSubscription}
+											disabled={messagesLoading}
+											title={isSubscribed ? "Unsubscribe from this channel" : "Subscribe to this channel"}
+										>
+											{isSubscribed ? "UNSUB" : "SUB"}
+										</button>
+										{#if asset.hasOwner}
+											<button
+												class="action-btn primary"
+												on:click={openCompose}
+												title="Send announcement"
+											>
+												<span class="action-icon">✉</span> SEND
+											</button>
+										{/if}
+									</div>
 								</div>
 							</div>
+
+							<div class="inbox-toolbar">
+								{#if pendingConfirmAction}
+									<div class="confirm-bar">
+											<span class="confirm-text">
+											{#if pendingConfirmAction === 'clearUnpinned'}
+												Hide all unpinned messages from this view?
+											{:else}
+												Hide {selectedMessageIds.size} selected message{selectedMessageIds.size === 1 ? '' : 's'} from this view?
+											{/if}
+										</span>
+										<div class="confirm-actions">
+											<button class="toolbar-btn danger" on:click={executeConfirmedAction}>Yes</button>
+											<button class="toolbar-btn" on:click={cancelConfirmAction}>No</button>
+										</div>
+									</div>
+								{:else}
+									<button class="toolbar-btn" on:click={refreshMessages} disabled={messagesLoading} title="Refresh messages">
+										<span class="toolbar-icon">↻</span>
+									</button>
+									<button
+										class="toolbar-btn"
+										class:active={messageExplorerMode}
+										on:click={toggleExplorer}
+										title={messageExplorerMode ? "Show this channel only" : "Show all channels"}
+									>
+										<span class="toolbar-icon">{messageExplorerMode ? "⊘" : "☰"}</span>
+									</button>
+									{#if selectedMessageIds.size > 0}
+										<div class="bulk-bar">
+											<span class="bulk-count">{selectedMessageIds.size} selected</span>
+											<button class="toolbar-btn" on:click={selectAllDisplayed} title="Select all displayed">All</button>
+											<button class="toolbar-btn" on:click={clearSelection} title="Clear selection">Clear</button>
+											<button class="toolbar-btn" on:click={markSelectedUnread} title="Mark selected as unread">Unread</button>
+											<button class="toolbar-btn danger" on:click={requestDeleteSelected} title="Hide selected from local view">Hide</button>
+										</div>
+									{:else}
+										<button
+											class="toolbar-btn"
+											on:click={requestClearUnpinned}
+											disabled={messagesLoading || displayedMessages.length === 0}
+											title="Hide unpinned messages from local view"
+										>
+											<span class="toolbar-icon">🗑</span>
+										</button>
+									{/if}
+									{#if pinnedMessageIds.size > 0}
+										<span class="toolbar-chip">{pinnedMessageIds.size} pinned</span>
+									{/if}
+									{#if hiddenMessageIds.size > 0}
+										<button class="toolbar-btn" on:click={restoreHiddenMessages} title="Restore locally hidden messages">
+											Show hidden
+										</button>
+									{/if}
+								{/if}
+							</div>
+
+							{#if inboxTablePackPanelOpen}
+								<div class="table-pack-panel inbox-pack-panel">
+									<div class="table-pack-head">
+										<span title={activePackStatusTitle()}>Active: {activePackLabel()}</span>
+										{#if activePackFingerprintShort()}
+											<span class="mono" title={activePackFingerprint()}>{activePackFingerprintShort()}</span>
+										{/if}
+									</div>
+									<div class="table-pack-controls">
+										<select
+											class="table-pack-select"
+											style="background-color: #020604; color: #9cffad;"
+											on:change={selectInboxTablePack}
+											disabled={inboxTablePackBusy}
+											value={tablePackSelectionFingerprint}
+										>
+											{#each tablePacks as pack}
+												<option value={pack.fingerprint_sha256}>
+													{tablePackLabel(pack)}
+												</option>
+											{/each}
+										</select>
+										<button type="button" on:click={exportOfficialTablePack} disabled={tablePackBusy}>EXPORT</button>
+										<button type="button" on:click={importTablePack} disabled={tablePackBusy}>IMPORT</button>
+										<button type="button" on:click={resetTablePack} disabled={tablePackBusy}>OFFICIAL</button>
+									</div>
+									<div class="table-pack-note">
+										Select a pack to re-decode received messages. Both sender and receiver need the same custom pack to read custom-table messages.
+									</div>
+									{#if inboxTablePackStatus}
+										<div class="table-pack-status" class:busy={inboxTablePackBusy}>{inboxTablePackStatus}</div>
+									{/if}
+									{#if inboxTablePackError}
+										<div class="table-pack-error">{inboxTablePackError}</div>
+									{/if}
+								</div>
+							{/if}
 
 							{#if messagesInfo && !messagesInfo.enabled}
 								<div class="messages-status warn">
@@ -1582,39 +2064,172 @@
 
 							{#if messagesLoading}
 								<div class="messages-loading">Loading messages...</div>
-							{:else if filteredMessages.length === 0}
+							{:else if displayedMessages.length === 0}
 								<div class="messages-empty">
-									No messages for this asset channel.
+									{#if messageExplorerMode}
+										No messages across all channels.
+									{:else}
+										No messages for this asset channel.
+									{/if}
 								</div>
 							{:else}
 								<div class="messages-list">
-									{#each filteredMessages as msg (msg.asset_name + msg.time + msg.message)}
-										{@const sm = shortMessageCache[msg.message]}
-										<div class="message-entry" class:unread={msg.status === 'UNREAD'}>
-											<div class="message-channel">{msg.asset_name}</div>
-											{#if sm?.is_short_message}
-												<div class="short-msg-badge">SHORT MSG</div>
-												<div class="short-msg-text">{sm.text}</div>
-												<div class="short-msg-raw">
-													<IpfsReference hash={msg.message} compact={true} />
+									{#each inboxRows as row (row.msg.asset_name + row.msg.time + row.msg.message)}
+										<div
+											class="message-row"
+											class:unread={row.status === 'UNREAD'}
+											class:pinned={row.pinned}
+											class:selected={row.selected}
+											on:click={() => openMessageDetail(row.msg)}
+											on:keydown={(e) => e.key === 'Enter' && openMessageDetail(row.msg)}
+											role="button"
+											tabindex="0"
+										>
+											<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+											<label class="row-checkbox-wrap" on:click|stopPropagation>
+												<input
+													type="checkbox"
+													checked={row.selected}
+													on:click|stopPropagation={() => toggleSelect(row.msg)}
+												/>
+											</label>
+											<div class="message-row-main">
+												<div class="message-row-left">
+													<div class="message-row-channel">{row.msg.asset_name}</div>
+													<div class="message-row-preview">
+														{#if row.decoded}
+															<span class="row-short-badge">SHORT</span>
+															<span class="row-short-text">{row.sm.text}</span>
+														{:else if row.msg.message.length > 12}
+															<span class="row-hash">{row.msg.message.slice(0, 8)}...{row.msg.message.slice(-8)}</span>
+														{:else}
+															<span class="row-hash">{row.msg.message}</span>
+														{/if}
+													</div>
 												</div>
-											{:else}
-												<div class="message-hash">
-													<IpfsReference hash={msg.message} compact={true} />
+												<div class="message-row-right">
+													<div class="message-row-time" title={row.msg.time}>{formatMessageTime(row.msg.time)}</div>
+													<div class="message-row-meta">
+														<span class="row-block">#{row.msg.block_height}</span>
+														{#if row.msg.expire_time}
+															<span class="row-expire" title={row.msg.expire_time}>{formatExpireTime(row.msg.expire_time)}</span>
+														{/if}
+													</div>
 												</div>
-											{/if}
-											<div class="message-meta">
-												<span class="message-time">{msg.time}</span>
-												<span class="message-block">Block {msg.block_height}</span>
-												<span class="message-status" class:unread={msg.status === 'UNREAD'}>
-													{msg.status}
-												</span>
 											</div>
-											{#if msg.expire_time}
-												<div class="message-expire">Expires: {msg.expire_time}</div>
-											{/if}
+											<div class="message-row-bar">
+												<span class="row-status" class:unread={row.status === 'UNREAD'}>
+													{row.status}
+												</span>
+												<div class="row-actions">
+													<button
+														class="row-pin-btn"
+														class:pinned={row.pinned}
+														on:click|stopPropagation={() => togglePin(row.msg)}
+															title={row.pinned ? "Unpin message" : "Pin message"}
+													>
+														{row.pinned ? "★" : "☆"}
+													</button>
+												</div>
+											</div>
 										</div>
 									{/each}
+								</div>
+							{/if}
+
+							{#if selectedMessage}
+								{@const dsm = shortMessageCache[selectedMessage.message]}
+								<div
+									class="message-detail-overlay"
+									role="dialog"
+									aria-modal="true"
+									tabindex="-1"
+									on:click={closeMessageDetail}
+									on:keydown={(e) => e.key === 'Escape' && closeMessageDetail()}
+								>
+									<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+									<div class="message-detail-panel" role="document" on:click|stopPropagation on:keydown|stopPropagation>
+										<div class="message-detail-header">
+											<div class="message-detail-title">MESSAGE DETAIL</div>
+											<button class="detail-close-btn" on:click={closeMessageDetail}>×</button>
+										</div>
+										<div class="message-detail-body">
+											<div class="detail-row">
+												<span class="detail-label">Channel</span>
+												<span class="detail-value">{selectedMessage.asset_name}</span>
+											</div>
+											<div class="detail-row">
+												<span class="detail-label">Time</span>
+												<span class="detail-value">{selectedMessage.time}</span>
+											</div>
+											<div class="detail-row">
+												<span class="detail-label">Block</span>
+												<span class="detail-value">#{selectedMessage.block_height}</span>
+											</div>
+											<div class="detail-row">
+												<span class="detail-label">Status</span>
+												<span class="detail-value" class:unread={displayMessageStatus(selectedMessage) === 'UNREAD'}>{displayMessageStatus(selectedMessage)}</span>
+											</div>
+											{#if selectedMessage.expire_time}
+												<div class="detail-row">
+													<span class="detail-label">Expires</span>
+													<span class="detail-value">{selectedMessage.expire_time} ({formatExpireTime(selectedMessage.expire_time)})</span>
+												</div>
+											{/if}
+
+											<div class="detail-divider"></div>
+
+											{#if dsm?.is_short_message}
+												<div class="detail-row">
+													<span class="detail-label">Type</span>
+													<span class="detail-value short-badge">Short Message</span>
+												</div>
+												<div class="detail-row tall">
+													<span class="detail-label">Decoded</span>
+													<span class="detail-value decoded-text">{dsm.text}</span>
+												</div>
+												{#if dsm.warnings && dsm.warnings.length > 0}
+													<div class="detail-warnings">
+														{#each dsm.warnings as w}
+															<div class="detail-warning">⚠ {w}</div>
+														{/each}
+													</div>
+												{/if}
+												<div class="detail-row tall">
+													<span class="detail-label">Raw Hex</span>
+													<span class="detail-value mono hex-text">{selectedMessage.message}</span>
+												</div>
+											{:else}
+												<div class="detail-row">
+													<span class="detail-label">Type</span>
+													<span class="detail-value">CID / Hash Reference</span>
+												</div>
+												<div class="detail-row tall">
+													<span class="detail-label">Payload</span>
+													<IpfsReference hash={selectedMessage.message} compact={false} />
+												</div>
+												{#if dsm && !dsm.is_short_message}
+													<div class="detail-note">
+														Not a recognized short-message frame. If this is a custom-table message, select the matching table pack in the inbox toolbar to decode it.
+													</div>
+												{/if}
+											{/if}
+
+											<div class="detail-divider"></div>
+
+										<div class="detail-actions-row">
+											<button class="action-btn" on:click={() => { togglePin(selectedMessage); }}>
+												{isPinned(selectedMessage) ? "★ Unpin" : "☆ Pin"}
+											</button>
+											<button class="action-btn" on:click={() => { markMessageUnread(selectedMessage); closeMessageDetail(); }}>
+												Mark Unread
+											</button>
+											<button class="action-btn" on:click={closeMessageDetail}>
+												Close
+											</button>
+										</div>
+										</div>
+									</div>
 								</div>
 							{/if}
 						</div>
@@ -2059,26 +2674,165 @@
     .messages-panel {
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.45rem;
+        min-height: 0;
     }
     .messages-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
     }
     .messages-title {
         font-size: 0.7rem;
         font-weight: 700;
         color: var(--color-primary);
         letter-spacing: 1px;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .messages-count {
+        font-size: 0.55rem;
+        color: #888;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        padding: 0.1rem 0.4rem;
+        font-weight: 600;
+    }
+    .messages-header-right {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .table-pack-mini-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: rgba(0, 255, 65, 0.04);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 5px;
+        padding: 0.25rem 0.5rem;
+        color: #8cff9f;
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        white-space: nowrap;
+    }
+    .table-pack-mini-btn:hover {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.3);
+    }
+    .table-pack-mini-btn.active {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: rgba(0, 255, 65, 0.35);
+    }
+    .mini-icon {
+        font-size: 0.75rem;
     }
     .messages-actions {
         display: flex;
-        gap: 0.5rem;
+        gap: 0.4rem;
     }
     .subscribe-btn.subscribed {
         color: #ff5555;
         border-color: rgba(255, 85, 85, 0.4);
+    }
+    .inbox-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+    }
+    .toolbar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 5px;
+        padding: 0.25rem 0.45rem;
+        color: #888;
+        font-size: 0.58rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .toolbar-btn:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+    }
+    .toolbar-btn.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .toolbar-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+    .toolbar-icon {
+        font-size: 0.8rem;
+    }
+    .toolbar-chip {
+        font-size: 0.5rem;
+        color: #888;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        padding: 0.15rem 0.4rem;
+    }
+    .bulk-bar {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        padding: 0.2rem 0.4rem;
+        margin-left: 0.2rem;
+    }
+    .bulk-count {
+        font-size: 0.55rem;
+        color: var(--color-primary);
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 0 0.2rem;
+    }
+    .toolbar-btn.danger {
+        border-color: rgba(255, 84, 84, 0.25);
+        color: #ff9999;
+    }
+    .toolbar-btn.danger:hover:not(:disabled) {
+        background: rgba(255, 84, 84, 0.1);
+        border-color: rgba(255, 84, 84, 0.4);
+    }
+    .confirm-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        flex: 1;
+        background: rgba(255, 84, 84, 0.06);
+        border: 1px solid rgba(255, 84, 84, 0.18);
+        border-radius: 5px;
+        padding: 0.25rem 0.55rem;
+    }
+    .confirm-text {
+        font-size: 0.6rem;
+        color: #ff9999;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+    }
+    .confirm-actions {
+        display: flex;
+        gap: 0.3rem;
+        margin-left: auto;
     }
     .messages-status {
         font-size: 0.6rem;
@@ -2106,47 +2860,334 @@
     .messages-list {
         display: flex;
         flex-direction: column;
-        gap: 0.4rem;
-        max-height: 300px;
+        gap: 0.25rem;
+        max-height: 320px;
         overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
-    .message-entry {
-        background: rgba(0, 0, 0, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 8px;
-        padding: 0.5rem 0.75rem;
+    .messages-list::-webkit-scrollbar {
+        width: 6px;
     }
-    .message-entry.unread {
-        border-left: 3px solid var(--color-primary);
+    .messages-list::-webkit-scrollbar-track {
+        background: transparent;
     }
-    .message-channel {
-        font-size: 0.65rem;
+    .messages-list::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 3px;
+    }
+    .message-row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        padding: 0.4rem 0.55rem;
+        cursor: pointer;
+        transition: all 0.12s;
+    }
+    .message-row:hover {
+        background: rgba(0, 0, 0, 0.4);
+        border-color: rgba(0, 255, 65, 0.2);
+    }
+    .message-row.unread {
+        border-left: 2px solid var(--color-primary);
+    }
+    .message-row.pinned {
+        border-color: rgba(0, 255, 65, 0.15);
+    }
+    .message-row.selected {
+        background: rgba(0, 255, 65, 0.06);
+        border-color: rgba(0, 255, 65, 0.22);
+    }
+    .row-checkbox-wrap {
+        display: flex;
+        align-items: center;
+        padding: 0.1rem 0;
+        margin: -0.15rem 0;
+        cursor: pointer;
+    }
+    .row-checkbox-wrap input[type="checkbox"] {
+        accent-color: var(--color-primary);
+        width: 0.75rem;
+        height: 0.75rem;
+        cursor: pointer;
+    }
+    .message-row-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .message-row-left {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        min-width: 0;
+        flex: 1;
+    }
+    .message-row-channel {
+        font-size: 0.6rem;
         font-weight: 600;
         color: var(--color-primary);
-        margin-bottom: 0.15rem;
+        letter-spacing: 0.3px;
     }
-    .message-hash {
-        font-size: 0.55rem;
-        color: #888;
+    .message-row-preview {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        min-width: 0;
+    }
+    .row-short-badge {
+        font-size: 0.45rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 3px;
+        padding: 0.05rem 0.25rem;
+        letter-spacing: 0.5px;
+        flex-shrink: 0;
+    }
+    .row-short-text {
+        font-size: 0.65rem;
+        color: #ccc;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .row-hash {
+        font-size: 0.6rem;
+        color: #777;
         font-family: var(--font-mono);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        margin-bottom: 0.15rem;
     }
-    .message-meta {
+    .message-row-right {
         display: flex;
-        gap: 0.5rem;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.15rem;
+        flex-shrink: 0;
+    }
+    .message-row-time {
+        font-size: 0.55rem;
+        color: #888;
+        white-space: nowrap;
+    }
+    .message-row-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
         font-size: 0.5rem;
         color: #666;
     }
-    .message-status.unread {
+    .row-block {
+        font-family: var(--font-mono);
+    }
+    .row-expire {
+        color: #aa8800;
+    }
+    .message-row-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+        padding-top: 0.2rem;
+        margin-top: 0.1rem;
+    }
+    .row-status {
+        font-size: 0.5rem;
+        color: #666;
+        letter-spacing: 0.5px;
+    }
+    .row-status.unread {
         color: var(--color-primary);
     }
-    .message-expire {
-        font-size: 0.48rem;
-        color: #555;
+    .row-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+    .row-pin-btn {
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        color: #444;
+        font-size: 0.95rem;
+        cursor: pointer;
+        padding: 0.15rem 0.35rem;
+        line-height: 1;
+        transition: all 0.15s;
+    }
+    .row-pin-btn:hover {
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.08);
+    }
+    .row-pin-btn.pinned {
+        color: #00ff41;
+        background: rgba(0, 255, 65, 0.22);
+        border-color: rgba(0, 255, 65, 0.55);
+        text-shadow: 0 0 6px rgba(0, 255, 65, 0.45);
+    }
+    .inbox-pack-panel {
         margin-top: 0.15rem;
+    }
+
+    /* Message detail overlay */
+    .message-detail-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(2px);
+    }
+    .message-detail-panel {
+        width: min(32rem, 92vw);
+        max-height: 85vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: linear-gradient(180deg, #080b09 0%, #0f1410 100%);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        border-radius: 8px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 36px rgba(0, 255, 65, 0.12);
+    }
+    .message-detail-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 0.8rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.15);
+        background: rgba(0, 255, 65, 0.05);
+    }
+    .message-detail-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        letter-spacing: 1.5px;
+    }
+    .detail-close-btn {
+        background: transparent;
+        border: none;
+        color: #777;
+        font-size: 1.4rem;
+        cursor: pointer;
+        line-height: 1;
+        padding: 0.15rem 0.35rem;
+        transition: color 0.15s;
+    }
+    .detail-close-btn:hover {
+        color: #fff;
+    }
+    .message-detail-body {
+        padding: 0.7rem 0.9rem;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
+    }
+    .message-detail-body::-webkit-scrollbar {
+        width: 6px;
+    }
+    .message-detail-body::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .message-detail-body::-webkit-scrollbar-thumb {
+        background: rgba(0, 255, 65, 0.35);
+        border-radius: 3px;
+    }
+    .detail-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .detail-row.tall {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .detail-label {
+        font-size: 0.55rem;
+        color: #777;
+        letter-spacing: 0.5px;
+        flex-shrink: 0;
+    }
+    .detail-value {
+        font-size: 0.65rem;
+        color: #ccc;
+        text-align: right;
+        word-break: break-word;
+    }
+    .detail-value.unread {
+        color: var(--color-primary);
+    }
+    .detail-value.short-badge {
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 4px;
+        padding: 0.1rem 0.35rem;
+        font-size: 0.55rem;
+        font-weight: 600;
+    }
+    .detail-value.decoded-text {
+        font-size: 0.75rem;
+        color: #e0e0e0;
+        line-height: 1.4;
+        text-align: left;
+    }
+    .detail-value.hex-text {
+        font-size: 0.6rem;
+        color: #888;
+        background: rgba(0, 0, 0, 0.3);
+        padding: 0.35rem 0.45rem;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        word-break: break-all;
+        text-align: left;
+        width: 100%;
+    }
+    .detail-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 0.25rem 0;
+    }
+    .detail-warnings {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .detail-warning {
+        font-size: 0.6rem;
+        color: #ffaa00;
+    }
+    .detail-note {
+        font-size: 0.6rem;
+        color: #888;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 4px;
+        padding: 0.4rem 0.55rem;
+        line-height: 1.4;
+    }
+    .detail-actions-row {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: flex-end;
+        margin-top: 0.25rem;
+    }
+    .detail-actions-row .action-btn {
+        flex: none;
+        padding: 0.35rem 0.65rem;
     }
 
     .short-textarea-wrap textarea {
@@ -2662,28 +3703,6 @@
         border-radius: 4px;
         margin-left: 0.4rem;
         letter-spacing: 0.5px;
-    }
-    .short-msg-badge {
-        font-size: 0.5rem;
-        font-weight: 600;
-        color: var(--color-primary);
-        background: rgba(0, 255, 65, 0.1);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        border-radius: 4px;
-        padding: 0.15rem 0.35rem;
-        letter-spacing: 0.5px;
-        display: inline-block;
-        margin-bottom: 0.2rem;
-    }
-    .short-msg-text {
-        font-size: 0.72rem;
-        color: #ddd;
-        margin-bottom: 0.2rem;
-        line-height: 1.35;
-    }
-    .short-msg-raw {
-        margin-top: 0.15rem;
-        opacity: 0.7;
     }
     .compose-error {
         font-size: 0.62rem;

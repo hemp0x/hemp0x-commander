@@ -399,7 +399,7 @@ pub const ACRONYMS: &[&str] = &[
     "json", "kyc", "llm", "lol", "lmao", "mb", "msrp", "nft", "ngl", "otc", "omg", "p2p",
     "pdf", "pin", "po", "pos", "pow", "pr", "qr", "ram", "roi", "rpc", "sdk", "seo", "sku",
     "sms", "sql", "ssl", "svg", "tbh", "tls", "tor", "tx", "txid", "ui", "url", "usb", "utxo",
-    "ux", "vpn", "wasm", "ws", "wip", "wtf", "xml", "i",
+    "ux", "vpn", "wasm", "ws", "wip", "wtf", "xml", "i", "iykyk",
 ];
 
 // `table_identity` produces a stable, deterministic fingerprint of every

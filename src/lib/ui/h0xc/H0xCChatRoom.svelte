@@ -24,6 +24,7 @@
      */
 
     export let identity = "";
+    export let isGuest = false;
     export let onSwitchIdentity = null;
     export let onClose = null;
     /** @type {Participant[]} */
@@ -57,6 +58,9 @@
     // Compose
     let composeBusy = false;
     let composeError = "";
+    let searchFilter = "";
+    let pageSize = 200;
+    let showCount = pageSize;
     /** @type {import("svelte").SvelteComponent | null} */
     let composeRef = null;
 
@@ -180,18 +184,40 @@
     $: filteredMessages = (() => {
         const bl = new Set(blockedUsers.map((u) => u.toUpperCase()));
         const mu = new Set(mutedUsers.map((u) => u.toUpperCase()));
-        return messages
-            .filter((msg) => {
-                const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
-                return !bl.has(rn);
-            })
-            .filter((msg) => {
-                const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
-                return !mu.has(rn);
+        const at = new Set((settings.autoBlockTags || []).map((/** @type {string} */ t) => t.toUpperCase()));
+        let msgs = messages.filter((msg) => {
+            const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
+            return !bl.has(rn);
+        }).filter((msg) => {
+            const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
+            return !mu.has(rn);
+        });
+        if (at.size > 0) {
+            msgs = msgs.filter((msg) => {
+                const dec = decodeCache[msg.message];
+                if (dec?.is_short_message && dec.text) {
+                    const text = dec.text.toUpperCase();
+                    return !Array.from(at).some((tag) => text.includes(tag));
+                }
+                return true;
             });
+        }
+        if (searchFilter.trim()) {
+            const q = searchFilter.trim().toLowerCase();
+            msgs = msgs.filter((msg) => {
+                const rn = deriveRootNameFn(msg.asset_name).toLowerCase();
+                const dec = decodeCache[msg.message];
+                const body = dec?.is_short_message && dec.text ? dec.text.toLowerCase() : "";
+                return rn.includes(q) || body.includes(q) || msg.message.toLowerCase().includes(q);
+            });
+        }
+        return msgs;
     })();
 
-    $: messageRows = filteredMessages.map((msg) => ({
+    $: pagedMessages = filteredMessages.slice(0, showCount);
+    $: hasMore = filteredMessages.length > showCount;
+
+    $: messageRows = pagedMessages.map((msg) => ({
         msg,
         rootName: deriveRootNameFn(msg.asset_name),
         decoded: decodeCache[msg.message],
@@ -213,7 +239,17 @@
     }
 
     function refresh() {
+        showCount = pageSize;
         loadMessages();
+    }
+
+    function loadMore() {
+        showCount = showCount + pageSize;
+    }
+
+    function clearSearch() {
+        searchFilter = "";
+        showCount = pageSize;
     }
 
     async function discover() {
@@ -507,6 +543,20 @@
         </div>
     </div>
 
+    <div class="chat-search-bar">
+        <input
+            class="search-input"
+            type="text"
+            bind:value={searchFilter}
+            on:input={() => { showCount = pageSize; }}
+            placeholder="Filter messages..."
+            aria-label="Filter messages"
+        />
+        {#if searchFilter}
+            <button class="search-clear" on:click={clearSearch} title="Clear filter">✕</button>
+        {/if}
+    </div>
+
     {#if messagesWarn}
         <div class="chat-status warn">{messagesWarn}</div>
     {/if}
@@ -557,6 +607,12 @@
                         </span>
                     </div>
                 {/each}
+
+                {#if hasMore}
+                    <button class="show-more-btn" on:click={loadMore}>
+                        Show {pageSize} more ({filteredMessages.length - showCount} remaining)
+                    </button>
+                {/if}
             {/if}
 
             {#if messagesLoading && messages.length > 0}
@@ -584,6 +640,7 @@
     <H0xCChatCompose
         bind:this={composeRef}
         {identity}
+        {isGuest}
         busy={composeBusy}
         error={composeError}
         on:send={handleSend}
@@ -878,5 +935,55 @@
     @keyframes skeleton-pulse {
         0% { background-position: 200% 0; }
         100% { background-position: -200% 0; }
+    }
+    .chat-search-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        background: rgba(0, 0, 0, 0.15);
+    }
+    .search-input {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        padding: 0.2rem 0.4rem;
+        color: #ccc;
+        font-size: 0.55rem;
+        font-family: var(--font-mono);
+        outline: none;
+    }
+    .search-input:focus {
+        border-color: var(--color-primary);
+    }
+    .search-input::placeholder { color: #444; }
+    .search-clear {
+        background: none;
+        border: none;
+        color: #666;
+        font-size: 0.7rem;
+        cursor: pointer;
+        padding: 0.1rem 0.25rem;
+    }
+    .search-clear:hover { color: #fff; }
+    .show-more-btn {
+        display: block;
+        width: 100%;
+        background: rgba(0, 255, 65, 0.04);
+        border: 1px solid rgba(0, 255, 65, 0.1);
+        border-radius: 4px;
+        color: var(--color-primary);
+        font-size: 0.52rem;
+        font-weight: 600;
+        padding: 0.25rem;
+        cursor: pointer;
+        margin: 0.2rem 0;
+        text-align: center;
+        transition: all 0.15s;
+    }
+    .show-more-btn:hover {
+        background: rgba(0, 255, 65, 0.1);
     }
 </style>

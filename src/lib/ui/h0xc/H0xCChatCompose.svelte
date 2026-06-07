@@ -5,6 +5,7 @@
     import { deriveRootNameFn } from "../../stores/h0xc.js";
 
     export let identity = "";
+    export let isGuest = false;
     export let busy = false;
     export let error = "";
 
@@ -73,7 +74,12 @@
     {#if error}
         <div class="compose-error">{error}</div>
     {/if}
-    <div class="compose-row">
+    {#if isGuest}
+        <div class="compose-row guest-row">
+            <span class="guest-cta">Create a .H0XC identity to send messages</span>
+        </div>
+    {:else}
+        <div class="compose-row">
         <span class="compose-channel" title={getChannel()}>{getRootLabel()}</span>
         <textarea
             bind:this={textareaEl}
@@ -110,6 +116,7 @@
             {/if}
         </button>
     </div>
+    {/if}
 </div>
 
 <style>
@@ -128,6 +135,15 @@
         display: flex;
         align-items: center;
         gap: 0.4rem;
+    }
+    .guest-row {
+        justify-content: center;
+        padding: 0.3rem 0;
+    }
+    .guest-cta {
+        font-size: 0.56rem;
+        color: #666;
+        font-style: italic;
     }
     .compose-channel {
         font-size: 0.5rem;

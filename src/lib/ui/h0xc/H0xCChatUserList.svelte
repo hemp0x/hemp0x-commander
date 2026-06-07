@@ -44,16 +44,14 @@
     }
 
     $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName));
-    $: online = filteredParticipants.filter((p) => {
-        const hourMs = 3600000;
-        return (Date.now() - p.lastSeen) < hourMs;
+    $: recent = filteredParticipants.filter((p) => {
+        return (Date.now() - p.lastSeen) < 3600000;
     });
-    $: offline = filteredParticipants.filter((p) => {
-        const hourMs = 3600000;
-        return (Date.now() - p.lastSeen) >= hourMs;
+    $: older = filteredParticipants.filter((p) => {
+        return (Date.now() - p.lastSeen) >= 3600000;
     });
-    $: sortedOnline = [...online].sort((a, b) => a.rootName.localeCompare(b.rootName));
-    $: sortedOffline = [...offline].sort((a, b) => a.rootName.localeCompare(b.rootName));
+    $: sortedRecent = [...recent].sort((a, b) => a.rootName.localeCompare(b.rootName));
+    $: sortedOlder = [...older].sort((a, b) => a.rootName.localeCompare(b.rootName));
 
     function handleWindowClick() {
         if (contextUser) closeContext();
@@ -71,9 +69,9 @@
         {#if filteredParticipants.length === 0}
             <div class="ul-empty">No participants discovered</div>
         {:else}
-            {#if sortedOnline.length > 0}
-                <div class="ul-section-label">ONLINE</div>
-                {#each sortedOnline as p}
+            {#if sortedRecent.length > 0}
+                <div class="ul-section-label">RECENT</div>
+                {#each sortedRecent as p}
                     <button
                         class="ul-user"
                         class:me={isMe(p.rootName)}
@@ -91,17 +89,17 @@
                     </button>
                 {/each}
             {/if}
-            {#if sortedOffline.length > 0}
-                <div class="ul-section-label">OFFLINE</div>
-                {#each sortedOffline as p}
+            {#if sortedOlder.length > 0}
+                <div class="ul-section-label">EARLIER</div>
+                {#each sortedOlder as p}
                     <button
-                        class="ul-user offline"
+                        class="ul-user older"
                         class:me={isMe(p.rootName)}
                         class:muted={mutedUsers.includes(p.rootName)}
                         on:contextmenu={(e) => openContext(e, p.rootName)}
                         title={`${p.assetName} - ${p.messageCount} msgs`}
                     >
-                        <span class="ul-dot offline"></span>
+                        <span class="ul-dot older"></span>
                         <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
                         {#if mutedUsers.includes(p.rootName)}
                             <span class="ul-badge muted">MUTED</span>
@@ -210,8 +208,12 @@
         background: var(--color-primary);
         flex-shrink: 0;
     }
-    .ul-dot.offline {
-        opacity: 0.25;
+    .ul-dot.older {
+        opacity: 0.3;
+        background: #555;
+    }
+    .ul-user.older {
+        opacity: 0.6;
     }
     .ul-name {
         font-size: 0.52rem;

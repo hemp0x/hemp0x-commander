@@ -5,6 +5,7 @@
     import "../../components.css";
     import ModalAlert from "./ModalAlert.svelte";
     import AddressBookPicker from "../ui/AddressBookPicker.svelte";
+    import WalletUnlockModal from "../ui/WalletUnlockModal.svelte";
 
     export let isOpen = false;
     export let inline = false;
@@ -24,6 +25,13 @@
     let lockConfirmed = false;
     let isSubmitting = false;
     let lockHoldSeconds = 10;
+
+    // Wallet unlock
+    let showUnlockModal = false;
+    let unlockPassword = "";
+    let unlocking = false;
+    let unlockError = "";
+    let unlockActionType = "";
     let isHolding = false;
     let holdTimer;
 
@@ -114,6 +122,47 @@
         }
     }
 
+    function isWalletUnlockError(err) {
+        const text = String(err || "");
+        const lower = text.toLowerCase();
+        return text.includes("ERROR CODE: -13")
+            || lower.includes("walletpassphrase")
+            || lower.includes("wallet passphrase")
+            || lower.includes("please enter the wallet passphrase")
+            || /wallet.*locked|passphrase|unlock/i.test(text);
+    }
+
+    function requestWalletUnlock(actionType) {
+        unlockPassword = "";
+        unlockError = "";
+        unlockActionType = actionType;
+        showUnlockModal = true;
+    }
+
+    async function unlockAndRetry() {
+        if (!unlockPassword.trim() || unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
+            unlockPassword = "";
+            showUnlockModal = false;
+            if (unlockActionType === "transfer") {
+                await handleTransferLogic();
+            } else if (unlockActionType === "lock") {
+                await handleLock();
+            }
+        } catch (err) {
+            if (isWalletUnlockError(err)) {
+                unlockError = "Wallet unlock failed. Check the passphrase and try again.";
+            } else {
+                unlockError = String(err);
+            }
+        } finally {
+            unlocking = false;
+        }
+    }
+
     // Called by timer when 10s is up
     async function handleTransferLogic() {
         isSubmitting = true;
@@ -167,6 +216,11 @@
                 true, // Close modal after OK
             );
         } catch (e) {
+            if (isWalletUnlockError(e)) {
+                isSubmitting = false;
+                requestWalletUnlock("transfer");
+                return;
+            }
             if (previewJournalId) {
                 try {
                     await invoke("update_tx_journal_entry", {
@@ -242,6 +296,11 @@
                 true,
             );
         } catch (e) {
+            if (isWalletUnlockError(e)) {
+                isSubmitting = false;
+                requestWalletUnlock("lock");
+                return;
+            }
             if (previewJournalId) {
                 try {
                     await invoke("update_tx_journal_entry", {
@@ -466,6 +525,17 @@
         message={alertMessage}
         type={alertType}
         on:close={handleAlertClose}
+    />
+    <WalletUnlockModal
+        show={showUnlockModal}
+        bind:password={unlockPassword}
+        {unlocking}
+        error={unlockError}
+        title="UNLOCK WALLET"
+        body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction."
+        confirmLabel="UNLOCK AND BROADCAST"
+        on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; }}
+        on:confirm={unlockAndRetry}
     />
 {/if}
 

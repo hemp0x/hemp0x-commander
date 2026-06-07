@@ -9,6 +9,7 @@
     import IpfsHashField from "../ui/IpfsHashField.svelte";
     import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
     import AssetPicker from "../ui/AssetPicker.svelte";
+    import WalletUnlockModal from "../ui/WalletUnlockModal.svelte";
     import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
 
     export let isOpen = false;
@@ -43,6 +44,10 @@
     let tagName = "";
     let tagAddr = "";
     let tagAction = "add"; // add or remove
+    /** @type {any[]} */
+    let qualifierAssets = [];
+    let qualifierAssetsLoading = false;
+    let qualifierAssetsLoaded = false;
 
     // Tag Lookup State
     /** @type {any[]} */
@@ -120,10 +125,19 @@
     /** @type {string | null} */
     let previewJournalId = null;
 
+    // Wallet unlock
+    let showUnlockModal = false;
+    let unlockPassword = "";
+    let unlocking = false;
+    let unlockError = "";
+
     $: if (isOpen && nodeOnline) loadWalletAddresses();
     $: if (isOpen && !recentTagTargetsLoaded) {
         loadRecentTagTargets();
         recentTagTargetsLoaded = true;
+    }
+    $: if (isOpen && nodeOnline && activeTab === "tags" && !qualifierAssetsLoaded) {
+        loadQualifierAssets();
     }
     $: if (isOpen && nodeOnline && activeTab === "snapshot") hydrateSnapshotTab();
     $: if (isOpen && nodeOnline && activeTab === "rewards") hydrateRewardsTab();
@@ -207,6 +221,47 @@
 
     function saveRecentTagTargets() {
         localStorage.setItem("commander.tagRecentTargets.v1", JSON.stringify(recentTagTargets.slice(0, 8)));
+    }
+
+    async function loadQualifierAssets() {
+        if (qualifierAssetsLoading) return;
+        qualifierAssetsLoading = true;
+        try {
+            /** @type {any[]} */
+            const list = await invoke("list_qualifier_assets");
+            qualifierAssets = Array.isArray(list) ? list : [];
+        } catch (err) {
+            // Fallback: derive qualifier assets from the supplied `assets` list.
+            const fallback = (assets || []).filter((a) =>
+                typeof a?.name === "string" && a.name.startsWith("#")
+            );
+            if (fallback.length > 0) {
+                qualifierAssets = fallback.map((a) => ({
+                    name: a.name,
+                    balance: a.balance ?? "0",
+                    has_owner: false,
+                    owner_balance: null,
+                    source: "fallback",
+                }));
+            } else {
+                qualifierAssets = [];
+                console.warn("list_qualifier_assets failed:", err);
+            }
+        } finally {
+            qualifierAssetsLoading = false;
+            qualifierAssetsLoaded = true;
+        }
+    }
+
+    /**
+     * @param {string|number} raw
+     * @returns {string}
+     */
+    function formatQualifierQty(raw) {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return "0";
+        // Qualifiers are whole units (1–10), no decimals.
+        return Math.trunc(n).toString();
     }
 
     /**
@@ -843,6 +898,11 @@
             triggerAlert("Success", successMessage, "success");
             resetFields();
         } catch (err) {
+            if (isWalletUnlockError(err)) {
+                confirmOpen = false;
+                requestWalletUnlock();
+                return;
+            }
             if (previewJournalId) {
                 try {
                     await invoke("update_tx_journal_entry", {
@@ -882,6 +942,44 @@
         confirmOpen = false;
         previewData = null;
         previewJournalId = null;
+    }
+
+    function isWalletUnlockError(err) {
+        const text = String(err || "");
+        const lower = text.toLowerCase();
+        return text.includes("ERROR CODE: -13")
+            || lower.includes("walletpassphrase")
+            || lower.includes("wallet passphrase")
+            || lower.includes("please enter the wallet passphrase")
+            || /wallet.*locked|passphrase|unlock/i.test(text);
+    }
+
+    function requestWalletUnlock() {
+        unlockPassword = "";
+        unlockError = "";
+        showUnlockModal = true;
+    }
+
+    async function unlockAndRetry() {
+        if (!unlockPassword.trim() || unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
+            unlockPassword = "";
+            showUnlockModal = false;
+            confirmOpen = true;
+            isBroadcasting = false;
+            await confirmAction();
+        } catch (err) {
+            if (isWalletUnlockError(err)) {
+                unlockError = "Wallet unlock failed. Check the passphrase and try again.";
+            } else {
+                unlockError = String(err);
+            }
+        } finally {
+            unlocking = false;
+        }
     }
 </script>
 
@@ -1048,23 +1146,52 @@
                             <div class="panel-title-row">
                                 <h4>Tag Control</h4>
                                 <HelpHitbox title="Tag Control">
-                                    <p>Manage qualifier tags assigned to addresses. You must own the qualifier asset to add or remove its tags.</p>
+                                    <p>Manage qualifier tags assigned to addresses. You must hold the qualifier asset to add or remove its tag.</p>
                                     <p><strong>Actions:</strong></p>
                                     <ul>
                                         <li><strong>Add tag</strong> — grant a qualifier to an address.</li>
                                         <li><strong>Remove tag</strong> — revoke a qualifier from an address.</li>
                                         <li><strong>List tags</strong> — check which qualifiers an address currently holds.</li>
                                     </ul>
-                                    <p><strong>Common failures:</strong> invalid address format, missing qualifier ownership token, or node missing <code>-assetindex</code>.</p>
+                                    <p><strong>Common failures:</strong> invalid address format, you do not hold the qualifier, or node missing <code>-assetindex</code>.</p>
                                 </HelpHitbox>
                             </div>
 
                             <!-- Manage Tags -->
                             <div class="subpanel">
                                 <h5>Add / Remove Tag</h5>
-                                <div class="field-group">
-                                    <label for="tag-name">Tag Name (Qualifier)</label>
-                                    <input id="tag-name" type="text" bind:value={tagName} placeholder="#KYC" class="cyber-input" />
+                                <AssetPicker
+                                    id="tag-name-picker"
+                                    label="Qualifier (Owned by Wallet)"
+                                    bind:value={tagName}
+                                    assets={qualifierAssets.map((q) => ({
+                                        name: q.name,
+                                        balance: q.balance,
+                                        type: "QUALIFIER",
+                                    }))}
+                                    placeholder="#KYC"
+                                />
+                                <div class="qualifier-context">
+                                    {#if qualifierAssetsLoading}
+                                        <span class="qualifier-hint">Loading qualifier tags...</span>
+                                    {:else if qualifierAssets.length === 0}
+                                        <span class="qualifier-hint warn">
+                                            No qualifier assets owned by this wallet. Issue a qualifier from the
+                                            Qualifiers tab to enable tagging.
+                                        </span>
+                                    {:else if tagName}
+                                        {@const selected = qualifierAssets.find((q) => q.name === tagName)}
+                                        {#if selected}
+                                            <span class="qualifier-hint">
+                                                <strong>{formatQualifierQty(selected.balance)}</strong> unit{formatQualifierQty(selected.balance) === "1" ? "" : "s"} held
+                                            </span>
+                                        {/if}
+                                    {:else}
+                                        <span class="qualifier-hint">
+                                            Pick a qualifier you hold. Holding 1 unit is enough to add or remove that
+                                            tag on any address.
+                                        </span>
+                                    {/if}
                                 </div>
                                 <WalletAddressPicker
                                     id="tag-address"
@@ -1424,6 +1551,18 @@
         on:close={cancelConfirm}
         on:confirm={confirmAction}
     />
+
+    <WalletUnlockModal
+        show={showUnlockModal}
+        bind:password={unlockPassword}
+        {unlocking}
+        error={unlockError}
+        title="UNLOCK WALLET"
+        body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction."
+        confirmLabel="UNLOCK AND BROADCAST"
+        on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; }}
+        on:confirm={unlockAndRetry}
+    />
 {/if}
 
 <style>
@@ -1769,6 +1908,26 @@
         background: rgba(0, 255, 65, 0.1);
         border-color: rgba(0, 255, 65, 0.3);
         color: var(--color-primary);
+    }
+
+    .qualifier-context {
+        margin: -0.2rem 0 0.4rem;
+        padding: 0.4rem 0.55rem;
+        background: rgba(170, 130, 255, 0.04);
+        border: 1px solid rgba(170, 130, 255, 0.15);
+        border-radius: 6px;
+    }
+    .qualifier-hint {
+        font-size: 0.65rem;
+        color: #888;
+        line-height: 1.35;
+    }
+    .qualifier-hint strong {
+        color: var(--color-primary);
+        font-weight: 600;
+    }
+    .qualifier-hint.warn {
+        color: #d49b4d;
     }
 
     .panel-actions {

@@ -17,6 +17,7 @@
     /** @type {"loading"|"onboarding"|"identity-picker"|"chat"} */
     let view = "loading";
     let selectedIdentity = "";
+    let isGuest = false;
     let ownIdentities = [];
     let identitiesLoading = false;
     let identitiesError = "";
@@ -32,6 +33,7 @@
         discoveryScanDepth: 500,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
+        autoBlockTags: ["#SPAM"],
     };
     let lastScanBlock = 0;
 
@@ -80,8 +82,10 @@
             discoveryScanDepth: 500,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
+            autoBlockTags: ["#SPAM"],
         });
         const savedId = loadJson(IDENTITY_KEY, null);
+        const savedGuest = loadJson("h0xc_isGuest", false);
 
         // Load identities
         identitiesLoading = true;
@@ -99,7 +103,8 @@
         }
 
         if (ownIdentities.length === 0) {
-            view = "onboarding";
+            view = savedGuest ? "chat" : "onboarding";
+            isGuest = savedGuest && view === "chat";
         } else if (savedId && typeof savedId === "string" && ownIdentities.includes(savedId)) {
             selectedIdentity = savedId;
             view = "chat";
@@ -136,6 +141,12 @@
     function handleCreateIdentity() {
         close();
         dispatch("createH0xC");
+    }
+
+    function enterAsGuest() {
+        isGuest = true;
+        saveJson("h0xc_isGuest", true);
+        view = "chat";
     }
 
     function close() {
@@ -229,6 +240,9 @@
                             </button>
                             <button class="onboard-btn refresh" on:click={() => initialize(true)}>
                                 Refresh Identities
+                            </button>
+                            <button class="onboard-btn guest" on:click={enterAsGuest}>
+                                Enter as Guest
                             </button>
                         </div>
                     </div>
@@ -338,6 +352,9 @@
                                 <button class="onboard-btn refresh" on:click={() => initialize(true)}>
                                     Refresh Identities
                                 </button>
+                                <button class="onboard-btn guest" on:click={enterAsGuest}>
+                                    Enter as Guest
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -360,6 +377,7 @@
                     <div class="h0xc-panel-inner">
                         <H0xCChatRoom
                             identity={selectedIdentity}
+                            {isGuest}
                             onSwitchIdentity={handleSwitchIdentity}
                             onClose={closeAndSave}
                             bind:participants
@@ -658,5 +676,14 @@
     .onboard-btn.refresh:hover {
         border-color: rgba(0, 255, 65, 0.3);
         color: #aaa;
+    }
+    .onboard-btn.guest {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #aaa;
+    }
+    .onboard-btn.guest:hover {
+        border-color: rgba(255, 255, 255, 0.25);
+        color: #fff;
     }
 </style>

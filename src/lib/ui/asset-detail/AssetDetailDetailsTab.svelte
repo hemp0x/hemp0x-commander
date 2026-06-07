@@ -12,6 +12,8 @@
      *   type?: string;
      *   isSubAsset?: boolean;
      *   hasOwner?: boolean;
+     *   isQualifier?: boolean;
+     *   isRestricted?: boolean;
      * }} AssetDetail
      * @typedef {{
      *   amount?: number;
@@ -57,11 +59,15 @@
     <div class="detail-stat">
         <div class="stat-label">TYPE</div>
         <div class="stat-value">
-            {asset?.name.includes("#")
-                    ? "NFT"
-                    : asset?.isSubAsset
-                        ? "SUB-ASSET"
-                        : asset?.type || "TOKEN"}
+            {asset?.isQualifier
+                ? "QUALIFIER"
+                : asset?.isRestricted
+                    ? "RESTRICTED"
+                    : asset?.name.includes("#")
+                        ? "NFT"
+                        : asset?.isSubAsset
+                            ? "SUB-ASSET"
+                            : asset?.type || "TOKEN"}
         </div>
     </div>
     <div class="detail-stat">
@@ -192,11 +198,14 @@
         </button>
     {/if}
 </div>
-{#if asset?.hasOwner && asset?.name.startsWith("#")}
+{#if asset?.isQualifier || (asset?.hasOwner && asset?.name.startsWith("#"))}
     <div class="detail-actions owner-actions">
         <button
             class="action-btn"
             on:click={onManageTags}
+            title={asset?.isQualifier
+                ? "Add or remove this qualifier tag on addresses"
+                : "Manage tags for this qualifier"}
         >
             <span class="action-icon">🏷</span> MANAGE TAGS
         </button>

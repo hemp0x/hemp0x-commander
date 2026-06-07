@@ -14,13 +14,14 @@
     import ModalAssetGovernance from "./modals/ModalAssetGovernance.svelte";
     import ModalAssetAdvanced from "./modals/ModalAssetAdvanced.svelte";
     import Tooltip from "./ui/Tooltip.svelte";
+    import WalletUnlockModal from "./ui/WalletUnlockModal.svelte";
     import eyeOpen from "../assets/eye-open.png";
     import eyeClosed from "../assets/eye-closed.png";
 
     /**
      * @typedef {{ name: string, balance?: number|string, type?: string, hasOwner?: boolean, units?: number }} AssetItem
      * @typedef {{ name: string, amount?: number, units?: number, reissuable?: boolean, block_height?: number, has_ipfs?: boolean, ipfs_hash?: string }} AssetMetadata
-     * @typedef {AssetItem & { hasOwner: boolean, ownerBalance: string|number|null, isSubAsset: boolean, parentName: string|null }} GroupedAsset
+     * @typedef {AssetItem & { hasOwner: boolean, ownerBalance: string|number|null, isSubAsset: boolean, parentName: string|null, isQualifier: boolean, isRestricted: boolean }} GroupedAsset
      * @typedef {{
      *   asset?: string,
      *   to?: string,
@@ -118,6 +119,51 @@
 
     // Persistent UI State
     let showHidden = false;
+    let typeFilter = "ALL"; // ALL | TOKEN | OWNER | SUB | NFT | QUALIFIER | RESTRICTED
+
+    /**
+     * @param {GroupedAsset} a
+     * @param {string} filter
+     * @returns {boolean}
+     */
+    function matchesTypeFilter(a, filter) {
+        switch (filter) {
+            case "OWNER":
+                return a.name.endsWith("!") && a.hasOwner;
+            case "TOKEN":
+                return !a.isSubAsset && !a.isQualifier && !a.isRestricted
+                    && !a.name.endsWith("!") && !a.name.includes("#");
+            case "SUB":
+                return a.isSubAsset;
+            case "NFT":
+                return a.name.includes("#") && !a.isQualifier;
+            case "QUALIFIER":
+                return a.isQualifier;
+            case "RESTRICTED":
+                return a.isRestricted;
+            default:
+                return true;
+        }
+    }
+
+    /**
+     * @param {GroupedAsset} a
+     * @returns {string}
+     */
+    function assetTypeLabel(a) {
+        if (a.name.endsWith("!")) return "OWNER";
+        if (a.isQualifier) return "QUALIFIER";
+        if (a.isRestricted) return "RESTRICTED";
+        if (a.name.includes("#")) return "NFT";
+        if (a.isSubAsset) return "SUB-ASSET";
+        return "TOKEN";
+    }
+
+    // Wallet unlock state for broadcast retry
+    let showUnlockModal = false;
+    let unlockPassword = "";
+    let unlocking = false;
+    let unlockError = "";
     /** @type {Set<string>} */
     let hiddenAssets = new Set();
     /** @type {string[]} */
@@ -132,6 +178,9 @@
     $: isNodeOnline = $nodeStatus.online;
 
     let nodeOnline = false;
+    $: modalBlocking = advancedModalOpen || createModalOpen || browseModalOpen
+        || !!selectedDetail || transferModalOpen || reissueModalOpen
+        || subModalOpen || nftModalOpen || govModalOpen;
 
     onMount(async () => {
         tauriReady =
@@ -231,14 +280,18 @@
                 owners.set(baseName, asset);
             } else {
                 // Regular token or sub-asset
+                const isQualifier = asset.name.startsWith("#");
+                const isRestricted = asset.name.startsWith("$");
                 groups.set(asset.name, {
                     ...asset,
                     hasOwner: false,
                     ownerBalance: null,
-                    isSubAsset: asset.name.includes("/"),
+                    isSubAsset: asset.name.includes("/") && !isQualifier && !isRestricted,
                     parentName: asset.name.includes("/")
                         ? asset.name.split("/")[0]
                         : null,
+                    isQualifier,
+                    isRestricted,
                 });
             }
         }
@@ -252,12 +305,16 @@
                 parent.ownerBalance = ownerAsset.balance;
             } else {
                 // Orphan owner (no matching token visible) - show it separately
+                const isQualifier = ownerAsset.name.startsWith("#");
+                const isRestricted = ownerAsset.name.startsWith("$");
                 groups.set(ownerAsset.name, {
                     ...ownerAsset,
                     hasOwner: true,
                     ownerBalance: ownerAsset.balance,
                     isSubAsset: false,
                     parentName: null,
+                    isQualifier,
+                    isRestricted,
                 });
             }
         }
@@ -267,6 +324,11 @@
         // 1. FILTER: Remove hidden (unless showHidden is true)
         if (!showHidden) {
             results = results.filter((a) => !hiddenAssets.has(a.name));
+        }
+
+        // 1b. FILTER: Asset type chip filter
+        if (typeFilter !== "ALL") {
+            results = results.filter((a) => matchesTypeFilter(a, typeFilter));
         }
 
         // 2. SORT: Use persisted order
@@ -819,6 +881,11 @@
             previewData = null;
             refreshAssets();
         } catch (err) {
+            if (isWalletUnlockError(err)) {
+                confirmOpen = false;
+                requestWalletUnlock();
+                return;
+            }
             status = "Error: " + err;
             addNotification({
                 type: "asset",
@@ -857,6 +924,44 @@
         previewData = null;
         previewJournalId = null;
     }
+
+    function isWalletUnlockError(err) {
+        const text = String(err || "");
+        const lower = text.toLowerCase();
+        return text.includes("ERROR CODE: -13")
+            || lower.includes("walletpassphrase")
+            || lower.includes("wallet passphrase")
+            || lower.includes("please enter the wallet passphrase")
+            || /wallet.*locked|passphrase|unlock/i.test(text);
+    }
+
+    function requestWalletUnlock() {
+        unlockPassword = "";
+        unlockError = "";
+        showUnlockModal = true;
+    }
+
+    async function unlockAndRetry() {
+        if (!unlockPassword.trim() || unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await core.invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
+            unlockPassword = "";
+            showUnlockModal = false;
+            confirmOpen = true;
+            isBroadcasting = false;
+            await confirmAction();
+        } catch (err) {
+            if (isWalletUnlockError(err)) {
+                unlockError = "Wallet unlock failed. Check the passphrase and try again.";
+            } else {
+                unlockError = String(err);
+            }
+        } finally {
+            unlocking = false;
+        }
+    }
 </script>
 
 <div class="view-assets">
@@ -874,6 +979,28 @@
                 </button>
             </div>
             <div class="header-options">
+                <div class="type-filter" class:disabled={modalBlocking} role="group" aria-label="Filter by asset type">
+                    {#each [
+                        { id: "ALL", label: "ALL" },
+                        { id: "TOKEN", label: "TOKENS" },
+                        { id: "SUB", label: "SUB" },
+                        { id: "NFT", label: "NFT" },
+                        { id: "QUALIFIER", label: "QUALIF" },
+                        { id: "RESTRICTED", label: "RESTRIC" },
+                    ] as opt}
+                        <button
+                            type="button"
+                            class="type-chip"
+                            class:active={typeFilter === opt.id}
+                            class:qualifier={opt.id === "QUALIFIER"}
+                            disabled={modalBlocking}
+                            on:click={() => (typeFilter = opt.id)}
+                            title={`Show ${opt.label === "QUALIF" ? "Qualifier" : opt.label === "RESTRIC" ? "Restricted" : opt.label} assets`}
+                        >
+                            {opt.label}
+                        </button>
+                    {/each}
+                </div>
                 <Tooltip
                     text={showHidden ? "Hide hidden" : "Show hidden assets"}
                 >
@@ -1170,14 +1297,7 @@
                                     {formatBalance(asset.balance)}
                                 </div>
                                 <div class="asset-meta">
-                                    <span class="asset-type">{asset.hasOwner
-                                        ? "OWNER"
-                                        : asset.name.includes("#")
-                                            ? "NFT"
-                                            : asset.isSubAsset
-                                                ? "SUB-ASSET"
-                                                : "TOKEN"}</span
-                                    >
+                                    <span class="asset-type" class:qualifier={asset.isQualifier}>{assetTypeLabel(asset)}</span>
                                     <button
                                         class="quick-transfer"
                                         title="Transfer"
@@ -1228,6 +1348,18 @@
         {isBroadcasting}
         on:close={cancelConfirm}
         on:confirm={confirmAction}
+    />
+
+    <WalletUnlockModal
+        show={showUnlockModal}
+        bind:password={unlockPassword}
+        {unlocking}
+        error={unlockError}
+        title="UNLOCK WALLET"
+        body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this asset transaction."
+        confirmLabel="UNLOCK AND BROADCAST"
+        on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; }}
+        on:confirm={unlockAndRetry}
     />
 </div>
 
@@ -1282,6 +1414,50 @@
         margin-left: 1rem;
         display: flex;
         align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+    }
+    .type-filter {
+        display: flex;
+        gap: 4px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        padding: 3px;
+    }
+    .type-chip {
+        background: transparent;
+        border: 1px solid transparent;
+        color: #666;
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .type-chip:hover {
+        color: #aaa;
+        background: rgba(255, 255, 255, 0.04);
+    }
+    .type-chip.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .type-chip.active.qualifier {
+        background: rgba(170, 130, 255, 0.12);
+        border-color: rgba(170, 130, 255, 0.4);
+        color: #c2a8ff;
+    }
+    .type-filter.disabled {
+        opacity: 0.4;
+        pointer-events: none;
+    }
+    .type-chip:disabled {
+        cursor: not-allowed;
     }
     .toggle-hidden {
         cursor: pointer;
@@ -1423,6 +1599,8 @@
         user-select: none;
         -webkit-user-select: none;
         position: relative;
+        display: flex;
+        flex-direction: column;
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 8px;
@@ -1463,6 +1641,10 @@
     .card-content {
         position: relative;
         z-index: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 100%;
     }
 
     /* Owner Badge - Crown icon for owned assets */
@@ -1580,6 +1762,8 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        margin-top: auto;
+        padding-top: 0.4rem;
     }
     .asset-type {
         font-size: 0.55rem;
@@ -1589,6 +1773,11 @@
         color: #777;
         letter-spacing: 1px;
         background: rgba(0, 0, 0, 0.3);
+    }
+    .asset-type.qualifier {
+        border-color: rgba(170, 130, 255, 0.35);
+        color: #c2a8ff;
+        background: rgba(170, 130, 255, 0.08);
     }
     .quick-transfer {
         width: 28px;

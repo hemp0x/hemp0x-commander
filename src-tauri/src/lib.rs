@@ -46,6 +46,7 @@ pub fn run() {
             commands::preview_transfer_asset,
             commands::get_transaction_history,
             commands::list_assets,
+            commands::list_qualifier_assets,
             commands::transfer_asset,
             commands::issue_asset,
             commands::ban_old_peers,

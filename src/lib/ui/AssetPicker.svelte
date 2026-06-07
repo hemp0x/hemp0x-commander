@@ -20,6 +20,7 @@
     });
 
     function assetType(asset) {
+        if (asset.type) return asset.type;
         if (asset.name.endsWith("!")) return "Owner";
         if (asset.name.includes("#")) return "NFT";
         if (asset.name.includes("/")) return "Sub";

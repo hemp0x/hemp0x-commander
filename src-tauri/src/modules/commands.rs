@@ -3,6 +3,7 @@ use std::process::Command;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::fs;
+use serde::Serialize;
 use chrono::{Local, TimeZone, DateTime};
 // use tauri::Emitter; // Unused
 
@@ -401,6 +402,18 @@ pub fn send_hemp(to: String, amount: String) -> Result<String, String> {
   run_cli(&[String::from("sendtoaddress"), to, amount])
 }
 
+fn classify_asset_type(name: &str) -> &'static str {
+  if name.ends_with('!') {
+    "OWNER"
+  } else if name.starts_with('#') {
+    "QUALIFIER"
+  } else if name.starts_with('$') {
+    "RESTRICTED"
+  } else {
+    "TOKEN"
+  }
+}
+
 #[tauri::command]
 pub fn list_assets() -> Result<Vec<AssetItem>, String> {
   ensure_config()?;
@@ -410,19 +423,59 @@ pub fn list_assets() -> Result<Vec<AssetItem>, String> {
   if let Some(obj) = value.as_object() {
     for (name, bal) in obj {
       let amount = bal.as_f64().unwrap_or(0.0);
-      let asset_type = if name.ends_with('!') {
-        "OWNER"
-      } else {
-        "TOKEN"
-      };
       items.push(AssetItem {
         name: name.to_string(),
         balance: format!("{:.8}", amount),
-        asset_type: asset_type.to_string(),
+        asset_type: classify_asset_type(name).to_string(),
         asset_type_label: None,
       });
     }
   }
+  Ok(items)
+}
+
+#[derive(Serialize)]
+pub struct QualifierAssetItem {
+  pub name: String,
+  pub balance: String,
+  pub has_owner: bool,
+  pub owner_balance: Option<String>,
+  pub source: String,
+}
+
+#[tauri::command]
+pub fn list_qualifier_assets() -> Result<Vec<QualifierAssetItem>, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("listmyassets")])?;
+  let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+  let obj = match value.as_object() {
+    Some(map) => map,
+    None => return Ok(Vec::new()),
+  };
+
+  let mut items: Vec<QualifierAssetItem> = Vec::new();
+  for (name, info) in obj {
+    if !name.starts_with('#') {
+      continue;
+    }
+    let amount = info
+      .as_f64()
+      .or_else(|| info.get("balance").and_then(|v| v.as_f64()))
+      .unwrap_or(0.0);
+    let owner_name = format!("{}!", name);
+    let owner_balance = obj
+      .get(&owner_name)
+      .and_then(|v| v.as_f64().or_else(|| v.get("balance").and_then(|b| b.as_f64())));
+    items.push(QualifierAssetItem {
+      name: name.to_string(),
+      balance: format!("{:.8}", amount),
+      has_owner: owner_balance.map(|b| b > 0.0).unwrap_or(false),
+      owner_balance: owner_balance.map(|b| format!("{:.8}", b)),
+      source: "listmyassets".to_string(),
+    });
+  }
+
+  items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
   Ok(items)
 }
 

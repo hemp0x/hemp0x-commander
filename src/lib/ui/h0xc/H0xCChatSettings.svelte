@@ -3,27 +3,35 @@
     import { fade } from "svelte/transition";
 
     export let show = false;
-    /** @type {{ messageExpiryDefault: number, discoveryScanDepth: number, autoDiscovery: boolean, pollingIntervalSeconds: number }} */
+    /** @type {{ messageExpiryDefault: number, discoveryScanDepth: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[] }} */
     export let settings = {
         messageExpiryDefault: 0,
         discoveryScanDepth: 500,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
+        autoBlockTags: ["#SPAM"],
     };
 
     const dispatch = createEventDispatcher();
 
     /** @type {typeof settings} */
     let draft;
+    let draftTagsText = "";
 
     $: draft = { ...settings };
+    $: draftTagsText = (draft.autoBlockTags || []).join(", ");
 
     function close() {
         dispatch("close");
     }
 
     function apply() {
-        dispatch("save", { settings: { ...draft } });
+        const tags = draftTagsText
+            .split(/[,\n]+/)
+            .map((/** @type {string} */ t) => t.trim())
+            .filter((/** @type {string} */ t) => t.length > 0);
+        draft.autoBlockTags = tags;
+        dispatch("save", { settings: { ...draft, autoBlockTags: tags } });
     }
 
     function setExpiry(days) {
@@ -37,7 +45,9 @@
             discoveryScanDepth: 500,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
+            autoBlockTags: ["#SPAM"],
         };
+        draftTagsText = "#SPAM";
     }
 </script>
 
@@ -100,6 +110,17 @@
                         step="5"
                     />
                     <div class="sett-hint">How often to refresh messages when chat view is open.</div>
+                </div>
+
+                <div class="sett-section">
+                    <div class="sett-label">AUTO-BLOCK TAGS</div>
+                    <div class="sett-hint">Messages containing these tags will be hidden automatically. One tag per line or comma-separated. Default: #SPAM</div>
+                    <textarea
+                        class="sett-input tags-input"
+                        bind:value={draftTagsText}
+                        placeholder="#SPAM"
+                        rows="3"
+                    ></textarea>
                 </div>
             </div>
             <div class="sett-footer">
@@ -265,5 +286,9 @@
     .sett-btn.save:hover {
         background: var(--color-primary);
         color: #000;
+    }
+    .tags-input {
+        resize: vertical;
+        min-height: 2.5rem;
     }
 </style>

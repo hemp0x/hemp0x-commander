@@ -16,3 +16,9 @@ export function isH0xCAsset(name) {
         || upper.endsWith("/H0XC!")
         || upper.endsWith(".H0XC!");
 }
+
+export function isH0xCChannelAsset(name) {
+    if (!name) return false;
+    const upper = String(name).toUpperCase();
+    return upper.endsWith("/H0XC") || upper.endsWith(".H0XC");
+}

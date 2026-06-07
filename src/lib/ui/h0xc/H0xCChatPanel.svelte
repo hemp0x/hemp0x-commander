@@ -5,7 +5,7 @@
     import { fade } from "svelte/transition";
     import H0xCIdentityPicker from "./H0xCIdentityPicker.svelte";
     import H0xCChatRoom from "./H0xCChatRoom.svelte";
-    import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
+    import { deriveRootNameFn, isH0xCChannelAsset } from "../../stores/h0xc.js";
 
     /** @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number }} Participant */
 
@@ -109,7 +109,7 @@
         try {
             const assets = await core.invoke("list_assets");
             ownIdentities = (Array.isArray(assets) ? assets : [])
-                .filter((/** @type {{name: string}} */ a) => isH0xCAsset(a.name))
+                .filter((/** @type {{name: string}} */ a) => isH0xCChannelAsset(a.name))
                 .map((/** @type {{name: string}} */ a) => a.name);
         } catch (err) {
             identitiesError = String(err);

@@ -30,18 +30,24 @@
     let blockedUsers = [];
     let settings = {
         messageExpiryDefault: 0,
-        discoveryScanDepth: 5000,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
+        discoveryEnabled: true,
+        muteNotifications: false,
+        discoveryScanLimit: 2000,
     };
     let lastScanBlock = 0;
+    let lastSeenMessageKey = "";
+    let lastScanTime = "";
 
     const SETTINGS_KEY = "h0xc_settings";
     const PARTICIPANTS_KEY = "h0xc_cachedParticipants";
     const MUTED_KEY = "h0xc_mutedUsers";
     const BLOCKED_KEY = "h0xc_blockedUsers";
     const IDENTITY_KEY = "h0xc_selectedIdentity";
+    const LAST_SEEN_KEY = "h0xc_lastSeenMessageKey";
+    const LAST_SCAN_TIME_KEY = "h0xc_lastScanTime";
 
     function loadJson(key, fallback) {
         try {
@@ -79,14 +85,22 @@
         participants = loadJson(PARTICIPANTS_KEY, []);
         settings = loadJson(SETTINGS_KEY, {
             messageExpiryDefault: 0,
-            discoveryScanDepth: 5000,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
+            discoveryEnabled: true,
+            muteNotifications: false,
+            discoveryScanLimit: 2000,
         });
         if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
             settings.autoBlockTags = ["#SPAM"];
         }
+        if (typeof settings.discoveryEnabled !== "boolean") settings.discoveryEnabled = true;
+        if (typeof settings.muteNotifications !== "boolean") settings.muteNotifications = false;
+        if (typeof settings.discoveryScanLimit !== "number" || settings.discoveryScanLimit < 100) settings.discoveryScanLimit = 2000;
+        settings.discoveryScanLimit = Math.min(settings.discoveryScanLimit, 2000);
+        lastSeenMessageKey = loadJson(LAST_SEEN_KEY, "");
+        lastScanTime = loadJson(LAST_SCAN_TIME_KEY, "");
         const savedId = loadJson(IDENTITY_KEY, null);
         const savedGuest = loadJson("h0xc_isGuest", false);
 
@@ -178,6 +192,8 @@
         saveJson(PARTICIPANTS_KEY, participants);
         saveJson(SETTINGS_KEY, settings);
         saveJson(IDENTITY_KEY, selectedIdentity);
+        saveJson(LAST_SEEN_KEY, lastSeenMessageKey);
+        saveJson(LAST_SCAN_TIME_KEY, lastScanTime);
         close();
     }
 
@@ -186,6 +202,8 @@
         saveJson(BLOCKED_KEY, blockedUsers);
         saveJson(PARTICIPANTS_KEY, participants);
         saveJson(SETTINGS_KEY, settings);
+        saveJson(LAST_SEEN_KEY, lastSeenMessageKey);
+        saveJson(LAST_SCAN_TIME_KEY, lastScanTime);
     }
 
     $: if (participants) persistState();
@@ -193,6 +211,8 @@
     $: if (blockedUsers) saveJson(BLOCKED_KEY, blockedUsers);
     $: if (settings) saveJson(SETTINGS_KEY, settings);
     $: if (selectedIdentity) saveJson(IDENTITY_KEY, selectedIdentity);
+    $: if (lastSeenMessageKey !== undefined) saveJson(LAST_SEEN_KEY, lastSeenMessageKey);
+    $: if (lastScanTime !== undefined) saveJson(LAST_SCAN_TIME_KEY, lastScanTime);
 </script>
 
 {#if show}
@@ -284,19 +304,21 @@
                 </div>
             {:else if view === "chat"}
                 <div class="h0xc-panel-inner">
-                    <H0xCChatRoom
-                        identity={selectedIdentity}
-                        {isGuest}
-                        onSwitchIdentity={handleSwitchIdentity}
-                        onBackToSetup={backToSetup}
-                        onClose={closeAndSave}
-                        on:manageTags={() => dispatch("manageTags")}
-                        bind:participants
-                        bind:mutedUsers
-                        bind:blockedUsers
-                        bind:settings
-                        bind:lastScanBlock
-                    />
+                        <H0xCChatRoom
+                            identity={selectedIdentity}
+                            {isGuest}
+                            onSwitchIdentity={handleSwitchIdentity}
+                            onBackToSetup={backToSetup}
+                            onClose={closeAndSave}
+                            on:manageTags={() => dispatch("manageTags")}
+                            bind:participants
+                            bind:mutedUsers
+                            bind:blockedUsers
+                            bind:settings
+                            bind:lastScanBlock
+                            bind:lastSeenMessageKey
+                            bind:lastScanTime
+                        />
                 </div>
             {/if}
         </div>
@@ -411,6 +433,8 @@
                             bind:blockedUsers
                             bind:settings
                             bind:lastScanBlock
+                            bind:lastSeenMessageKey
+                            bind:lastScanTime
                         />
                     </div>
                 {/if}

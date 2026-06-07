@@ -546,11 +546,12 @@ pub fn get_asset_data(name: String) -> Result<AssetData, String> {
 }
 
 #[tauri::command]
-pub fn list_network_assets(pattern: String, verbose: bool) -> Result<String, String> {
+pub fn list_network_assets(pattern: String, verbose: bool, limit: Option<i64>) -> Result<String, String> {
   ensure_config()?;
   let search = if pattern.is_empty() { String::from("*") } else { pattern };
   let verbose_str = if verbose { String::from("true") } else { String::from("false") };
-  run_cli(&[String::from("listassets"), search, verbose_str, String::from("50")])
+  let count = limit.unwrap_or(50).clamp(1, 2000);
+  run_cli(&[String::from("listassets"), search, verbose_str, count.to_string()])
 }
 
 #[tauri::command]

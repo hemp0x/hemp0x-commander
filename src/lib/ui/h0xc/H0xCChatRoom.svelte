@@ -34,9 +34,11 @@
     export let participants = [];
     export let mutedUsers = [];
     export let blockedUsers = [];
-    /** @type {{ messageExpiryDefault: number, discoveryScanDepth: number, autoDiscovery: boolean, pollingIntervalSeconds: number }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number }} */
     export let settings = {};
     export let lastScanBlock = 0;
+    export let lastSeenMessageKey = "";
+    export let lastScanTime = "";
 
     /** @type {AssetMessage[]} */
     let messages = [];
@@ -91,11 +93,26 @@
     let tagCheckChannelsHash = "";
 
     // Auto-discovery
-    /** @type {ReturnType<typeof setInterval> | null} */
-    let discoveryTimer = null;
     let lastAutoDiscovery = 0;
     const AUTO_DISCOVERY_INTERVAL_MS = 300000; // 5 minutes
     let chatVisible = true;
+
+    // Smart discovery
+    /** @type {"idle"|"scanning"|"paused"|"disabled"} */
+    let discoveryState = "idle";
+    let discoveryAbort = false;
+    let discoveryProgress = "";
+    let lastDiscoveryRpcTime = 0;
+    const DISCOVERY_RPC_COOLDOWN_MS = 3000;
+    /** @type {ReturnType<typeof setInterval> | null} */
+    let discoveryChunkTimer = null;
+    const DISCOVERY_CHUNK_MS = 15000;
+    let discoveryChunkRunning = false;
+
+    // Notifications
+    /** @type {Set<string>} */
+    let seenMessageKeys = new Set();
+    let initialLoadDone = false;
 
     // Resolved addresses for context
     /** @type {Record<string, string>} */
@@ -125,10 +142,18 @@
                 return;
             }
             const msgs = await core.invoke("view_asset_messages");
+            const prevMessages = messages;
             messages = (Array.isArray(msgs) ? msgs : [])
                 .filter((/** @type {AssetMessage} */ m) => isH0xCAsset(m.asset_name));
             updateParticipantsFromMessages(messages);
             decodeVisible(messages);
+
+            if (!initialLoadDone) {
+                for (const msg of messages) seenMessageKeys.add(messageKey(msg));
+                initialLoadDone = true;
+            } else if (prevMessages.length > 0) {
+                notifyNewMessages(prevMessages, messages);
+            }
 
             const warns = [];
             if (info.warnings && info.warnings.length > 0) warns.push(...info.warnings);
@@ -245,6 +270,42 @@
         decodeCache = decodeCache;
     }
 
+    function messageKey(/** @type {AssetMessage} */ msg) {
+        return `${msg.asset_name}|${msg.time}|${msg.message}`;
+    }
+
+    function isNotificationSuppressed(/** @type {string} */ rootName, /** @type {string} */ channelName) {
+        if (settings.muteNotifications) return true;
+        const upper = rootName.toUpperCase();
+        if (blockedUsers.map((u) => u.toUpperCase()).includes(upper)) return true;
+        if (mutedUsers.map((u) => u.toUpperCase()).includes(upper)) return true;
+        if (tagBlockedChannels.has(channelName)) return true;
+        if (isGuest) return true;
+        return false;
+    }
+
+    function notifyNewMessages(/** @type {AssetMessage[]} */ prev, /** @type {AssetMessage[]} */ current) {
+        const prevKeys = new Set(prev.map(messageKey));
+        for (const msg of current) {
+            const key = messageKey(msg);
+            if (prevKeys.has(key) || seenMessageKeys.has(key)) continue;
+            seenMessageKeys.add(key);
+            lastSeenMessageKey = key;
+            const rn = deriveRootNameFn(msg.asset_name);
+            if (isNotificationSuppressed(rn, msg.asset_name)) continue;
+            const decoded = decodeCache[msg.message];
+            const body = decoded?.is_short_message && decoded.text
+                ? decoded.text
+                : `New message from ${rn}`;
+            addNotification({
+                type: "message",
+                severity: "info",
+                title: `H0XC · [${rn.toUpperCase()}]`,
+                body,
+            });
+        }
+    }
+
     /** @type {AssetMessage[]} */
     $: filteredMessages = (() => {
         const bl = new Set(blockedUsers.map((u) => u.toUpperCase()));
@@ -313,19 +374,41 @@
 
     /**
      * @param {boolean} [silent]
+     * @param {boolean} [large]
      */
-    async function discover(silent = false) {
+    async function discover(silent = false, large = false) {
+        if (!settings.discoveryEnabled) {
+            discoveryState = "disabled";
+            if (!silent) discoveryResult = "Discovery is disabled in settings.";
+            return;
+        }
+        if (discovering) return;
+
+        const now = Date.now();
+        if (now - lastDiscoveryRpcTime < DISCOVERY_RPC_COOLDOWN_MS) return;
+
         discovering = true;
+        discoveryAbort = false;
+        discoveryState = "scanning";
         if (!silent) {
             discoveryError = "";
             discoveryResult = "";
         }
+        discoveryProgress = large ? "Manual scan started..." : "Scanning...";
+
         try {
+            const rpcLimit = large ? Math.min(settings.discoveryScanLimit || 2000, 2000) : 200;
             let raw;
             try {
-                raw = await core.invoke("list_network_assets", { pattern: "*.H0XC", verbose: true });
+                raw = await core.invoke("list_network_assets", { pattern: "*.H0XC", verbose: true, limit: rpcLimit });
             } catch {
                 raw = await core.invoke("view_message_channels");
+            }
+
+            if (discoveryAbort) {
+                discoveryState = "paused";
+                discoveryProgress = "";
+                return;
             }
 
             let discovered = [];
@@ -348,6 +431,7 @@
             const existing = new Set(participants.map((p) => p.assetName));
             let added = 0;
             for (const name of h0xcDiscovered) {
+                if (discoveryAbort) break;
                 if (!existing.has(name)) {
                     participants = [...participants, {
                         rootName: deriveRootNameFn(name),
@@ -358,14 +442,48 @@
                     added++;
                 }
             }
+            lastDiscoveryRpcTime = Date.now();
+            const ts = new Date().toLocaleTimeString();
+            lastScanTime = ts;
             if (!silent) {
                 discoveryResult = added > 0 ? `Discovered ${added} new participant(s)` : "No new participants found";
             }
+            discoveryProgress = "";
+            discoveryState = "idle";
             lastScanBlock = 0;
         } catch (err) {
             if (!silent) discoveryError = String(err);
+            discoveryState = "idle";
+            discoveryProgress = "";
         } finally {
             discovering = false;
+        }
+    }
+
+    function cancelDiscovery() {
+        discoveryAbort = true;
+        discoveryState = "paused";
+        discoveryProgress = "";
+    }
+
+    function startBackgroundDiscovery() {
+        if (discoveryChunkTimer) clearInterval(discoveryChunkTimer);
+        discoveryChunkTimer = setInterval(() => {
+            if (!chatVisible) return;
+            if (!settings.autoDiscovery || !settings.discoveryEnabled) return;
+            if (discovering || discoveryChunkRunning) return;
+            const now = Date.now();
+            if (now - lastAutoDiscovery < AUTO_DISCOVERY_INTERVAL_MS) return;
+            lastAutoDiscovery = now;
+            discoveryChunkRunning = true;
+            discover(true).finally(() => { discoveryChunkRunning = false; });
+        }, DISCOVERY_CHUNK_MS);
+    }
+
+    function stopBackgroundDiscovery() {
+        if (discoveryChunkTimer) {
+            clearInterval(discoveryChunkTimer);
+            discoveryChunkTimer = null;
         }
     }
 
@@ -563,25 +681,6 @@
         activePollingIntervalSeconds = 0;
     }
 
-    function startAutoDiscovery() {
-        if (discoveryTimer) clearInterval(discoveryTimer);
-        discoveryTimer = setInterval(() => {
-            if (!chatVisible) return;
-            if (!settings.autoDiscovery) return;
-            const now = Date.now();
-            if (now - lastAutoDiscovery < AUTO_DISCOVERY_INTERVAL_MS) return;
-            lastAutoDiscovery = now;
-            discover(true);
-        }, 60000); // check every minute, but only run if cooldown passed
-    }
-
-    function stopAutoDiscovery() {
-        if (discoveryTimer) {
-            clearInterval(discoveryTimer);
-            discoveryTimer = null;
-        }
-    }
-
     function onVisibilityChange() {
         chatVisible = document.visibilityState === "visible";
         if (chatVisible) {
@@ -593,13 +692,14 @@
         document.addEventListener("visibilitychange", onVisibilityChange);
         loadMessages();
         startPolling();
-        startAutoDiscovery();
+        startBackgroundDiscovery();
     });
 
     onDestroy(() => {
         document.removeEventListener("visibilitychange", onVisibilityChange);
         stopPolling();
-        stopAutoDiscovery();
+        stopBackgroundDiscovery();
+        discoveryAbort = true;
     });
 
     $: if (
@@ -608,6 +708,18 @@
         && settings.pollingIntervalSeconds !== activePollingIntervalSeconds
     ) {
         startPolling();
+    }
+
+    $: if (settings?.autoDiscovery !== undefined || settings?.discoveryEnabled !== undefined) {
+        stopBackgroundDiscovery();
+        if (settings.autoDiscovery && settings.discoveryEnabled) {
+            startBackgroundDiscovery();
+        }
+        if (!settings.discoveryEnabled) {
+            discoveryState = "disabled";
+        } else if (discoveryState === "disabled") {
+            discoveryState = "idle";
+        }
     }
 
     let lastIdentity = "";
@@ -663,7 +775,7 @@
             <button class="header-btn" on:click={refresh} disabled={messagesLoading} title="Refresh messages">
                 ↻
             </button>
-            <button class="header-btn" on:click={() => discover()} disabled={discovering} title="Discover .H0XC participants">
+            <button class="header-btn" on:click={() => discover(false, true)} disabled={discovering || !settings.discoveryEnabled} title={settings.discoveryEnabled ? "Discover .H0XC participants" : "Discovery is disabled in settings"}>
                 {discovering ? "..." : "🔍"}
             </button>
             <button class="header-btn" on:click={toggleSettings} title="Settings">
@@ -684,7 +796,14 @@
             <span class="status-pill">Tags...</span>
         {/if}
         {#if discovering}
-            <span class="status-pill">Scanning...</span>
+            <span class="status-pill">Scanning...{discoveryProgress ? ` ${discoveryProgress}` : ""}</span>
+            <button class="status-cancel" on:click={cancelDiscovery} title="Cancel scan">✕</button>
+        {/if}
+        {#if !discovering && discoveryState === "idle" && lastScanTime}
+            <span class="status-pill dim">Last scan: {lastScanTime}</span>
+        {/if}
+        {#if !settings.discoveryEnabled}
+            <span class="status-pill warn">Discovery off</span>
         {/if}
         {#if discoveryResult}
             <span class="status-pill ok">{discoveryResult}</span>
@@ -735,8 +854,12 @@
                 <div class="chat-empty">
                     <div class="empty-big">◈</div>
                     <div class="empty-line">No messages in H0XC yet.</div>
-                    <div class="empty-line sub">Be the first to send a message or click Discover to find participants.</div>
-                    <button class="empty-discover" on:click={discover}>Discover</button>
+                    <div class="empty-line sub">Messages load from subscribed channels via Core. Use Discover to find new H0XC participants.</div>
+                    {#if settings.discoveryEnabled}
+                        <button class="empty-discover" on:click={() => discover(false, true)}>Discover</button>
+                    {:else}
+                        <div class="empty-line sub">Discovery is disabled. Enable it in Settings to find participants.</div>
+                    {/if}
                 </div>
             {:else}
                 {#each messageRows as row (row.msg.asset_name + row.msg.time + row.msg.message)}
@@ -812,6 +935,8 @@
         show={settingsOpen}
         {settings}
         {blockedUsers}
+        {discoveryState}
+        {lastScanTime}
         on:close={() => (settingsOpen = false)}
         on:save={handleSaveSettings}
         on:unblock={(e) => { blockedUsers = blockedUsers.filter((u) => u !== e.detail.rootName); }}
@@ -966,6 +1091,26 @@
         color: #ff8888;
         border-color: rgba(255, 85, 85, 0.15);
         background: rgba(255, 85, 85, 0.05);
+    }
+    .status-pill.dim {
+        color: #555;
+        border-color: rgba(255, 255, 255, 0.05);
+        background: transparent;
+    }
+    .status-cancel {
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.2);
+        border-radius: 999px;
+        color: #ff8888;
+        font-size: 0.48rem;
+        cursor: pointer;
+        padding: 0.08rem 0.3rem;
+        line-height: 1;
+        transition: all 0.15s;
+    }
+    .status-cancel:hover {
+        background: rgba(255, 85, 85, 0.2);
+        color: #ff5555;
     }
     .chat-body-wrap {
         display: flex;

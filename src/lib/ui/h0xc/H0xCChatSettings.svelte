@@ -3,16 +3,22 @@
     import { fade } from "svelte/transition";
 
     export let show = false;
-    /** @type {{ messageExpiryDefault: number, discoveryScanDepth: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[] }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number }} */
     export let settings = {
         messageExpiryDefault: 0,
-        discoveryScanDepth: 5000,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
+        discoveryEnabled: true,
+        muteNotifications: false,
+        discoveryScanLimit: 2000,
     };
     /** @type {string[]} */
     export let blockedUsers = [];
+    /** @type {"idle"|"scanning"|"paused"|"disabled"} */
+    export let discoveryState = "idle";
+    /** @type {string} */
+    export let lastScanTime = "";
 
     const dispatch = createEventDispatcher();
 
@@ -49,10 +55,12 @@
     function resetDefaults() {
         draft = {
             messageExpiryDefault: 0,
-            discoveryScanDepth: 5000,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
+            discoveryEnabled: true,
+            muteNotifications: false,
+            discoveryScanLimit: 2000,
         };
         draftTagsText = "#SPAM";
     }
@@ -94,14 +102,14 @@
                 <div class="sett-section">
                     <div class="field-row">
                         <div class="field-group narrow-inline">
-                            <span class="sett-label">DISCOVERY DEPTH</span>
+                            <span class="sett-label">DISCOVERY SCAN LIMIT</span>
                             <input
                                 type="number"
                                 class="cyber-input"
-                                bind:value={draft.discoveryScanDepth}
-                                min="500"
-                                max="50000"
-                                step="500"
+                                bind:value={draft.discoveryScanLimit}
+                                min="100"
+                                max="2000"
+                                step="100"
                             />
                         </div>
                         <div class="field-group narrow-inline">
@@ -116,7 +124,31 @@
                             />
                         </div>
                     </div>
-                    <p class="sett-hint">Discovery depth only affects manual participant scans. Polling controls how often messages refresh while chat is open.</p>
+                    <p class="sett-hint">Max participants returned per discovery scan. Background scans use ≤200. This does not affect message history, which loads via Core message RPCs independently.</p>
+                </div>
+
+                <div class="sett-section">
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" bind:checked={draft.discoveryEnabled} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">ENABLE DISCOVERY</span>
+                    </label>
+                    <p class="sett-hint">Scan for new .H0XC channels and participants. When disabled, messages still load from already known/subscribed channels via Core message RPCs.</p>
+                    {#if !draft.discoveryEnabled}
+                        <div class="sett-discovery-note">
+                            <span class="sett-discovery-note-icon">ℹ</span>
+                            <span>Discovery is off. You can still see messages from channels you're already subscribed to.</span>
+                        </div>
+                    {/if}
+                </div>
+
+                <div class="sett-section">
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" checked={!draft.muteNotifications} on:change={() => { draft.muteNotifications = !draft.muteNotifications; draft = draft; }} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">{draft.muteNotifications ? "NOTIFICATIONS MUTED" : "NOTIFICATIONS ACTIVE"}</span>
+                    </label>
+                    <p class="sett-hint">New message notifications for H0XC. Discovery continues even when notifications are muted.</p>
                 </div>
 
                 <div class="sett-section">
@@ -127,6 +159,16 @@
                     </label>
                     <p class="sett-hint">Automatically scan for new .H0XC participants when the chat is open and idle.</p>
                 </div>
+
+                {#if discoveryState !== "idle" || lastScanTime}
+                    <div class="sett-section">
+                        <span class="sett-label">DISCOVERY STATE</span>
+                        <div class="sett-discovery-state">
+                            <span class="sett-discovery-dot" class:scanning={discoveryState === "scanning"} class:disabled={discoveryState === "disabled"} class:paused={discoveryState === "paused"}></span>
+                            <span class="sett-discovery-state-text">{discoveryState}{lastScanTime ? ` · last: ${lastScanTime}` : ""}</span>
+                        </div>
+                    </div>
+                {/if}
 
                 <div class="sett-section">
                     <span class="sett-label">AUTO-BLOCK TAGS</span>
@@ -257,6 +299,56 @@
     .sett-limitation {
         color: #8a8a5a;
         font-style: italic;
+    }
+    .sett-discovery-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.35rem;
+        background: rgba(68, 136, 255, 0.05);
+        border: 1px solid rgba(68, 136, 255, 0.15);
+        border-radius: 5px;
+        padding: 0.4rem 0.55rem;
+        margin-top: 0.15rem;
+    }
+    .sett-discovery-note-icon {
+        color: #4488ff;
+        font-size: 0.6rem;
+        flex-shrink: 0;
+        margin-top: 0.05rem;
+    }
+    .sett-discovery-note span {
+        font-size: 0.55rem;
+        color: #8899bb;
+        line-height: 1.4;
+    }
+    .sett-discovery-state {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.3rem 0.5rem;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 5px;
+    }
+    .sett-discovery-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #444;
+        flex-shrink: 0;
+    }
+    .sett-discovery-dot.scanning {
+        background: var(--color-primary);
+        box-shadow: 0 0 6px var(--color-primary);
+        animation: disco-pulse 1.2s infinite ease-in-out;
+    }
+    .sett-discovery-dot.disabled { background: #ff5555; }
+    .sett-discovery-dot.paused { background: #ffaa00; }
+    @keyframes disco-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .sett-discovery-state-text {
+        font-size: 0.55rem;
+        color: #888;
+        font-family: var(--font-mono);
     }
 
     .field-row {

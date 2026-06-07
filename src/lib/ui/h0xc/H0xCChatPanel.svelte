@@ -84,6 +84,9 @@
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
         });
+        if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
+            settings.autoBlockTags = ["#SPAM"];
+        }
         const savedId = loadJson(IDENTITY_KEY, null);
         const savedGuest = loadJson("h0xc_isGuest", false);
 

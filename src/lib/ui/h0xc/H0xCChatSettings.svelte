@@ -6,7 +6,7 @@
     /** @type {{ messageExpiryDefault: number, discoveryScanDepth: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[] }} */
     export let settings = {
         messageExpiryDefault: 0,
-        discoveryScanDepth: 500,
+        discoveryScanDepth: 5000,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
@@ -17,11 +17,16 @@
     const dispatch = createEventDispatcher();
 
     /** @type {typeof settings} */
-    let draft;
+    let draft = { ...settings };
     let draftTagsText = "";
 
-    $: draft = { ...settings };
-    $: draftTagsText = (draft.autoBlockTags || []).join(", ");
+    function syncFromSettings() {
+        draft = { ...settings };
+        const tags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags : ["#SPAM"];
+        draftTagsText = tags.join(", ");
+    }
+
+    $: if (show) syncFromSettings();
 
     function close() {
         dispatch("close");
@@ -60,7 +65,7 @@
 
 {#if show}
     <div
-        class="h0xc-settings-overlay"
+        class="sett-overlay"
         role="dialog"
         aria-modal="true"
         on:click={close}
@@ -68,86 +73,92 @@
         tabindex="0"
     >
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="h0xc-settings-panel" on:click|stopPropagation on:keydown|stopPropagation role="document">
+        <div class="sett-panel" on:click|stopPropagation on:keydown|stopPropagation role="document">
             <div class="sett-header">
                 <span class="sett-title">CHAT SETTINGS</span>
                 <button class="sett-close" on:click={close}>&times;</button>
             </div>
+
             <div class="sett-body">
                 <div class="sett-section">
-                    <div class="sett-label">MESSAGE EXPIRY (DEFAULT)</div>
+                    <span class="sett-label">MESSAGE EXPIRY (DEFAULT)</span>
                     <div class="sett-expiry-row">
                         <button class="sett-expiry-btn" class:active={draft.messageExpiryDefault === 0} on:click={() => setExpiry(0)}>None</button>
                         <button class="sett-expiry-btn" class:active={draft.messageExpiryDefault === 1} on:click={() => setExpiry(1)}>1 Day</button>
                         <button class="sett-expiry-btn" class:active={draft.messageExpiryDefault === 7} on:click={() => setExpiry(7)}>7 Days</button>
                         <button class="sett-expiry-btn" class:active={draft.messageExpiryDefault === 30} on:click={() => setExpiry(30)}>30 Days</button>
                     </div>
-                    <div class="sett-hint">Applies to new messages. Expired messages remain on-chain but are hidden by wallets that respect expiry metadata.</div>
+                    <p class="sett-hint">Applies to new messages. Expired messages remain on-chain but are hidden by wallets that respect expiry metadata.</p>
                 </div>
 
                 <div class="sett-section">
-                    <div class="sett-label">DISCOVERY SCAN DEPTH</div>
-                    <input
-                        type="number"
-                        class="sett-input input-glass"
-                        bind:value={draft.discoveryScanDepth}
-                        min="500"
-                        max="50000"
-                        step="500"
-                    />
-                    <div class="sett-hint">Blocks to scan during manual participant discovery. Does not affect normal message loading. Default: 5000.</div>
+                    <div class="field-row">
+                        <div class="field-group narrow-inline">
+                            <span class="sett-label">DISCOVERY DEPTH</span>
+                            <input
+                                type="number"
+                                class="cyber-input"
+                                bind:value={draft.discoveryScanDepth}
+                                min="500"
+                                max="50000"
+                                step="500"
+                            />
+                        </div>
+                        <div class="field-group narrow-inline">
+                            <span class="sett-label">POLLING (SEC)</span>
+                            <input
+                                type="number"
+                                class="cyber-input"
+                                bind:value={draft.pollingIntervalSeconds}
+                                min="10"
+                                max="300"
+                                step="5"
+                            />
+                        </div>
+                    </div>
+                    <p class="sett-hint">Discovery depth only affects manual participant scans. Polling controls how often messages refresh while chat is open.</p>
                 </div>
 
                 <div class="sett-section">
                     <label class="sett-toggle-row">
                         <input type="checkbox" bind:checked={draft.autoDiscovery} />
+                        <span class="checkbox-visual"></span>
                         <span class="sett-toggle-label">AUTO-DISCOVERY</span>
                     </label>
-                    <div class="sett-hint">Automatically scan for new .H0XC participants when the chat is open.</div>
+                    <p class="sett-hint">Automatically scan for new .H0XC participants when the chat is open and idle.</p>
                 </div>
 
                 <div class="sett-section">
-                    <div class="sett-label">POLLING INTERVAL (SECONDS)</div>
-                    <input
-                        type="number"
-                        class="sett-input input-glass"
-                        bind:value={draft.pollingIntervalSeconds}
-                        min="10"
-                        max="300"
-                        step="5"
-                    />
-                    <div class="sett-hint">How often to refresh messages when chat view is open.</div>
-                </div>
-
-                <div class="sett-section">
-                    <div class="sett-label">AUTO-BLOCK TAGS</div>
-                    <div class="sett-hint">Channels whose authority-holder address is tagged with a configured qualifier (e.g. #SPAM) are hidden automatically. This requires Core to resolve channel authority addresses. Local block/unblock below always works as a fallback.</div>
+                    <span class="sett-label">AUTO-BLOCK TAGS</span>
+                    <p class="sett-hint">Channels whose authority-holder address is tagged with a configured qualifier are hidden automatically. This requires Core to resolve channel authority addresses. Local block/unblock below always works as a fallback.</p>
                     <textarea
-                        class="sett-input tags-input"
+                        class="cyber-input tags-input"
                         bind:value={draftTagsText}
                         placeholder="#SPAM"
-                        rows="3"
+                        rows="2"
                     ></textarea>
-                    <div class="sett-hint sett-limitation">If Core cannot resolve authority holders, tag auto-blocking is inactive. Use the local block list below for a guaranteed fallback.</div>
+                    <p class="sett-hint">Separate multiple tags with commas. Example: #SPAM, #BAN, #SCAM</p>
+                    <p class="sett-hint sett-limitation">If Core cannot resolve authority holders, tag auto-blocking is inactive. Use the local block list below for a guaranteed fallback.</p>
                 </div>
 
                 <div class="sett-section">
-                    <div class="sett-label">LOCAL BLOCK LIST</div>
+                    <span class="sett-label">LOCAL BLOCK LIST</span>
                     {#if blockedUsers.length === 0}
-                        <div class="sett-hint">No locally blocked H0XC identities.</div>
+                        <p class="sett-hint">No locally blocked H0XC identities.</p>
                     {:else}
                         <div class="blocked-list">
                             {#each blockedUsers as rootName}
                                 <div class="blocked-row">
-                                    <span>[{rootName.toUpperCase()}]</span>
+                                    <span class="blocked-name">[{rootName.toUpperCase()}]</span>
                                     <button class="blocked-unblock" on:click={() => unblock(rootName)}>Unblock</button>
                                 </div>
                             {/each}
                         </div>
                     {/if}
-                    <div class="sett-hint">Local blocks are private to this Commander install and can be changed at any time.</div>
+                    <p class="sett-hint">Local blocks are private to this Commander install and can be changed at any time.</p>
                 </div>
             </div>
+
             <div class="sett-footer">
                 <button class="sett-btn reset" on:click={resetDefaults}>Reset Defaults</button>
                 <button class="sett-btn cancel" on:click={close}>Cancel</button>
@@ -158,34 +169,41 @@
 {/if}
 
 <style>
-    .h0xc-settings-overlay {
+    .sett-overlay {
         position: absolute;
         inset: 0;
         z-index: 100;
         display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(0, 0, 0, 0.75);
-        backdrop-filter: blur(2px);
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(4px);
+        padding: 0.5rem;
     }
-    .h0xc-settings-panel {
-        width: min(26rem, 88vw);
-        background: linear-gradient(180deg, #080b09, #0f1410);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+    .sett-panel {
+        width: 100%;
+        height: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        background: rgba(10, 15, 12, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8);
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
     }
     .sett-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.55rem 0.7rem;
-        border-bottom: 1px solid rgba(0, 255, 65, 0.15);
-        background: rgba(0, 255, 65, 0.05);
+        padding: 0.5rem 0.85rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
+        background: rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
     }
     .sett-title {
-        font-size: 0.65rem;
+        font-size: 0.72rem;
         font-weight: 700;
         color: var(--color-primary);
         letter-spacing: 1.2px;
@@ -193,68 +211,116 @@
     .sett-close {
         background: none;
         border: none;
-        color: #666;
-        font-size: 1.2rem;
+        color: #888;
+        font-size: 1.3rem;
         cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
         line-height: 1;
+        margin: -0.2rem -0.4rem -0.35rem 0;
     }
     .sett-close:hover { color: #fff; }
+
     .sett-body {
-        padding: 0.8rem;
+        padding: 0.6rem 0.85rem;
         display: flex;
         flex-direction: column;
-        gap: 0.7rem;
+        gap: 0.45rem;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
+    .sett-body::-webkit-scrollbar { width: 6px; }
+    .sett-body::-webkit-scrollbar-track { background: transparent; }
+    .sett-body::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.35); border-radius: 3px; }
+    .sett-body::-webkit-scrollbar-thumb:hover { background: rgba(0, 255, 65, 0.55); }
+
     .sett-section {
         display: flex;
         flex-direction: column;
-        gap: 0.3rem;
+        gap: 0.25rem;
     }
     .sett-label {
-        font-size: 0.55rem;
-        color: #777;
+        color: #888;
+        font-size: 0.6rem;
         letter-spacing: 0.5px;
         font-weight: 600;
     }
     .sett-hint {
-        font-size: 0.48rem;
-        color: #555;
-        line-height: 1.4;
+        margin: 0;
+        color: #666;
+        font-size: 0.55rem;
+        line-height: 1.45;
     }
+    .sett-limitation {
+        color: #8a8a5a;
+        font-style: italic;
+    }
+
+    .field-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        flex: 1;
+        min-width: 0;
+    }
+    .field-group.narrow-inline {
+        flex: 1 1 0%;
+        min-width: 140px;
+    }
+
+    .cyber-input {
+        width: 100%;
+        padding: 0.35rem 0.5rem;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        color: #ddd;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        box-sizing: border-box;
+        outline: none;
+        transition: all 0.15s;
+    }
+    .cyber-input:focus { border-color: var(--color-primary); }
+    .cyber-input::placeholder { color: #555; }
+    .tags-input {
+        resize: vertical;
+        min-height: 2.2rem;
+    }
+
     .sett-expiry-row {
         display: flex;
         gap: 0.3rem;
     }
     .sett-expiry-btn {
         flex: 1;
-        padding: 0.3rem;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 5px;
+        padding: 0.3rem 0.25rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
         color: #888;
         font-size: 0.58rem;
         font-weight: 600;
         cursor: pointer;
         transition: all 0.15s;
+        letter-spacing: 0.3px;
     }
-    .sett-expiry-btn:hover { border-color: rgba(0, 255, 65, 0.3); }
+    .sett-expiry-btn:hover { border-color: rgba(255, 255, 255, 0.2); color: #aaa; }
     .sett-expiry-btn.active {
         background: rgba(0, 255, 65, 0.1);
-        border-color: var(--color-primary);
+        border-color: rgba(0, 255, 65, 0.35);
         color: var(--color-primary);
     }
-    .sett-input {
-        background: rgba(0, 0, 0, 0.5);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 5px;
-        padding: 0.35rem 0.5rem;
-        color: #fff;
-        font-size: 0.65rem;
-        font-family: var(--font-mono);
-        max-width: 120px;
-        outline: none;
-    }
-    .sett-input:focus { border-color: var(--color-primary); }
+
     .sett-toggle-row {
         display: flex;
         align-items: center;
@@ -262,95 +328,127 @@
         cursor: pointer;
     }
     .sett-toggle-row input[type="checkbox"] {
-        accent-color: var(--color-primary);
-        width: 0.75rem;
-        height: 0.75rem;
-        cursor: pointer;
+        display: none;
+    }
+    .checkbox-visual {
+        width: 14px;
+        height: 14px;
+        border: 2px solid #444;
+        border-radius: 4px;
+        transition: all 0.15s;
+        position: relative;
+        flex-shrink: 0;
+    }
+    .sett-toggle-row input:checked + .checkbox-visual {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 8px var(--color-primary);
+    }
+    .sett-toggle-row input:checked + .checkbox-visual::after {
+        content: "✓";
+        position: absolute;
+        top: -1px;
+        left: 1px;
+        font-size: 10px;
+        color: #000;
+        font-weight: bold;
     }
     .sett-toggle-label {
-        font-size: 0.58rem;
+        font-size: 0.6rem;
         color: #aaa;
         font-weight: 600;
         letter-spacing: 0.5px;
     }
-    .sett-footer {
-        display: flex;
-        gap: 0.4rem;
-        padding: 0.6rem 0.8rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
-        background: rgba(0, 0, 0, 0.2);
-        justify-content: flex-end;
-    }
-    .sett-btn {
-        padding: 0.35rem 0.65rem;
-        border-radius: 5px;
-        font-size: 0.58rem;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-        cursor: pointer;
-        transition: all 0.15s;
-    }
-    .sett-btn.cancel {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #888;
-    }
-    .sett-btn.cancel:hover { border-color: #ff5555; color: #ff5555; }
-    .sett-btn.reset {
-        background: transparent;
-        border: 1px solid transparent;
-        color: #666;
-        margin-right: auto;
-    }
-    .sett-btn.reset:hover { color: #ffaa00; }
-    .sett-btn.save {
-        background: rgba(0, 255, 65, 0.1);
-        border: 1px solid var(--color-primary);
-        color: var(--color-primary);
-    }
-    .sett-btn.save:hover {
-        background: var(--color-primary);
-        color: #000;
-    }
-    .tags-input {
-        resize: vertical;
-        min-height: 2.5rem;
-    }
-    .sett-limitation {
-        color: #8a8a5a;
-        font-style: italic;
-    }
+
     .blocked-list {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-        max-height: 6rem;
-        overflow: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 0.3rem;
+        max-height: 14rem;
+        overflow-y: auto;
+        padding: 0.3rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.25) transparent;
     }
+    .blocked-list::-webkit-scrollbar { width: 5px; }
+    .blocked-list::-webkit-scrollbar-track { background: transparent; }
+    .blocked-list::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.25); border-radius: 3px; }
     .blocked-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 0.5rem;
-        padding: 0.35rem 0.45rem;
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 0.3rem 0.45rem;
+        border: 1px solid rgba(255, 255, 255, 0.06);
         border-radius: 5px;
-        background: rgba(0, 0, 0, 0.35);
-        color: #d8d8d8;
-        font-size: 0.55rem;
+        background: rgba(0, 0, 0, 0.3);
+    }
+    .blocked-name {
+        color: #bbb;
+        font-size: 0.58rem;
+        font-family: var(--font-mono);
     }
     .blocked-unblock {
-        border: 1px solid rgba(0, 255, 65, 0.35);
+        border: 1px solid rgba(0, 255, 65, 0.3);
         border-radius: 4px;
         background: rgba(0, 255, 65, 0.06);
         color: var(--color-primary);
-        font: inherit;
-        font-size: 0.5rem;
+        font-family: var(--font-mono);
+        font-size: 0.48rem;
         cursor: pointer;
         padding: 0.18rem 0.35rem;
         text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: all 0.15s;
     }
     .blocked-unblock:hover {
         background: rgba(0, 255, 65, 0.12);
+    }
+
+    .sett-footer {
+        display: flex;
+        gap: 0.4rem;
+        padding: 0.55rem 0.85rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(0, 0, 0, 0.2);
+        justify-content: flex-end;
+        flex-shrink: 0;
+    }
+    .sett-btn {
+        padding: 0.4rem 0.7rem;
+        border-radius: 6px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        border: 1px solid transparent;
+    }
+    .sett-btn.cancel {
+        background: rgba(255, 255, 255, 0.03);
+        border-color: rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .sett-btn.cancel:hover { border-color: #ff5555; color: #ff5555; }
+    .sett-btn.reset {
+        background: transparent;
+        border-color: transparent;
+        color: #666;
+        margin-right: auto;
+    }
+    .sett-btn.reset:hover { color: #ffaa00; }
+    .sett-btn.save {
+        background: rgba(0, 255, 65, 0.08);
+        border-color: rgba(0, 255, 65, 0.25);
+        color: var(--color-primary);
+    }
+    .sett-btn.save:hover {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 12px rgba(0, 255, 65, 0.2);
     }
 </style>

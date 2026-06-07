@@ -145,6 +145,11 @@
         dispatch("createH0xC", asset);
     }
 
+    function handleManageTagsFromChat() {
+        closeH0xC();
+        dispatch("manageTags", { name: "" });
+    }
+
     function close() {
         dispatch("close");
     }
@@ -321,6 +326,7 @@
                         show={true}
                         on:close={closeH0xC}
                         on:createH0xC={handleCreateH0xC}
+                        on:manageTags={handleManageTagsFromChat}
                     />
                 {:else}
                     <AssetMessageInbox

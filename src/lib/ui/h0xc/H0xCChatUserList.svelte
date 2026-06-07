@@ -16,6 +16,8 @@
     export let blockedUsers = [];
     export let selectedIdentity = "";
     export let tagBlockedChannels = new Set();
+    /** @type {Record<string, string>} */
+    export let resolvedAddresses = {};
 
     const dispatch = createEventDispatcher();
 
@@ -34,6 +36,14 @@
     function openContext(e, rootName) {
         e.preventDefault();
         e.stopPropagation();
+        if (isMe(rootName)) return;
+        contextUser = rootName;
+        contextX = e.clientX;
+        contextY = e.clientY;
+    }
+
+    /** @param {MouseEvent} e */
+    function openContextClick(e, rootName) {
         if (isMe(rootName)) return;
         contextUser = rootName;
         contextX = e.clientX;
@@ -77,8 +87,9 @@
                         class="ul-user"
                         class:me={isMe(p.rootName)}
                         class:muted={mutedUsers.includes(p.rootName)}
+                        on:click={(e) => openContextClick(e, p.rootName)}
                         on:contextmenu={(e) => openContext(e, p.rootName)}
-                        title={`${p.assetName} - ${p.messageCount} msgs`}
+                        title={`${p.assetName} — ${p.messageCount} msgs`}
                     >
                         <span class="ul-dot"></span>
                         <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
@@ -97,8 +108,9 @@
                         class="ul-user older"
                         class:me={isMe(p.rootName)}
                         class:muted={mutedUsers.includes(p.rootName)}
+                        on:click={(e) => openContextClick(e, p.rootName)}
                         on:contextmenu={(e) => openContext(e, p.rootName)}
-                        title={`${p.assetName} - ${p.messageCount} msgs`}
+                        title={`${p.assetName} — ${p.messageCount} msgs`}
                     >
                         <span class="ul-dot older"></span>
                         <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
@@ -119,10 +131,12 @@
         user={contextUser || ""}
         muted={contextUser ? mutedUsers.includes(contextUser) : false}
         blocked={contextUser ? blockedUsers.includes(contextUser) : false}
+        resolvedAddress={contextUser ? resolvedAddresses[contextUser] || "" : ""}
         on:viewDetails={(e) => { dispatch("viewDetails", e.detail); closeContext(); }}
         on:mute={(e) => { dispatch("mute", e.detail); closeContext(); }}
         on:block={(e) => { dispatch("block", e.detail); closeContext(); }}
         on:blockAndUnsub={(e) => { dispatch("blockAndUnsub", e.detail); closeContext(); }}
+        on:manageTags={(e) => { dispatch("manageTags", e.detail); closeContext(); }}
     />
 </div>
 

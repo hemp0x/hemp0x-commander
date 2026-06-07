@@ -44,7 +44,7 @@
     function resetDefaults() {
         draft = {
             messageExpiryDefault: 0,
-            discoveryScanDepth: 500,
+            discoveryScanDepth: 5000,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
@@ -86,16 +86,16 @@
                 </div>
 
                 <div class="sett-section">
-                    <div class="sett-label">RECENT BLOCK SCAN DEPTH</div>
+                    <div class="sett-label">DISCOVERY SCAN DEPTH</div>
                     <input
                         type="number"
                         class="sett-input input-glass"
                         bind:value={draft.discoveryScanDepth}
-                        min="100"
-                        max="10000"
-                        step="100"
+                        min="500"
+                        max="50000"
+                        step="500"
                     />
-                    <div class="sett-hint">Number of recent blocks to scan during manual discovery. Higher = more thorough but slower.</div>
+                    <div class="sett-hint">Blocks to scan during manual participant discovery. Does not affect normal message loading. Default: 5000.</div>
                 </div>
 
                 <div class="sett-section">
@@ -121,14 +121,14 @@
 
                 <div class="sett-section">
                     <div class="sett-label">AUTO-BLOCK TAGS</div>
-                    <div class="sett-hint">Commander hides messages from H0XC channels whose authority-holder address is tagged with any configured qualifier tag. Requires Core to support channel holder resolution. One tag per line or comma-separated. Default: #SPAM</div>
+                    <div class="sett-hint">Channels whose authority-holder address is tagged with a configured qualifier (e.g. #SPAM) are hidden automatically. This requires Core to resolve channel authority addresses. Local block/unblock below always works as a fallback.</div>
                     <textarea
                         class="sett-input tags-input"
                         bind:value={draftTagsText}
                         placeholder="#SPAM"
                         rows="3"
                     ></textarea>
-                    <div class="sett-hint sett-limitation">Requires Core to expose channel authority holders via listassets. If unavailable, tag blocking is inactive and no channels are auto-blocked.</div>
+                    <div class="sett-hint sett-limitation">If Core cannot resolve authority holders, tag auto-blocking is inactive. Use the local block list below for a guaranteed fallback.</div>
                 </div>
 
                 <div class="sett-section">

@@ -1,5 +1,5 @@
 <script>
-    import { onDestroy, onMount, afterUpdate } from "svelte";
+    import { onDestroy, onMount, afterUpdate, createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import { fade } from "svelte/transition";
     import H0xCChatUserList from "./H0xCChatUserList.svelte";
@@ -9,6 +9,8 @@
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
     import { addNotification } from "../../stores/notifications.js";
     import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
+
+    const dispatch = createEventDispatcher();
 
     /**
      * @typedef {{
@@ -26,6 +28,7 @@
     export let identity = "";
     export let isGuest = false;
     export let onSwitchIdentity = null;
+    export let onBackToSetup = null;
     export let onClose = null;
     /** @type {Participant[]} */
     export let participants = [];
@@ -82,6 +85,23 @@
     let showJumpToBottom = false;
     const BOTTOM_THRESHOLD = 80;
 
+    // Tag lookup cache
+    let lastTagCheckTime = 0;
+    const TAG_CHECK_COOLDOWN_MS = 30000;
+    let tagCheckChannelsHash = "";
+
+    // Auto-discovery
+    /** @type {ReturnType<typeof setInterval> | null} */
+    let discoveryTimer = null;
+    let lastAutoDiscovery = 0;
+    const AUTO_DISCOVERY_INTERVAL_MS = 300000; // 5 minutes
+    let chatVisible = true;
+
+    // Resolved addresses for context
+    /** @type {Record<string, string>} */
+    let resolvedAddresses = {};
+    let resolvingAddress = false;
+
     // Username context menu
     /** @type {string | null} */
     let ctxUser = null;
@@ -93,7 +113,7 @@
     }
 
     async function loadMessages() {
-        if (messagesLoading) return;
+        if (messagesLoading || !chatVisible) return;
         messagesLoading = true;
         messagesError = "";
         messagesWarn = "";
@@ -116,7 +136,7 @@
             if (!info.caches_available) warns.push("Message caches are unavailable; some messages may be missing.");
             if (warns.length > 0) messagesWarn = warns.join(" ");
 
-            checkChannelTags();
+            maybeCheckChannelTags();
         } catch (err) {
             messagesError = String(err);
             messages = [];
@@ -125,7 +145,7 @@
         }
     }
 
-    async function checkChannelTags() {
+    async function maybeCheckChannelTags() {
         const tags = settings.autoBlockTags || [];
         if (tags.length === 0) {
             tagBlockedChannels = new Set();
@@ -133,23 +153,31 @@
             return;
         }
         if (tagLookupPending) return;
+        const channels = [...new Set(messages.map((/** @type {AssetMessage} */ m) => m.asset_name))];
+        const channelsHash = channels.sort().join("|") + "#" + tags.sort().join("|");
+        const now = Date.now();
+        if (channelsHash === tagCheckChannelsHash && now - lastTagCheckTime < TAG_CHECK_COOLDOWN_MS) {
+            return;
+        }
         tagLookupPending = true;
-        tagLookupStatus = "checking channel tags...";
+        tagLookupStatus = "checking tags...";
         try {
-            const channels = [...new Set(messages.map((/** @type {AssetMessage} */ m) => m.asset_name))];
             const blocked = await core.invoke("h0xc_filter_tagged_channels", {
                 channelNames: channels,
                 tagNames: tags,
             });
             tagBlockedChannels = new Set(Array.isArray(blocked) ? blocked : []);
             tagLookupStatus = tagBlockedChannels.size > 0
-                ? `${tagBlockedChannels.size} channel(s) blocked by tag`
+                ? `${tagBlockedChannels.size} blocked by tag`
                 : "";
+            lastTagCheckTime = now;
+            tagCheckChannelsHash = channelsHash;
         } catch (err) {
             tagBlockedChannels = new Set();
-            tagLookupStatus = "";
             const text = String(err);
             if (text.includes("Core does not support")) {
+                tagLookupStatus = "tag check unavailable";
+            } else {
                 tagLookupStatus = "";
             }
         } finally {
@@ -283,12 +311,16 @@
         showCount = pageSize;
     }
 
-    async function discover() {
+    /**
+     * @param {boolean} [silent]
+     */
+    async function discover(silent = false) {
         discovering = true;
-        discoveryError = "";
-        discoveryResult = "";
+        if (!silent) {
+            discoveryError = "";
+            discoveryResult = "";
+        }
         try {
-            const depth = settings.discoveryScanDepth || 500;
             let raw;
             try {
                 raw = await core.invoke("list_network_assets", { pattern: "*.H0XC", verbose: true });
@@ -326,10 +358,12 @@
                     added++;
                 }
             }
+            if (!silent) {
+                discoveryResult = added > 0 ? `Discovered ${added} new participant(s)` : "No new participants found";
+            }
             lastScanBlock = 0;
-            discoveryResult = added > 0 ? `Discovered ${added} new participant(s)` : "No new participants found";
         } catch (err) {
-            discoveryError = String(err);
+            if (!silent) discoveryError = String(err);
         } finally {
             discovering = false;
         }
@@ -373,11 +407,37 @@
         }
     }
 
+    async function resolveUserAddress(/** @type {string} */ rootName) {
+        const part = participants.find((p) => p.rootName === rootName);
+        if (!part) return;
+        if (resolvedAddresses[rootName]) return;
+        resolvingAddress = true;
+        try {
+            const addrs = await core.invoke("h0xc_resolve_authority_addresses", { channelName: part.assetName });
+            if (Array.isArray(addrs) && addrs.length > 0) {
+                resolvedAddresses[rootName] = addrs[0];
+                resolvedAddresses = resolvedAddresses;
+            }
+        } catch {
+            // resolution best-effort
+        } finally {
+            resolvingAddress = false;
+        }
+    }
+
     function showUserDetails(/** @type {string} */ rootName) {
         const part = participants.find((p) => p.rootName === rootName);
+        const addr = resolvedAddresses[rootName] || "";
         if (part) {
-            discoveryResult = `Channel: ${part.assetName} | Messages: ${part.messageCount} | Last seen: ${part.lastSeen ? new Date(part.lastSeen).toLocaleString() : "never"}`;
+            let text = `Channel: ${part.assetName} | Messages: ${part.messageCount} | Last seen: ${part.lastSeen ? new Date(part.lastSeen).toLocaleString() : "never"}`;
+            if (addr) text += ` | Authority: ${addr}`;
+            discoveryResult = text;
         }
+        resolveUserAddress(rootName);
+    }
+
+    function openManageTags() {
+        dispatch("manageTags");
     }
 
     /** @param {CustomEvent} e */
@@ -491,7 +551,7 @@
         activePollingIntervalSeconds = settings.pollingIntervalSeconds || 30;
         const interval = activePollingIntervalSeconds * 1000;
         pollTimer = setInterval(() => {
-            loadMessages();
+            if (chatVisible) loadMessages();
         }, interval);
     }
 
@@ -503,13 +563,43 @@
         activePollingIntervalSeconds = 0;
     }
 
+    function startAutoDiscovery() {
+        if (discoveryTimer) clearInterval(discoveryTimer);
+        discoveryTimer = setInterval(() => {
+            if (!chatVisible) return;
+            if (!settings.autoDiscovery) return;
+            const now = Date.now();
+            if (now - lastAutoDiscovery < AUTO_DISCOVERY_INTERVAL_MS) return;
+            lastAutoDiscovery = now;
+            discover(true);
+        }, 60000); // check every minute, but only run if cooldown passed
+    }
+
+    function stopAutoDiscovery() {
+        if (discoveryTimer) {
+            clearInterval(discoveryTimer);
+            discoveryTimer = null;
+        }
+    }
+
+    function onVisibilityChange() {
+        chatVisible = document.visibilityState === "visible";
+        if (chatVisible) {
+            loadMessages();
+        }
+    }
+
     onMount(() => {
+        document.addEventListener("visibilitychange", onVisibilityChange);
         loadMessages();
         startPolling();
+        startAutoDiscovery();
     });
 
     onDestroy(() => {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
         stopPolling();
+        stopAutoDiscovery();
     });
 
     $: if (
@@ -557,39 +647,57 @@
     <div class="chat-header">
         <div class="header-left">
             <span class="header-icon">◈</span>
-            <span class="header-title">H0XC COMMUNITY CHAT</span>
-            <span class="header-identity">as [{rootName().toUpperCase()}]</span>
+            <span class="header-title">H0XC</span>
+            {#if isGuest}
+                <span class="header-badge guest">GUEST</span>
+            {:else}
+                <span class="header-badge identity">[{rootName().toUpperCase()}]</span>
+            {/if}
         </div>
         <div class="header-right">
-            {#if discoveryResult}
-                <span class="header-discovery-result">{discoveryResult}</span>
-            {/if}
-            {#if discoveryError}
-                <span class="header-discovery-error" title={discoveryError}>Discovery error</span>
-            {/if}
-            {#if tagLookupStatus}
-                <span class="header-tag-status">{tagLookupStatus}</span>
+            {#if onSwitchIdentity || (isGuest && onBackToSetup)}
+                <button class="header-btn switch" on:click={() => isGuest ? onBackToSetup?.() : onSwitchIdentity?.()} title={isGuest ? "Choose identity" : "Switch identity"}>
+                    ⇄
+                </button>
             {/if}
             <button class="header-btn" on:click={refresh} disabled={messagesLoading} title="Refresh messages">
                 ↻
             </button>
-            <button class="header-btn" on:click={discover} disabled={discovering} title="Discover .H0XC participants">
+            <button class="header-btn" on:click={() => discover()} disabled={discovering} title="Discover .H0XC participants">
                 {discovering ? "..." : "🔍"}
             </button>
             <button class="header-btn" on:click={toggleSettings} title="Settings">
                 ⚙
             </button>
-            {#if onSwitchIdentity}
-                <button class="header-btn switch" on:click={onSwitchIdentity} title="Switch identity">
-                    ⇄
-                </button>
-            {/if}
             {#if onClose}
                 <button class="header-btn" on:click={onClose} title="Close chat">
                     ✕
                 </button>
             {/if}
         </div>
+    </div>
+    <div class="chat-status-bar">
+        {#if messagesLoading}
+            <span class="status-pill">Loading...</span>
+        {/if}
+        {#if tagLookupPending}
+            <span class="status-pill">Tags...</span>
+        {/if}
+        {#if discovering}
+            <span class="status-pill">Scanning...</span>
+        {/if}
+        {#if discoveryResult}
+            <span class="status-pill ok">{discoveryResult}</span>
+        {/if}
+        {#if discoveryError}
+            <span class="status-pill err" title={discoveryError}>Discovery error</span>
+        {/if}
+        {#if tagLookupStatus}
+            <span class="status-pill warn">{tagLookupStatus}</span>
+        {/if}
+        {#if messagesError}
+            <span class="status-pill err">{messagesError}</span>
+        {/if}
     </div>
 
     <div class="chat-search-bar">
@@ -681,10 +789,12 @@
             {blockedUsers}
             selectedIdentity={identity}
             tagBlockedChannels={tagBlockedChannels}
+            {resolvedAddresses}
             on:mute={handleMute}
             on:block={handleBlock}
             on:viewDetails={handleViewDetails}
             on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); }}
+            on:manageTags={() => openManageTags()}
         />
     </div>
 
@@ -695,6 +805,7 @@
         busy={composeBusy}
         error={composeError}
         on:send={handleSend}
+        on:requestIdentity={() => onBackToSetup?.()}
     />
 
     <H0xCChatSettings
@@ -712,10 +823,12 @@
         user={ctxUser || ""}
         muted={ctxUser ? mutedUsers.includes(ctxUser) : false}
         blocked={ctxUser ? blockedUsers.includes(ctxUser) : false}
+        resolvedAddress={ctxUser ? resolvedAddresses[ctxUser] || "" : ""}
         on:viewDetails={(e) => { showUserDetails(e.detail.rootName); closeCtx(); }}
         on:mute={(e) => { toggleMute(e.detail.rootName); closeCtx(); }}
         on:block={(e) => { toggleBlock(e.detail.rootName); closeCtx(); }}
         on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); closeCtx(); }}
+        on:manageTags={(e) => { openManageTags(); closeCtx(); }}
     />
 
     <WalletUnlockModal
@@ -764,10 +877,22 @@
         color: var(--color-primary);
         letter-spacing: 1px;
     }
-    .header-identity {
+    .header-badge {
         font-size: 0.5rem;
-        color: #666;
         letter-spacing: 0.5px;
+        padding: 0.12rem 0.35rem;
+        border-radius: 999px;
+        font-weight: 600;
+    }
+    .header-badge.identity {
+        color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+    }
+    .header-badge.guest {
+        color: #888;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
     }
     .header-right {
         display: flex;
@@ -791,23 +916,6 @@
     }
     .header-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .header-btn.switch { font-size: 0.85rem; }
-    .header-discovery-result {
-        font-size: 0.5rem;
-        color: #8cff9f;
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .header-discovery-error {
-        font-size: 0.5rem;
-        color: #ff8888;
-        cursor: help;
-    }
-    .header-tag-status {
-        font-size: 0.5rem;
-        color: #ffaa88;
-    }
     .chat-status {
         font-size: 0.55rem;
         padding: 0.3rem 0.6rem;
@@ -824,6 +932,40 @@
         color: #ffcc00;
         background: rgba(255, 204, 0, 0.06);
         border-color: rgba(255, 204, 0, 0.15);
+    }
+    .chat-status-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        background: rgba(0, 0, 0, 0.15);
+        min-height: 1.4rem;
+    }
+    .status-pill {
+        font-size: 0.48rem;
+        color: #888;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        padding: 0.1rem 0.4rem;
+        white-space: nowrap;
+    }
+    .status-pill.ok {
+        color: #8cff9f;
+        border-color: rgba(0, 255, 65, 0.15);
+        background: rgba(0, 255, 65, 0.05);
+    }
+    .status-pill.warn {
+        color: #ffaa88;
+        border-color: rgba(255, 170, 0, 0.15);
+        background: rgba(255, 170, 0, 0.05);
+    }
+    .status-pill.err {
+        color: #ff8888;
+        border-color: rgba(255, 85, 85, 0.15);
+        background: rgba(255, 85, 85, 0.05);
     }
     .chat-body-wrap {
         display: flex;

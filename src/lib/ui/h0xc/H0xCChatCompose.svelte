@@ -11,6 +11,10 @@
 
     const dispatch = createEventDispatcher();
 
+    function requestIdentity() {
+        dispatch("requestIdentity");
+    }
+
     let composeText = "";
     let composeEncoding = false;
     /** @type {any} */
@@ -76,7 +80,8 @@
     {/if}
     {#if isGuest}
         <div class="compose-row guest-row">
-            <span class="guest-cta">Create a .H0XC identity to send messages</span>
+            <span class="guest-cta">Read-only guest mode</span>
+            <button class="guest-action" on:click={requestIdentity}>Choose or Create Identity</button>
         </div>
     {:else}
         <div class="compose-row">
@@ -144,6 +149,22 @@
         font-size: 0.56rem;
         color: #666;
         font-style: italic;
+    }
+    .guest-action {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        border-radius: 5px;
+        padding: 0.3rem 0.6rem;
+        color: var(--color-primary);
+        font-size: 0.58rem;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .guest-action:hover {
+        background: var(--color-primary);
+        color: #000;
     }
     .compose-channel {
         font-size: 0.5rem;

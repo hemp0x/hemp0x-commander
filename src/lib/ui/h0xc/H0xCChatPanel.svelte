@@ -30,7 +30,7 @@
     let blockedUsers = [];
     let settings = {
         messageExpiryDefault: 0,
-        discoveryScanDepth: 500,
+        discoveryScanDepth: 5000,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
@@ -79,7 +79,7 @@
         participants = loadJson(PARTICIPANTS_KEY, []);
         settings = loadJson(SETTINGS_KEY, {
             messageExpiryDefault: 0,
-            discoveryScanDepth: 500,
+            discoveryScanDepth: 5000,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
@@ -138,6 +138,10 @@
         }
     }
 
+    function handleGuestFromPicker() {
+        enterAsGuest();
+    }
+
     function handleCreateIdentity() {
         close();
         dispatch("createH0xC");
@@ -147,6 +151,18 @@
         isGuest = true;
         saveJson("h0xc_isGuest", true);
         view = "chat";
+    }
+
+    function backToSetup() {
+        isGuest = false;
+        saveJson("h0xc_isGuest", false);
+        selectedIdentity = "";
+        saveJson(IDENTITY_KEY, null);
+        if (ownIdentities.length > 0) {
+            view = "identity-picker";
+        } else {
+            view = "onboarding";
+        }
     }
 
     function close() {
@@ -260,14 +276,18 @@
                         on:select={handleSelectIdentity}
                         on:cancel={handleCancelPicker}
                         on:create={handleCreateIdentity}
+                        on:guest={handleGuestFromPicker}
                     />
                 </div>
             {:else if view === "chat"}
                 <div class="h0xc-panel-inner">
                     <H0xCChatRoom
                         identity={selectedIdentity}
+                        {isGuest}
                         onSwitchIdentity={handleSwitchIdentity}
+                        onBackToSetup={backToSetup}
                         onClose={closeAndSave}
+                        on:manageTags={() => dispatch("manageTags")}
                         bind:participants
                         bind:mutedUsers
                         bind:blockedUsers
@@ -371,6 +391,7 @@
                             on:select={handleSelectIdentity}
                             on:cancel={handleCancelPicker}
                             on:create={handleCreateIdentity}
+                            on:guest={handleGuestFromPicker}
                         />
                     </div>
                 {:else if view === "chat"}
@@ -379,7 +400,9 @@
                             identity={selectedIdentity}
                             {isGuest}
                             onSwitchIdentity={handleSwitchIdentity}
+                            onBackToSetup={backToSetup}
                             onClose={closeAndSave}
+                            on:manageTags={() => dispatch("manageTags")}
                             bind:participants
                             bind:mutedUsers
                             bind:blockedUsers

@@ -7,6 +7,7 @@
     export let user = "";
     export let muted = false;
     export let blocked = false;
+    export let resolvedAddress = "";
 
     const dispatch = createEventDispatcher();
 
@@ -14,15 +15,26 @@
     function mute() { dispatch("mute", { rootName: user }); }
     function block() { dispatch("block", { rootName: user }); }
     function blockAndUnsub() { dispatch("blockAndUnsub", { rootName: user }); }
+    function manageTags() { dispatch("manageTags", { rootName: user }); }
 </script>
 
 {#if user}
     <div class="h0xc-ctx-menu" style="left: {x}px; top: {y}px;" transition:fade={{ duration: 80 }} role="menu">
         <div class="ctx-header">[{user.toUpperCase()}]</div>
+        {#if resolvedAddress}
+            <div class="ctx-addr" title={resolvedAddress}>
+                <span class="ctx-addr-label">Authority</span>
+                <span class="ctx-addr-value">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+            </div>
+        {/if}
         <button class="ctx-item" on:click={view}>View Details</button>
         <button class="ctx-item" on:click={mute}>{muted ? "Unmute" : "Mute"}</button>
         <button class="ctx-item danger" on:click={block}>{blocked ? "Unblock" : "Block"}</button>
         <button class="ctx-item danger" on:click={blockAndUnsub}>Block &amp; Unsubscribe</button>
+        {#if resolvedAddress}
+            <div class="ctx-divider"></div>
+            <button class="ctx-item tag" on:click={manageTags}>Manage Tags for Address</button>
+        {/if}
     </div>
 {/if}
 
@@ -67,5 +79,36 @@
     .ctx-item.danger:hover {
         background: rgba(255, 85, 85, 0.1);
         color: #ff8888;
+    }
+    .ctx-item.tag {
+        color: var(--color-primary);
+    }
+    .ctx-item.tag:hover {
+        background: rgba(0, 255, 65, 0.08);
+        color: #fff;
+    }
+    .ctx-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 0.15rem 0;
+    }
+    .ctx-addr {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.4rem;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.48rem;
+        color: #777;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .ctx-addr-label {
+        color: #555;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+    }
+    .ctx-addr-value {
+        font-family: var(--font-mono);
+        color: #888;
     }
 </style>

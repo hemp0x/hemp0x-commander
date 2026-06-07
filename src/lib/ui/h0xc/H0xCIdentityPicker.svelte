@@ -28,6 +28,10 @@
     function newIdentity() {
         dispatch("create");
     }
+
+    function browseAsGuest() {
+        dispatch("guest");
+    }
 </script>
 
 <div class="h0xc-identity-picker" transition:fade={{ duration: 120 }}>
@@ -55,9 +59,14 @@
                         For E2E encryption visit <a class="warn-link" href="https://hemp0x.social" target="_blank" rel="noopener">hemp0x.social</a>.
                     </span>
                 </div>
-                <button class="pick-create-btn" on:click={newIdentity}>
-                    Create .H0XC Sub-Asset
-                </button>
+                <div class="pick-actions">
+                    <button class="pick-create-btn" on:click={newIdentity}>
+                        Create .H0XC Sub-Asset
+                    </button>
+                    <button class="pick-guest-btn" on:click={browseAsGuest}>
+                        Browse as Guest
+                    </button>
+                </div>
             </div>
         {:else}
             <div class="pick-list-label">Select an identity to join the chat:</div>
@@ -69,6 +78,15 @@
                         <span class="pick-root">[{rootLabel(id)}]</span>
                     </button>
                 {/each}
+            </div>
+            <div class="pick-divider"></div>
+            <div class="pick-alt-actions">
+                <button class="pick-guest-btn" on:click={browseAsGuest}>
+                    Browse as Guest
+                </button>
+                <button class="pick-create-btn small" on:click={newIdentity}>
+                    + Create Identity
+                </button>
             </div>
             <div class="pick-note">Each identity is a sub-asset you own under a root asset. Creating one is an on-chain transaction.</div>
         {/if}
@@ -244,6 +262,13 @@
         text-align: center;
         margin-top: 0.3rem;
     }
+    .pick-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        width: 100%;
+        max-width: 280px;
+    }
     .pick-create-btn {
         background: rgba(0, 255, 65, 0.1);
         border: 1px solid var(--color-primary);
@@ -255,9 +280,48 @@
         letter-spacing: 0.5px;
         cursor: pointer;
         transition: all 0.15s;
+        width: 100%;
     }
     .pick-create-btn:hover {
         background: var(--color-primary);
         color: #000;
+    }
+    .pick-create-btn.small {
+        padding: 0.35rem 0.6rem;
+        font-size: 0.55rem;
+    }
+    .pick-guest-btn {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        color: #aaa;
+        font-size: 0.62rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        width: 100%;
+    }
+    .pick-guest-btn:hover {
+        border-color: rgba(255, 255, 255, 0.25);
+        color: #fff;
+    }
+    .pick-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 0.3rem 0;
+    }
+    .pick-alt-actions {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    .pick-alt-actions .pick-guest-btn,
+    .pick-alt-actions .pick-create-btn {
+        width: auto;
+        flex: 1;
+        min-width: 120px;
     }
 </style>

@@ -61,6 +61,9 @@
     let searchFilter = "";
     let pageSize = 200;
     let showCount = pageSize;
+    let tagBlockedChannels = new Set();
+    let tagLookupStatus = "";
+    let tagLookupPending = false;
     /** @type {import("svelte").SvelteComponent | null} */
     let composeRef = null;
 
@@ -112,11 +115,45 @@
             if (!info.messaging_active) warns.push("Messaging is not fully active.");
             if (!info.caches_available) warns.push("Message caches are unavailable; some messages may be missing.");
             if (warns.length > 0) messagesWarn = warns.join(" ");
+
+            checkChannelTags();
         } catch (err) {
             messagesError = String(err);
             messages = [];
         } finally {
             messagesLoading = false;
+        }
+    }
+
+    async function checkChannelTags() {
+        const tags = settings.autoBlockTags || [];
+        if (tags.length === 0) {
+            tagBlockedChannels = new Set();
+            tagLookupStatus = "";
+            return;
+        }
+        if (tagLookupPending) return;
+        tagLookupPending = true;
+        tagLookupStatus = "checking channel tags...";
+        try {
+            const channels = [...new Set(messages.map((/** @type {AssetMessage} */ m) => m.asset_name))];
+            const blocked = await core.invoke("h0xc_filter_tagged_channels", {
+                channelNames: channels,
+                tagNames: tags,
+            });
+            tagBlockedChannels = new Set(Array.isArray(blocked) ? blocked : []);
+            tagLookupStatus = tagBlockedChannels.size > 0
+                ? `${tagBlockedChannels.size} channel(s) blocked by tag`
+                : "";
+        } catch (err) {
+            tagBlockedChannels = new Set();
+            tagLookupStatus = "";
+            const text = String(err);
+            if (text.includes("Core does not support")) {
+                tagLookupStatus = "";
+            }
+        } finally {
+            tagLookupPending = false;
         }
     }
 
@@ -184,7 +221,6 @@
     $: filteredMessages = (() => {
         const bl = new Set(blockedUsers.map((u) => u.toUpperCase()));
         const mu = new Set(mutedUsers.map((u) => u.toUpperCase()));
-        const at = new Set((settings.autoBlockTags || []).map((/** @type {string} */ t) => t.toUpperCase()));
         let msgs = messages.filter((msg) => {
             const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
             return !bl.has(rn);
@@ -192,14 +228,9 @@
             const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
             return !mu.has(rn);
         });
-        if (at.size > 0) {
+        if (tagBlockedChannels.size > 0) {
             msgs = msgs.filter((msg) => {
-                const dec = decodeCache[msg.message];
-                if (dec?.is_short_message && dec.text) {
-                    const text = dec.text.toUpperCase();
-                    return !Array.from(at).some((tag) => text.includes(tag));
-                }
-                return true;
+                return !tagBlockedChannels.has(msg.asset_name);
             });
         }
         if (searchFilter.trim()) {
@@ -325,6 +356,21 @@
             ? blockedUsers.filter((u) => u !== rootName)
             : [...blockedUsers, rootName];
         mutedUsers = mutedUsers.filter((u) => u !== rootName);
+    }
+
+    async function blockAndUnsubscribe(/** @type {string} */ rootName) {
+        if (!blockedUsers.includes(rootName)) {
+            blockedUsers = [...blockedUsers, rootName];
+        }
+        mutedUsers = mutedUsers.filter((u) => u !== rootName);
+        const p = participants.find((p) => p.rootName === rootName);
+        if (p) {
+            try {
+                await core.invoke("unsubscribe_from_channel", { channelName: p.assetName });
+            } catch {
+                // unsubscribe best-effort; block is already applied locally
+            }
+        }
     }
 
     function showUserDetails(/** @type {string} */ rootName) {
@@ -521,6 +567,9 @@
             {#if discoveryError}
                 <span class="header-discovery-error" title={discoveryError}>Discovery error</span>
             {/if}
+            {#if tagLookupStatus}
+                <span class="header-tag-status">{tagLookupStatus}</span>
+            {/if}
             <button class="header-btn" on:click={refresh} disabled={messagesLoading} title="Refresh messages">
                 ↻
             </button>
@@ -631,9 +680,11 @@
             {mutedUsers}
             {blockedUsers}
             selectedIdentity={identity}
+            tagBlockedChannels={tagBlockedChannels}
             on:mute={handleMute}
             on:block={handleBlock}
             on:viewDetails={handleViewDetails}
+            on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); }}
         />
     </div>
 
@@ -649,8 +700,10 @@
     <H0xCChatSettings
         show={settingsOpen}
         {settings}
+        {blockedUsers}
         on:close={() => (settingsOpen = false)}
         on:save={handleSaveSettings}
+        on:unblock={(e) => { blockedUsers = blockedUsers.filter((u) => u !== e.detail.rootName); }}
     />
 
     <H0xCUserContextMenu
@@ -662,6 +715,7 @@
         on:viewDetails={(e) => { showUserDetails(e.detail.rootName); closeCtx(); }}
         on:mute={(e) => { toggleMute(e.detail.rootName); closeCtx(); }}
         on:block={(e) => { toggleBlock(e.detail.rootName); closeCtx(); }}
+        on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); closeCtx(); }}
     />
 
     <WalletUnlockModal
@@ -749,6 +803,10 @@
         font-size: 0.5rem;
         color: #ff8888;
         cursor: help;
+    }
+    .header-tag-status {
+        font-size: 0.5rem;
+        color: #ffaa88;
     }
     .chat-status {
         font-size: 0.55rem;

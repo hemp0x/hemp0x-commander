@@ -3259,6 +3259,187 @@ pub fn check_global_restriction(restricted_name: String) -> Result<bool, String>
 }
 
 // ---------------------------------------------------------------------------
+// H0XC Channel Authority Resolution
+// ---------------------------------------------------------------------------
+
+fn is_h0xc_channel(channel: &str) -> bool {
+    let upper = channel.to_uppercase();
+    let endswith_h0xc = upper.ends_with("/H0XC") || upper.ends_with(".H0XC");
+    let endswith_h0xc_owner = upper.ends_with("/H0XC!") || upper.ends_with(".H0XC!");
+    endswith_h0xc || endswith_h0xc_owner
+}
+
+fn derive_authority_asset(channel: &str) -> String {
+    let trimmed = channel.trim_end_matches('!');
+    format!("{}!", trimmed)
+}
+
+fn collect_strings_from_json(value: &serde_json::Value, out: &mut Vec<String>) {
+  match value {
+    serde_json::Value::String(s) if !s.trim().is_empty() => out.push(s.trim().to_string()),
+    serde_json::Value::Array(items) => {
+      for item in items {
+        collect_strings_from_json(item, out);
+      }
+    }
+    serde_json::Value::Object(obj) => {
+      for value in obj.values() {
+        collect_strings_from_json(value, out);
+      }
+    }
+    _ => {}
+  }
+}
+
+fn parse_addresses_by_asset(value: &serde_json::Value) -> Vec<String> {
+  let mut addresses = Vec::new();
+  if let Some(obj) = value.as_object() {
+    for (key, entry) in obj {
+      if !key.trim().is_empty() {
+        addresses.push(key.trim().to_string());
+      }
+      if let Some(entry_obj) = entry.as_object() {
+        for field in &["address", "Address"] {
+          if let Some(addr) = entry_obj.get(*field).and_then(|v| v.as_str()) {
+            if !addr.trim().is_empty() {
+              addresses.push(addr.trim().to_string());
+            }
+          }
+        }
+      }
+    }
+  } else {
+    collect_strings_from_json(value, &mut addresses);
+  }
+  addresses.sort();
+  addresses.dedup();
+  addresses
+}
+
+fn parse_authority_addresses_from_listassets(value: &serde_json::Value) -> Vec<String> {
+  let mut addresses = Vec::new();
+  fn walk(val: &serde_json::Value, addrs: &mut Vec<String>) {
+    if let Some(obj) = val.as_object() {
+      for (key, v) in obj {
+        let key_lower = key.to_lowercase();
+        if key_lower == "owner" || key_lower == "address" {
+          if let Some(s) = v.as_str() {
+            if !s.trim().is_empty() {
+              addrs.push(s.trim().to_string());
+            }
+          }
+        }
+        if key_lower == "owners" {
+          collect_strings_from_json(v, addrs);
+        }
+        walk(v, addrs);
+      }
+    }
+    if let Some(arr) = val.as_array() {
+      for item in arr {
+        walk(item, addrs);
+      }
+    }
+  }
+  walk(value, &mut addresses);
+  addresses.sort();
+  addresses.dedup();
+  addresses
+}
+
+#[tauri::command]
+pub fn h0xc_resolve_authority_addresses(channel_name: String) -> Result<Vec<String>, String> {
+  if !is_h0xc_channel(&channel_name) {
+    return Err(format!("Not a valid H0XC channel: {}", channel_name));
+  }
+  ensure_config()?;
+  let authority = derive_authority_asset(&channel_name);
+  if let Ok(raw) = run_cli(&[
+    String::from("listaddressesbyasset"),
+    authority.clone(),
+    String::from("false"),
+    String::from("500"),
+    String::from("0"),
+  ]) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+      let addresses = parse_addresses_by_asset(&value);
+      if !addresses.is_empty() {
+        return Ok(addresses);
+      }
+    }
+  }
+
+  let raw = match run_cli(&[
+    String::from("listassets"),
+    authority.clone(),
+    String::from("true"),
+    String::from("1"),
+  ]) {
+    Ok(r) => r,
+    Err(e) => {
+      return Err(format!(
+        "Core does not support listing asset holders via listassets. This node may need a Core update to support channel authority resolution. Error: {}",
+        e
+      ));
+    }
+  };
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Ok(Vec::new());
+  }
+  let value: serde_json::Value = match serde_json::from_str(trimmed) {
+    Ok(v) => v,
+    Err(_) => return Ok(Vec::new()),
+  };
+  Ok(parse_authority_addresses_from_listassets(&value))
+}
+
+#[tauri::command]
+pub fn h0xc_filter_tagged_channels(
+    channel_names: Vec<String>,
+    tag_names: Vec<String>,
+) -> Result<Vec<String>, String> {
+    ensure_config()?;
+    if tag_names.is_empty() || channel_names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tagged_addresses: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for tag in &tag_names {
+        let tag_name = validate_qualifier_name(tag)?;
+        match run_cli(&[String::from("listaddressesfortag"), tag_name]) {
+            Ok(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() { continue; }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(arr) = val.as_array() {
+                        for item in arr {
+                            if let Some(addr) = item.as_str() {
+                                tagged_addresses.insert(addr.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    if tagged_addresses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut blocked = Vec::new();
+    for channel in &channel_names {
+        let addresses = match h0xc_resolve_authority_addresses(channel.clone()) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        if addresses.iter().any(|addr| tagged_addresses.contains(addr)) {
+            blocked.push(channel.clone());
+        }
+    }
+    Ok(blocked)
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot Operations
 // ---------------------------------------------------------------------------
 
@@ -4259,6 +4440,7 @@ mod tests {
     parse_message_entry, parse_message_list, parse_channel_name_list, parse_messaging_info,
     validate_ipfs_reference, build_ipfs_gateway_url, build_reissue_preview,
     validate_raw_tx_hex, validate_tx_input, normalize_raw_tx_outputs,
+    is_h0xc_channel, derive_authority_asset, h0xc_resolve_authority_addresses,
   };
   use crate::modules::models::RawTxInput;
 
@@ -5799,4 +5981,28 @@ mod tests {
     assert!(build_ipfs_gateway_url("", None).is_err());
   }
 
+  #[test]
+  fn h0xc_channel_detection() {
+    assert!(is_h0xc_channel("ASSET/H0XC"));
+    assert!(is_h0xc_channel("ASSET/H0XC!"));
+    assert!(is_h0xc_channel("asset/h0xc"));
+    assert!(is_h0xc_channel("ASSET.H0XC"));
+    assert!(is_h0xc_channel("ASSET.H0XC!"));
+    assert!(!is_h0xc_channel("HEMP"));
+    assert!(!is_h0xc_channel("ASSET/HEMP"));
+  }
+
+  #[test]
+  fn h0xc_authority_asset_derivation() {
+    assert_eq!(derive_authority_asset("ASSET/H0XC"), "ASSET/H0XC!");
+    assert_eq!(derive_authority_asset("ASSET/H0XC!"), "ASSET/H0XC!");
+    assert_eq!(derive_authority_asset("ASSET.H0XC"), "ASSET.H0XC!");
+    assert_eq!(derive_authority_asset("ASSET.H0XC!"), "ASSET.H0XC!");
+  }
+
+  #[test]
+  fn h0xc_resolve_rejects_non_h0xc() {
+    assert!(h0xc_resolve_authority_addresses("HEMP".to_string()).is_err());
+    assert!(h0xc_resolve_authority_addresses("ASSET/TOKEN".to_string()).is_err());
+  }
 }

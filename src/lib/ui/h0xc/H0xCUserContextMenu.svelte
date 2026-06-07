@@ -13,6 +13,7 @@
     function view() { dispatch("viewDetails", { rootName: user }); }
     function mute() { dispatch("mute", { rootName: user }); }
     function block() { dispatch("block", { rootName: user }); }
+    function blockAndUnsub() { dispatch("blockAndUnsub", { rootName: user }); }
 </script>
 
 {#if user}
@@ -21,6 +22,7 @@
         <button class="ctx-item" on:click={view}>View Details</button>
         <button class="ctx-item" on:click={mute}>{muted ? "Unmute" : "Mute"}</button>
         <button class="ctx-item danger" on:click={block}>{blocked ? "Unblock" : "Block"}</button>
+        <button class="ctx-item danger" on:click={blockAndUnsub}>Block &amp; Unsubscribe</button>
     </div>
 {/if}
 

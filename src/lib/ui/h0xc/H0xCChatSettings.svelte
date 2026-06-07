@@ -11,6 +11,8 @@
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
     };
+    /** @type {string[]} */
+    export let blockedUsers = [];
 
     const dispatch = createEventDispatcher();
 
@@ -48,6 +50,11 @@
             autoBlockTags: ["#SPAM"],
         };
         draftTagsText = "#SPAM";
+    }
+
+    /** @param {string} rootName */
+    function unblock(rootName) {
+        dispatch("unblock", { rootName });
     }
 </script>
 
@@ -114,13 +121,31 @@
 
                 <div class="sett-section">
                     <div class="sett-label">AUTO-BLOCK TAGS</div>
-                    <div class="sett-hint">Messages containing these tags will be hidden automatically. One tag per line or comma-separated. Default: #SPAM</div>
+                    <div class="sett-hint">Commander hides messages from H0XC channels whose authority-holder address is tagged with any configured qualifier tag. Requires Core to support channel holder resolution. One tag per line or comma-separated. Default: #SPAM</div>
                     <textarea
                         class="sett-input tags-input"
                         bind:value={draftTagsText}
                         placeholder="#SPAM"
                         rows="3"
                     ></textarea>
+                    <div class="sett-hint sett-limitation">Requires Core to expose channel authority holders via listassets. If unavailable, tag blocking is inactive and no channels are auto-blocked.</div>
+                </div>
+
+                <div class="sett-section">
+                    <div class="sett-label">LOCAL BLOCK LIST</div>
+                    {#if blockedUsers.length === 0}
+                        <div class="sett-hint">No locally blocked H0XC identities.</div>
+                    {:else}
+                        <div class="blocked-list">
+                            {#each blockedUsers as rootName}
+                                <div class="blocked-row">
+                                    <span>[{rootName.toUpperCase()}]</span>
+                                    <button class="blocked-unblock" on:click={() => unblock(rootName)}>Unblock</button>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                    <div class="sett-hint">Local blocks are private to this Commander install and can be changed at any time.</div>
                 </div>
             </div>
             <div class="sett-footer">
@@ -290,5 +315,42 @@
     .tags-input {
         resize: vertical;
         min-height: 2.5rem;
+    }
+    .sett-limitation {
+        color: #8a8a5a;
+        font-style: italic;
+    }
+    .blocked-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        max-height: 6rem;
+        overflow: auto;
+    }
+    .blocked-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.35rem 0.45rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        background: rgba(0, 0, 0, 0.35);
+        color: #d8d8d8;
+        font-size: 0.55rem;
+    }
+    .blocked-unblock {
+        border: 1px solid rgba(0, 255, 65, 0.35);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.06);
+        color: var(--color-primary);
+        font: inherit;
+        font-size: 0.5rem;
+        cursor: pointer;
+        padding: 0.18rem 0.35rem;
+        text-transform: uppercase;
+    }
+    .blocked-unblock:hover {
+        background: rgba(0, 255, 65, 0.12);
     }
 </style>

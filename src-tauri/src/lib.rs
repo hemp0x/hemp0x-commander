@@ -115,6 +115,9 @@ pub fn run() {
             commands::unsubscribe_from_channel,
             commands::preview_send_announcement,
             commands::send_announcement,
+            // H0XC Channel Authority Commands
+            commands::h0xc_resolve_authority_addresses,
+            commands::h0xc_filter_tagged_channels,
             // IPFS Commands
             commands::ipfs_validate,
             commands::ipfs_gateway_url,

@@ -15,6 +15,7 @@
     /** @type {string[]} */
     export let blockedUsers = [];
     export let selectedIdentity = "";
+    export let tagBlockedChannels = new Set();
 
     const dispatch = createEventDispatcher();
 
@@ -43,7 +44,7 @@
         contextUser = null;
     }
 
-    $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName));
+    $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName) && !tagBlockedChannels.has(p.assetName));
     $: recent = filteredParticipants.filter((p) => {
         return (Date.now() - p.lastSeen) < 3600000;
     });
@@ -121,6 +122,7 @@
         on:viewDetails={(e) => { dispatch("viewDetails", e.detail); closeContext(); }}
         on:mute={(e) => { dispatch("mute", e.detail); closeContext(); }}
         on:block={(e) => { dispatch("block", e.detail); closeContext(); }}
+        on:blockAndUnsub={(e) => { dispatch("blockAndUnsub", e.detail); closeContext(); }}
     />
 </div>
 

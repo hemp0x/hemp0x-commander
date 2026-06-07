@@ -515,12 +515,12 @@
     /**
      * @param {string} parentName
      */
-    function goToSubAsset(parentName) {
+    function goToSubAsset(parentName, defaultChildName = "") {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
         issueParent = parentName;
         issueType = "sub";
-        issueName = "";
+        issueName = defaultChildName;
         issueQty = "1";
         issueUnits = 0;
         issueReissue = true;
@@ -998,6 +998,7 @@
                         on:transfer={(e) => goToTransfer(e.detail.name)}
                         on:reissue={(e) => goToReissue(e.detail)}
                         on:createSub={(e) => goToSubAsset(e.detail.name)}
+                        on:createH0xC={(e) => goToSubAsset(e.detail.name, "H0XC")}
                         on:createNft={(e) => goToNft(e.detail.name)}
                         on:gov={(e) => openGovernance(e.detail)}
                         on:manageTags={(e) => goToManageTags(e.detail)}
@@ -1052,7 +1053,7 @@
                         bind:units={issueUnits}
                         bind:ipfs={issueIpfs}
                         bind:reissuable={issueReissue}
-                        on:close={() => (subModalOpen = false)}
+                        on:close={() => { subModalOpen = false; if (lastDetailAsset) returnToDetail(); }}
                         on:back={() => { subModalOpen = false; returnToDetail(); }}
                         on:create={() => {
                             initiateIssue();

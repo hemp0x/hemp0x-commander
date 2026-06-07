@@ -346,6 +346,10 @@
         dispatch("subscriptionToggle");
     }
 
+    function openH0xc() {
+        dispatch("openH0xc");
+    }
+
     /** @param {string} name */
     function channelNamesForAsset(name) {
         if (!name) return [];
@@ -649,6 +653,13 @@
         </div>
         <div class="messages-header-right">
             <button
+                class="h0xc-mini-btn"
+                on:click={openH0xc}
+                title="Open Hemp0x Community Chat"
+            >
+                <span class="mini-icon">◈</span> Hemp0x Community Chat
+            </button>
+            <button
                 class="table-pack-mini-btn"
                 class:active={inboxTablePackPanelOpen}
                 on:click={openInboxTablePackPanel}
@@ -925,29 +936,47 @@
         background: rgba(0, 255, 65, 0.12);
         border-color: rgba(0, 255, 65, 0.35);
     }
+    .h0xc-mini-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 5px;
+        padding: 0.35rem 0.55rem;
+        color: var(--color-primary);
+        font-size: 0.58rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+        white-space: nowrap;
+    }
+    .h0xc-mini-btn:hover {
+        background: rgba(0, 255, 65, 0.12);
+        border-color: rgba(0, 255, 65, 0.4);
+    }
     .mini-icon {
         font-size: 0.75rem;
     }
     .messages-actions {
         display: flex;
-        gap: 0.4rem;
+        gap: 0.35rem;
     }
     .action-btn {
-        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
-        padding: 0.6rem;
+        border-radius: 5px;
+        padding: 0.35rem 0.55rem;
         color: #aaa;
-        font-size: 0.65rem;
+        font-size: 0.58rem;
         font-weight: 600;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
         cursor: pointer;
         transition: all 0.15s;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.4rem;
         white-space: nowrap;
     }
     .action-btn:hover {
@@ -962,10 +991,9 @@
     .action-btn.primary:hover {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 20px var(--color-primary);
     }
     .action-icon {
-        font-size: 1rem;
+        font-size: 0.85rem;
     }
     .subscribe-btn.subscribed {
         color: #ff5555;

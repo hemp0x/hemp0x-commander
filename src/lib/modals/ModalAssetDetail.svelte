@@ -8,6 +8,7 @@
     import AssetDetailDetailsTab from "../ui/asset-detail/AssetDetailDetailsTab.svelte";
     import AssetMessageCompose from "../ui/asset-messages/AssetMessageCompose.svelte";
     import AssetMessageInbox from "../ui/asset-messages/AssetMessageInbox.svelte";
+    import H0xCChatPanel from "../ui/h0xc/H0xCChatPanel.svelte";
 
     /**
      * @typedef {{
@@ -62,6 +63,7 @@
     let isSubscribed = false;
 
     let composeOpen = false;
+    let h0xcOpen = false;
     let currentAssetName = "";
 
     const dispatch = createEventDispatcher();
@@ -128,6 +130,19 @@
 
     function cancelCompose() {
         composeOpen = false;
+    }
+
+    function openH0xC() {
+        h0xcOpen = true;
+    }
+
+    function closeH0xC() {
+        h0xcOpen = false;
+    }
+
+    function handleCreateH0xC() {
+        closeH0xC();
+        dispatch("createH0xC", asset);
     }
 
     function close() {
@@ -300,6 +315,13 @@
                         on:close={cancelCompose}
                         on:sent={loadMessages}
                     />
+                {:else if h0xcOpen}
+                    <H0xCChatPanel
+                        inline
+                        show={true}
+                        on:close={closeH0xC}
+                        on:createH0xC={handleCreateH0xC}
+                    />
                 {:else}
                     <AssetMessageInbox
                         {asset}
@@ -311,6 +333,7 @@
                         on:compose={openCompose}
                         on:refresh={loadMessages}
                         on:subscriptionToggle={toggleSubscription}
+                        on:openH0xc={openH0xC}
                     />
                 {/if}
             {/if}
@@ -563,4 +586,5 @@
     .detail-body-scroll::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 255, 65, 0.55);
     }
+
 </style>

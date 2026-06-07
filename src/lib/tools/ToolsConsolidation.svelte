@@ -8,6 +8,7 @@
     import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
     import CommanderLoader from "../ui/CommanderLoader.svelte";
+    import WalletUnlockModal from "../ui/WalletUnlockModal.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -41,6 +42,9 @@
     let unlockError = "";
     let unlocking = false;
     let unlockAfterAction = "single";
+    $: unlockBody = unlockAfterAction === "multi"
+        ? "Your wallet is locked. Commander will unlock it for 5 minutes to run multi-round consolidation. Lock the wallet again after consolidation if you are done sending transactions."
+        : "Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this consolidation transaction. Lock the wallet again after consolidation if you are done sending transactions.";
     let planData = null;
     let planning = false;
     let multiRoundRunning = false;
@@ -1393,49 +1397,17 @@
 {/if}
 
 {#if showUnlockModal}
-    <div
-        class="modal-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cons-unlock-title"
-        tabindex="0"
-        on:click={() => (showUnlockModal = false)}
-        on:keydown={(e) => e.key === "Escape" && (showUnlockModal = false)}
-    >
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-        <div class="modal-box unlock-modal" role="document" on:click|stopPropagation>
-            <div class="modal-header">
-                <span class="header-icon">&#128274;</span>
-                <h2 id="cons-unlock-title">UNLOCK WALLET</h2>
-            </div>
-            <div class="modal-body">
-                <p class="warning-text">
-                    Your wallet is locked. Commander will unlock it for 5 minutes to {unlockAfterAction === "multi" ? "run multi-round consolidation" : "broadcast this consolidation transaction"}. Lock the wallet again after consolidation if you are done sending transactions.
-                </p>
-                <input
-                    class="input-glass unlock-input"
-                    type="password"
-                    bind:value={unlockPassword}
-                    placeholder="Wallet passphrase"
-                    autocomplete="current-password"
-                    on:keydown={(e) => e.key === "Enter" && unlockAndBroadcastConsolidation()}
-                />
-                {#if unlockError}
-                    <div class="warning-box">
-                        <span class="warning-text">{unlockError}</span>
-                    </div>
-                {/if}
-            </div>
-            <div class="modal-footer">
-                <button class="btn-cancel" on:click={() => (showUnlockModal = false)} disabled={unlocking}>
-                    CANCEL
-                </button>
-                <button class="btn-confirm" on:click={unlockAndBroadcastConsolidation} disabled={unlocking || !unlockPassword.trim()}>
-                    {unlocking ? "UNLOCKING..." : "UNLOCK AND BROADCAST"}
-                </button>
-            </div>
-        </div>
-    </div>
+    <WalletUnlockModal
+        show={true}
+        bind:password={unlockPassword}
+        {unlocking}
+        error={unlockError}
+        title="UNLOCK WALLET"
+        body={unlockBody}
+        confirmLabel="UNLOCK AND BROADCAST"
+        on:cancel={() => { showUnlockModal = false; }}
+        on:confirm={unlockAndBroadcastConsolidation}
+    />
 {/if}
 
 {#if showPlanModal}
@@ -1951,11 +1923,6 @@
         font-family: var(--font-mono);
     }
 
-    .header-icon {
-        font-size: 1.1rem;
-        color: var(--color-primary);
-    }
-
     .modal-body {
         padding: 1rem 1.2rem;
     }
@@ -2119,15 +2086,6 @@
     .btn-confirm:disabled {
         opacity: 0.4;
         cursor: not-allowed;
-    }
-
-    .unlock-modal {
-        max-width: 520px;
-    }
-
-    .unlock-input {
-        width: 100%;
-        margin-top: 0.8rem;
     }
 
     .warning-banner {

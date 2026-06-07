@@ -102,7 +102,6 @@
         lastSeenMessageKey = loadJson(LAST_SEEN_KEY, "");
         lastScanTime = loadJson(LAST_SCAN_TIME_KEY, "");
         const savedId = loadJson(IDENTITY_KEY, null);
-        const savedGuest = loadJson("h0xc_isGuest", false);
 
         // Load identities
         identitiesLoading = true;
@@ -120,14 +119,11 @@
         }
 
         if (ownIdentities.length === 0) {
-            view = savedGuest ? "chat" : "onboarding";
-            isGuest = savedGuest && view === "chat";
+            isGuest = false;
+            view = "onboarding";
         } else if (savedId && typeof savedId === "string" && ownIdentities.includes(savedId)) {
             selectedIdentity = savedId;
-            view = "chat";
-        } else if (ownIdentities.length === 1) {
-            selectedIdentity = ownIdentities[0];
-            saveJson(IDENTITY_KEY, selectedIdentity);
+            isGuest = false;
             view = "chat";
         } else {
             view = "identity-picker";
@@ -166,13 +162,11 @@
 
     function enterAsGuest() {
         isGuest = true;
-        saveJson("h0xc_isGuest", true);
         view = "chat";
     }
 
     function backToSetup() {
         isGuest = false;
-        saveJson("h0xc_isGuest", false);
         selectedIdentity = "";
         saveJson(IDENTITY_KEY, null);
         if (ownIdentities.length > 0) {

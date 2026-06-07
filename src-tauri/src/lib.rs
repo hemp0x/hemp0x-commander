@@ -72,6 +72,7 @@ pub fn run() {
             commands::list_address_groupings,
             commands::get_asset_data,
             commands::list_network_assets,
+            commands::list_asset_holders,
             commands::check_ownership_token,
             commands::reissue_asset,
             commands::lock_asset_supply,

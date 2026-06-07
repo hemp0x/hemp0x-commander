@@ -86,6 +86,7 @@
 
     // Browse Modal
     let browseModalOpen = false;
+    let detailFromBrowse = false;
     let browsePattern = "";
     let browseResults = [];
     let browseLoading = false;
@@ -484,7 +485,6 @@
      */
     async function openDetail(asset, tab = "DETAILS") {
         selectedDetail = asset;
-        // Close all other panels when opening detail
         advancedModalOpen = false;
         createModalOpen = false;
         browseModalOpen = false;
@@ -514,6 +514,10 @@
         selectedDetail = null;
         assetMetadata = null;
         slideDirection = 0;
+        if (detailFromBrowse) {
+            detailFromBrowse = false;
+            browseModalOpen = true;
+        }
     }
 
     function navigatePrev() {
@@ -547,7 +551,8 @@
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
         selectedAsset = assetName;
-        selectedDetail = null; // Close detail, open transfer inline
+        selectedDetail = null;
+        detailFromBrowse = false;
         transferModalOpen = true;
     }
 
@@ -559,6 +564,7 @@
         lastDetailTab = activeDetailTab;
         reissueAsset = asset.name;
         selectedDetail = null;
+        detailFromBrowse = false;
         reissueModalOpen = true;
     }
 
@@ -569,6 +575,7 @@
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
         selectedDetail = null;
+        detailFromBrowse = false;
         advancedInitialTab = "tags";
         advancedInitialTagName = asset?.name || "";
         advancedModalOpen = true;
@@ -588,6 +595,7 @@
         issueReissue = true;
         issueIpfs = "";
         selectedDetail = null;
+        detailFromBrowse = false;
         subModalOpen = true;
     }
 
@@ -602,6 +610,7 @@
         nftTag = "";
         issueIpfs = "";
         selectedDetail = null;
+        detailFromBrowse = false;
         nftModalOpen = true;
     }
 
@@ -618,6 +627,7 @@
             });
             selectedGovAsset = { ...asset, ...details }; // Merge list info with full details
             selectedDetail = null;
+            detailFromBrowse = false;
             govModalOpen = true;
         } catch (e) {
             console.error("Failed to load details for governance", e);
@@ -1109,6 +1119,16 @@
                         inline
                         isOpen={true}
                         on:close={() => (browseModalOpen = false)}
+                        on:viewAsset={(e) => {
+                            const a = e.detail;
+                            detailFromBrowse = true;
+                            openDetail({
+                                name: a.name,
+                                balance: a.balance,
+                                type: a.type,
+                                units: a.units,
+                            });
+                        }}
                     />
                 {:else if selectedDetail}
                     <ModalAssetDetail

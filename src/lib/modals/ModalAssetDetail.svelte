@@ -3,7 +3,6 @@
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import "../../components.css";
-    import ModalAlert from "./ModalAlert.svelte";
     import { cidViewerTarget } from "../stores/contentLibrary.js";
     import AssetDetailDetailsTab from "../ui/asset-detail/AssetDetailDetailsTab.svelte";
     import AssetMessageCompose from "../ui/asset-messages/AssetMessageCompose.svelte";
@@ -48,8 +47,6 @@
     export let inline = false;
     export let initialActiveTab = "DETAILS";
 
-    let showAlert = false;
-
     let activeTab = initialActiveTab;
 
     /** @type {MessagesInfo | null} */
@@ -65,6 +62,58 @@
     let composeOpen = false;
     let h0xcOpen = false;
     let currentAssetName = "";
+
+    let holdersShown = false;
+    let holdersLoading = false;
+    let holdersError = "";
+    /** @type {{ address: string, balance: number }[]} */
+    let holders = [];
+    let ownerAddress = "";
+    /** @type {string|null} */
+    let copiedAddress = null;
+
+    async function loadHolders() {
+        holdersLoading = true;
+        holdersError = "";
+        try {
+            const result = await core.invoke("list_asset_holders", {
+                assetName: asset?.name ?? "",
+                limit: 100,
+            });
+            holders = Array.isArray(result) ? result : [];
+            ownerAddress = "";
+            if (holders.length > 0 && asset?.name && !asset.name.endsWith("!")) {
+                const ownerResult = await core.invoke("list_asset_holders", {
+                    assetName: asset.name + "!",
+                    limit: 10,
+                }).catch(() => []);
+                if (Array.isArray(ownerResult) && ownerResult.length > 0) {
+                    ownerAddress = ownerResult[0].address;
+                }
+            }
+        } catch (err) {
+            holdersError = String(err);
+        } finally {
+            holdersLoading = false;
+        }
+    }
+
+    function toggleHolders() {
+        if (holdersShown) {
+            holdersShown = false;
+            return;
+        }
+        holdersShown = true;
+        if (holders.length === 0) loadHolders();
+    }
+
+    async function copyAddress(/** @type {string} */ addr) {
+        try {
+            await navigator.clipboard.writeText(addr);
+            copiedAddress = addr;
+            setTimeout(() => { if (copiedAddress === addr) copiedAddress = null; }, 1500);
+        } catch {}
+    }
 
     const dispatch = createEventDispatcher();
 
@@ -246,6 +295,9 @@
     $: if (asset && asset.name !== currentAssetName) {
         currentAssetName = asset.name;
         activeTab = "DETAILS";
+        holdersShown = false;
+        holders = [];
+        ownerAddress = "";
         messages = [];
         channels = [];
         messagesInfo = null;
@@ -300,19 +352,65 @@
             </div>
 
             {#if activeTab === "DETAILS"}
-                <AssetDetailDetailsTab
-                    {asset}
-                    {metadata}
-                    {loading}
-                    onGovernance={onGovernance}
-                    onTransfer={onTransfer}
-                    onReissue={onReissue}
-                    onManageTags={onManageTags}
-                    onSubAsset={onSubAsset}
-                    onNft={onNft}
-                    openCidViewer={openCidViewer}
-                    onShowAlert={() => (showAlert = true)}
-                />
+                {#if holdersShown}
+                    <div class="holders-panel">
+                        <div class="holders-panel-header">
+                            <span class="holders-panel-title">HOLDER DETAILS — {asset?.name ?? ""}</span>
+                            <div class="holders-panel-actions">
+                                <button class="holders-refresh-btn" on:click={loadHolders} disabled={holdersLoading} title="Refresh">↻</button>
+                                <button class="holders-close-btn" on:click={() => (holdersShown = false)}>&times;</button>
+                            </div>
+                        </div>
+                        <div class="holders-panel-body">
+                            {#if holdersLoading}
+                                <div class="holders-panel-status">Loading holders...</div>
+                            {:else if holdersError}
+                                <div class="holders-panel-status error">{holdersError}</div>
+                            {:else if holders.length === 0}
+                                <div class="holders-panel-status">No holder data available. Node may need assetindex=1.</div>
+                            {:else}
+                                <div class="holders-table">
+                                    <div class="holders-table-header">
+                                        <span class="h-col-rank">#</span>
+                                        <span class="h-col-addr">ADDRESS</span>
+                                        <span class="h-col-bal">BALANCE</span>
+                                        <span class="h-col-copy"></span>
+                                    </div>
+                                    {#each holders as h, i}
+                                        <div class="holders-table-row" class:owner-row={ownerAddress && h.address === ownerAddress}>
+                                            <span class="h-col-rank">{i + 1}</span>
+                                            <span class="h-col-addr" title={h.address}>
+                                                {h.address}
+                                                {#if ownerAddress && h.address === ownerAddress}
+                                                    <span class="owner-tag">OWNER</span>
+                                                {/if}
+                                            </span>
+                                            <span class="h-col-bal mono">{h.balance.toLocaleString()}</span>
+                                            <button class="h-col-copy" on:click={() => copyAddress(h.address)}
+                                                title={copiedAddress === h.address ? "Copied!" : "Copy address"}>
+                                                {copiedAddress === h.address ? "✓" : "⧉"}
+                                            </button>
+                                        </div>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                {:else}
+                    <AssetDetailDetailsTab
+                        {asset}
+                        {metadata}
+                        {loading}
+                        onGovernance={onGovernance}
+                        onTransfer={onTransfer}
+                        onReissue={onReissue}
+                        onManageTags={onManageTags}
+                        onSubAsset={onSubAsset}
+                        onNft={onNft}
+                        openCidViewer={openCidViewer}
+                        on:showHolders={toggleHolders}
+                    />
+                {/if}
             {:else if activeTab === "MESSAGES"}
                 {#if composeOpen}
                     <AssetMessageCompose
@@ -393,12 +491,6 @@
         </div>
     {/if}
 
-    <ModalAlert
-        isOpen={showAlert}
-        title="Coming Soon"
-        message="Top 100 Holders list requires 'assetindex=1' node configuration. This feature is deferred."
-        on:close={() => (showAlert = false)}
-    />
 {/if}
 
 <style>
@@ -591,6 +683,70 @@
     }
     .detail-body-scroll::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 255, 65, 0.55);
+    }
+
+    .holders-panel { display: flex; flex-direction: column; flex: 1 1 0%; min-height: 0; }
+    .holders-panel-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.4rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        margin-bottom: 0.4rem; flex-shrink: 0;
+    }
+    .holders-panel-title {
+        font-size: 0.65rem; font-weight: 700; color: var(--color-primary);
+        letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .holders-panel-actions { display: flex; align-items: center; gap: 0.3rem; flex-shrink: 0; }
+    .holders-refresh-btn {
+        background: none; border: 1px solid rgba(255, 255, 255, 0.08); color: #888;
+        font-size: 0.8rem; cursor: pointer; padding: 0.1rem 0.4rem; border-radius: 4px; line-height: 1;
+    }
+    .holders-refresh-btn:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); }
+    .holders-refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .holders-close-btn {
+        background: none; border: none; color: #888; font-size: 1.2rem;
+        cursor: pointer; padding: 0.1rem 0.4rem; line-height: 1;
+    }
+    .holders-close-btn:hover { color: #fff; }
+    .holders-panel-body { flex: 1 1 0%; overflow-y: auto; min-height: 0; }
+    .holders-panel-body::-webkit-scrollbar { width: 6px; }
+    .holders-panel-body::-webkit-scrollbar-track { background: transparent; }
+    .holders-panel-body::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.35); border-radius: 3px; }
+    .holders-panel-status { color: #555; font-size: 0.7rem; text-align: center; padding: 2rem 1rem; }
+    .holders-panel-status.error { color: #ff8888; }
+
+    .holders-table {
+        display: flex; flex-direction: column; border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 4px; overflow: hidden;
+    }
+    .holders-table-header {
+        display: grid; grid-template-columns: 32px 1fr 100px 28px;
+        gap: 0.5rem; padding: 0.35rem 0.6rem; background: rgba(0, 0, 0, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        font-size: 0.5rem; font-weight: 600; color: #555; letter-spacing: 1px; text-transform: uppercase;
+    }
+    .holders-table-row {
+        display: grid; grid-template-columns: 32px 1fr 100px 28px;
+        gap: 0.5rem; padding: 0.3rem 0.6rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        font-size: 0.65rem; transition: background 0.1s;
+    }
+    .holders-table-row:last-child { border-bottom: none; }
+    .holders-table-row:hover { background: rgba(0, 255, 65, 0.03); }
+    .holders-table-row.owner-row { background: rgba(0, 204, 255, 0.06); }
+    .holders-table-row.owner-row:hover { background: rgba(0, 204, 255, 0.1); }
+    .h-col-rank { color: #555; font-family: var(--font-mono); }
+    .h-col-addr { color: #aaa; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .holders-table-row.owner-row .h-col-addr { color: #00ccff; font-weight: 600; }
+    .h-col-bal { color: #999; text-align: right; font-family: var(--font-mono); }
+    .h-col-copy {
+        background: none; border: none; color: #555; cursor: pointer; font-size: 0.7rem;
+        padding: 0; line-height: 1; transition: color 0.15s; display: flex; align-items: center; justify-content: center;
+    }
+    .h-col-copy:hover { color: var(--color-primary); }
+    .owner-tag {
+        font-size: 0.45rem; font-weight: 700; color: #00ccff; background: rgba(0, 204, 255, 0.1);
+        border: 1px solid rgba(0, 204, 255, 0.25); border-radius: 3px;
+        padding: 0.05rem 0.3rem; margin-left: 0.3rem; vertical-align: middle; letter-spacing: 0.5px;
     }
 
 </style>

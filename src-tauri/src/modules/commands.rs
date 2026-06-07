@@ -534,6 +534,19 @@ pub fn get_asset_data(name: String) -> Result<AssetData, String> {
   let raw = run_cli(&[String::from("getassetdata"), name.clone()])?;
   let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
   
+  let block_height = asset_block_height(&value)
+    .or_else(|| {
+      let listing_raw = run_cli(&[
+        String::from("listassets"),
+        name.clone(),
+        String::from("true"),
+        String::from("1"),
+      ]).ok()?;
+      let listing: serde_json::Value = serde_json::from_str(&listing_raw).ok()?;
+      listing.get(&name).and_then(asset_block_height)
+    })
+    .unwrap_or(0);
+
   Ok(AssetData {
     name: value.get("name").and_then(|v| v.as_str()).unwrap_or(&name).to_string(),
     amount: value.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -541,8 +554,20 @@ pub fn get_asset_data(name: String) -> Result<AssetData, String> {
     reissuable: value.get("reissuable").and_then(|v| v.as_i64()).map(|v| v == 1).unwrap_or(false),
     has_ipfs: value.get("has_ipfs").and_then(|v| v.as_i64()).map(|v| v == 1).unwrap_or(false),
     ipfs_hash: value.get("ipfs_hash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    block_height: value.get("block_height").and_then(|v| v.as_u64()).unwrap_or(0),
+    block_height,
   })
+}
+
+fn asset_block_height(value: &serde_json::Value) -> Option<u64> {
+  ["block_height", "issue_block_height", "blockheight", "height"]
+    .iter()
+    .find_map(|key| {
+      value.get(*key).and_then(|v| {
+        v.as_u64()
+          .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+          .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+      })
+    })
 }
 
 #[tauri::command]
@@ -3393,6 +3418,46 @@ pub fn h0xc_resolve_authority_addresses(channel_name: String) -> Result<Vec<Stri
     Err(_) => return Ok(Vec::new()),
   };
   Ok(parse_authority_addresses_from_listassets(&value))
+}
+
+#[derive(serde::Serialize)]
+pub struct AssetHolderEntry {
+  pub address: String,
+  pub balance: f64,
+}
+
+#[tauri::command]
+pub fn list_asset_holders(asset_name: String, limit: Option<i64>) -> Result<Vec<AssetHolderEntry>, String> {
+  ensure_config()?;
+  let count = limit.unwrap_or(500).clamp(1, 10000);
+  let raw = run_cli(&[
+    String::from("listaddressesbyasset"),
+    asset_name,
+    String::from("false"),
+    count.to_string(),
+    String::from("0"),
+  ])?;
+  let value: serde_json::Value = serde_json::from_str(raw.trim()).map_err(|e| e.to_string())?;
+  let mut entries: Vec<AssetHolderEntry> = Vec::new();
+  if let Some(obj) = value.as_object() {
+    for (addr, info) in obj {
+      if addr.trim().is_empty() { continue; }
+      let mut balance = info.as_f64().unwrap_or(0.0);
+      if balance == 0.0 {
+        if let Some(obj_info) = info.as_object() {
+          balance = obj_info.get("balance")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        }
+      }
+      entries.push(AssetHolderEntry {
+        address: addr.trim().to_string(),
+        balance,
+      });
+    }
+  }
+  entries.sort_by(|a, b| b.balance.partial_cmp(&a.balance).unwrap_or(std::cmp::Ordering::Equal));
+  Ok(entries)
 }
 
 #[tauri::command]

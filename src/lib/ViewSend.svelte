@@ -3,6 +3,7 @@
     import { core } from "@tauri-apps/api";
     import { save, open } from "@tauri-apps/plugin-dialog";
     import { formatAmount } from "./utils.js";
+    import WalletUnlockModal from "./ui/WalletUnlockModal.svelte";
 
     // --- FORM STATE ---
     let address = "";
@@ -79,6 +80,14 @@
     let previewData = null;
     /** @type {string | null} */
     let previewJournalId = null;
+
+    // --- WALLET UNLOCK STATE ---
+    let showUnlockModal = false;
+    let unlockPassword = "";
+    let unlocking = false;
+    let unlockError = "";
+    /** @type {(() => void) | null} */
+    let pendingRetryFn = null;
 
     // --- LIFECYCLE ---
     onMount(() => {
@@ -351,6 +360,11 @@
             address = "";
             refreshWalletStatus();
         } catch (err) {
+            if (isWalletUnlockError(err)) {
+                status = "";
+                requestWalletUnlock(executeSend);
+                return;
+            }
             status = `Error: ${err}`;
             addNotification({
                 type: "transaction",
@@ -385,6 +399,45 @@
         showConfirmModal = false;
         previewData = null;
         previewJournalId = null;
+    }
+
+    function isWalletUnlockError(/** @type {unknown} */ err) {
+        const text = String(err || "");
+        const lower = text.toLowerCase();
+        return text.includes("ERROR CODE: -13")
+            || lower.includes("walletpassphrase")
+            || lower.includes("wallet passphrase")
+            || lower.includes("please enter the wallet passphrase")
+            || /wallet.*locked|passphrase|unlock/i.test(text);
+    }
+
+    function requestWalletUnlock(/** @type {(() => void) | null} */ retryFn) {
+        unlockPassword = "";
+        unlockError = "";
+        pendingRetryFn = retryFn;
+        showUnlockModal = true;
+    }
+
+    async function unlockAndRetry() {
+        if (!unlockPassword.trim() || unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await core.invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
+            unlockPassword = "";
+            showUnlockModal = false;
+            const fn = pendingRetryFn;
+            pendingRetryFn = null;
+            if (fn) await fn();
+        } catch (err) {
+            if (isWalletUnlockError(err)) {
+                unlockError = "Wallet unlock failed. Check the passphrase and try again.";
+            } else {
+                unlockError = String(err);
+            }
+        } finally {
+            unlocking = false;
+        }
     }
 
     async function refreshWalletStatus() {
@@ -939,6 +992,11 @@
             fetchUtxos();
             refreshWalletStatus();
         } catch (err) {
+            if (isWalletUnlockError(err)) {
+                status = "";
+                requestWalletUnlock(executeAdvancedSend);
+                return;
+            }
             status = `Error: ${err}`;
             addNotification({
                 type: "transaction",
@@ -1279,6 +1337,18 @@
         </div>
     </div>
 {/if}
+
+<WalletUnlockModal
+    show={showUnlockModal}
+    bind:password={unlockPassword}
+    {unlocking}
+    error={unlockError}
+    title="UNLOCK WALLET"
+    body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction."
+    confirmLabel="UNLOCK AND BROADCAST"
+    on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; pendingRetryFn = null; }}
+    on:confirm={unlockAndRetry}
+/>
 
 <!-- UTXO SELECTION MODAL -->
 {#if showUtxoModal}

@@ -13,6 +13,7 @@ export const systemStatus = writable({
  * Node Status
  * Tracks the connectivity and general health of the local Hemp0x node.
  */
+/** @type {import('svelte/store').Writable<{ online: boolean, version: string, connections: number, headers: number, blocks: number, verificationProgress: number, error: string | null }>} */
 export const nodeStatus = writable({
     online: false,
     version: "--",

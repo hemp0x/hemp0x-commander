@@ -24,8 +24,32 @@
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
   import { APP_VERSION } from "./lib/constants.js";
 
+  /**
+   * @typedef {{ name: string, address: string, category: string, amount: string|number, time: number|string, date?: string, type?: string, txid?: string, asset?: string, conf?: number, confirmations?: number, direction?: string }} RecentTx
+   * @typedef {{ state: string, blocks: string|number, headers: string|number, peers: string|number, diff: string|number, synced: boolean }} NodeInfo
+   * @typedef {{ balance: string, pending: string, staked: string, status: string }} WalletInfo
+   * @typedef {{ auth_mode?: string, warning?: string }} RpcAuthStatus
+   * @typedef {{
+   *   identity?: {
+   *     rpc_authenticated?: boolean,
+   *     base_version?: string|null,
+   *     subversion?: string|null,
+   *     protocol_version?: number|null,
+   *     numeric_version?: number|null,
+   *     is_required_core_next?: boolean,
+   *     commit_match?: boolean,
+   *     commit_available?: boolean,
+   *     status?: string,
+   *     capabilities?: Record<string, any>|null
+   *   }|null,
+   *   processIdentity?: any,
+   * } & Record<string, any>} ConflictRuntimeStatus
+   * @typedef {{ state: "RUNNING" | "OFFLINE" | string }} StratumState
+   */
+
   // --- STATE ---
   let activeTab = "DASHBOARD"; // DASHBOARD, SEND, RECEIVE, ASSETS, TOOLS, ABOUT
+  /** @type {string | null} */
   let lastCidTarget = null;
   $: if ($cidViewerTarget && $cidViewerTarget !== lastCidTarget) {
       lastCidTarget = $cidViewerTarget;
@@ -33,6 +57,7 @@
   }
 
   // --- DATA (Populated from daemon) ---
+  /** @type {NodeInfo} */
   let nodeInfo = {
     state: "--",
     blocks: "--",
@@ -42,6 +67,7 @@
     synced: false, // Conservative default until sync status is confirmed
   };
 
+  /** @type {WalletInfo} */
   let walletInfo = {
     balance: "--",
     pending: "--",
@@ -49,6 +75,7 @@
     status: "--",
   };
 
+  /** @type {RecentTx[]} */
   let recentTx = [];
   let lastError = "";
   let tauriReady = false;
@@ -58,6 +85,7 @@
   let networkMode = "mainnet"; // mainnet, testnet, regtest
   let rpcFailCount = 0;
   let rpcBackoffUntil = 0; // timestamp ms until which RPC is skipped
+  /** @type {{ node: NodeInfo, wallet: WalletInfo, tx: RecentTx[] } | null} */
   let lastKnownDashboard = null; // preserve last good data across transient errors
   let dashboardFailCount = 0;
 
@@ -98,6 +126,7 @@
 
   // --- PERSISTENT CONSOLE STATE ---
   let globalConsoleOutput = "";
+  /** @type {string[]} */
   let globalConsoleHistory = [];
 
   // --- WELCOME POPUP ---
@@ -124,11 +153,13 @@
 
   // --- DAEMON LIFECYCLE ---
   let showDaemonConflict = false;
+  /** @type {ConflictRuntimeStatus | null} */
   let conflictRuntimeStatus = null;
   let conflictResolved = false;
   let closeCleanupInProgress = false;
   let closeCleanupComplete = false;
   let showClosePrompt = false;
+  /** @type {RpcAuthStatus | null} */
   let rpcAuthStatus = null;
   let appSettings = {
     auto_start_daemon_on_launch: false,
@@ -136,6 +167,9 @@
     allow_non_bundled_core_next: false,
   };
 
+  /**
+   * @param {string} choice
+   */
   async function resolveDaemonConflict(choice) {
     showDaemonConflict = false;
     if (choice === "continue") {
@@ -271,9 +305,15 @@
     isActivityExpanded = !isActivityExpanded;
   }
 
+  /**
+   * @param {string} tab
+   */
   function isActive(tab) {
     return activeTab === tab;
   }
+  /**
+   * @param {string} tab
+   */
   function setTab(tab) {
     activeTab = tab;
   }
@@ -431,6 +471,9 @@
     }
   }
 
+  /**
+   * @param {string} status
+   */
   function walletActionLabel(status) {
     if (status === "UNENCRYPTED") {
       return "ENCRYPT WALLET";
@@ -441,6 +484,9 @@
     return "LOCK WALLET";
   }
 
+  /**
+   * @param {string} mode
+   */
   function openWalletPrompt(mode) {
     walletPromptMode = mode;
     walletPromptPass = "";
@@ -575,6 +621,7 @@
     updateScale();
     window.addEventListener("resize", updateScale);
 
+    /** @type {(() => void) | undefined} */
     let unlistenNetwork;
     const openLibraryHandler = () => {
       activeTab = "TOOLS";
@@ -652,22 +699,24 @@
           }
 
           if (status.probe.rpc_port_open) {
-            conflictRuntimeStatus = status;
+            const conflict = status;
+            conflictRuntimeStatus = conflict;
             try {
               const identity = await core.invoke("identify_running_daemon", {
                 allowNonBundled: appSettings.allow_non_bundled_core_next,
               });
               daemonRuntime.update((d) => ({ ...d, runningIdentity: identity }));
-              conflictRuntimeStatus.identity = identity;
+              conflict.identity = identity;
             } catch {
               // identity probe is best-effort
             }
+            /** @type {any} */
             let procId = null;
             try {
               procId = await core.invoke("get_daemon_process_identity");
               daemonRuntime.update((d) => ({ ...d, processIdentity: procId }));
               if (procId.available) {
-                conflictRuntimeStatus.processIdentity = procId;
+                conflict.processIdentity = procId;
               }
             } catch {
               // process identity is best-effort
@@ -677,9 +726,9 @@
               && procId?.sha256_match
               && procId?.version_commit_match;
             const compatibleCoreNextRpc =
-              conflictRuntimeStatus.identity?.rpc_authenticated
-              && conflictRuntimeStatus.identity?.base_version === status.required_base_version
-              && conflictRuntimeStatus.identity?.capabilities?.help_probe_success
+              conflict.identity?.rpc_authenticated
+              && conflict.identity?.base_version === status.required_base_version
+              && conflict.identity?.capabilities?.help_probe_success
               && status.bundled_core_next_ready;
 
             if (exactMatch) {
@@ -1078,7 +1127,7 @@
                   <span class="mono dim">{tx.date}</span>
                   <span class="type {tx.type}">{tx.type}</span>
                   <span
-                    class="mono amount {tx.amount.startsWith('-')
+                    class="mono amount {String(tx.amount).startsWith('-')
                       ? 'neg'
                       : 'pos'}"
                   >

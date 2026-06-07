@@ -6,7 +6,19 @@
     let panelOpen = false;
     let clearConfirm = false;
     let actionMessage = "";
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
     let actionMessageTimer;
+    /** @type {Array<Record<string, any>>} */
+    let notificationItems = [];
+
+    $: {
+        /** @type {Array<Record<string, any>>} */
+        const nextNotifications = [];
+        for (const item of $notifications || []) {
+            if (item) nextNotifications.push(item);
+        }
+        notificationItems = nextNotifications;
+    }
 
     function togglePanel() {
         panelOpen = !panelOpen;
@@ -19,6 +31,9 @@
         actionMessage = "";
     }
 
+    /**
+     * @param {string} id
+     */
     function handleMarkRead(id) {
         notifications.markRead(id);
     }
@@ -27,6 +42,9 @@
         notifications.markAllRead();
     }
 
+    /**
+     * @param {string} id
+     */
     function handleClear(id) {
         notifications.clear(id);
     }
@@ -45,6 +63,9 @@
         clearConfirm = false;
     }
 
+    /**
+     * @param {string} sev
+     */
     function severityClass(sev) {
         return sev === "error"
             ? "severity-error"
@@ -55,6 +76,9 @@
                     : "severity-info";
     }
 
+    /**
+     * @param {string} type
+     */
     function categoryLabel(type) {
         const map = {
             transaction: "TX",
@@ -65,19 +89,28 @@
             tool: "TOOL",
             system: "SYS",
         };
-        return map[type] || type.substring(0, 3).toUpperCase();
+        return map[/** @type {keyof typeof map} */ (type)] || type.substring(0, 3).toUpperCase();
     }
 
+    /**
+     * @param {string|number|Date} ts
+     */
     function shortTimestamp(ts) {
         const d = new Date(ts);
+        /** @param {number} n */
         const pad = (n) => String(n).padStart(2, "0");
         return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     }
 
+    /** @param {KeyboardEvent} e */
     function handleKeydown(e) {
         if (e.key === "Escape") closePanel();
     }
 
+    /**
+     * @param {string} id
+     * @param {{ label: string, txid?: string } | undefined} action
+     */
     async function handleActionClick(id, action) {
         notifications.markRead(id);
         if (action?.txid) {
@@ -90,6 +123,9 @@
         }
     }
 
+    /**
+     * @param {string} msg
+     */
     function showActionMessage(msg) {
         clearTimeout(actionMessageTimer);
         actionMessage = msg;
@@ -181,7 +217,7 @@
                 </div>
 
                 <div class="nc-body">
-                    {#if $notifications.length === 0}
+                    {#if notificationItems.length === 0}
                         <div class="nc-empty">
                             <span class="nc-empty-icon">&#x2713;</span>
                             <span class="nc-empty-text"
@@ -189,7 +225,7 @@
                             >
                         </div>
                     {:else}
-                        {#each $notifications as notif (notif.id)}
+                        {#each notificationItems as notif (notif.id)}
                             <div
                                 class="nc-item"
                                 class:unread={!notif.read}

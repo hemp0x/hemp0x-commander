@@ -19,6 +19,12 @@
     } from "../stores.js";
     import { addNotification } from "./stores/notifications.js";
 
+    /**
+     * @typedef {{ label: string, address: string, locked?: boolean, date?: number }} FavoriteAddress
+     * @typedef {{ txid: string, vout: number, amount: number, spendable?: boolean, safe?: boolean, asset?: string, asset_amount?: number, address?: string, confirmations?: number }} WalletUtxo
+     * @typedef {{ name: string, balance?: string|number, type?: string }} SendAsset
+     */
+
     // Reactive proxies to maintain API compatibility
     $: tauriReady = $systemStatus.tauriReady;
     $: walletInfo = $walletStore;
@@ -37,20 +43,26 @@
         nodeInfo.state === "RUNNING";
 
     // --- FAVORITES ---
+    /** @type {FavoriteAddress[]} */
     let favorites = [];
     let showFavorites = false;
 
     // --- COIN CONTROL STATE ---
     let isAdvanced = false;
     let showUtxoModal = false;
+    /** @type {WalletUtxo[]} */
     let utxos = [];
+    /** @type {Set<string>} */
     let selectedUtxos = new Set(); // Set of "txid:vout" strings
     let totalSelected = 0;
+    /** @type {string|number} */
     let estimatedFee = 0.01; // Increased default fee to satisfy min relay fee
     let previewing = false; // In-flight guard for advanced preview/journal entry
     let broadcasting = false; // In-flight guard for advanced broadcast
     let estimatedSelectedTxBytes = 0;
+    /** @type {any} */
     let policyDiag = null;
+    /** @type {number | null} */
     let relayFeeSatPerByte = null;
     let relayFeeUnavailable = false;
     let estimatingFee = false;
@@ -58,12 +70,14 @@
 
     $: maxSafeInputsForSend = policyDiag?.max_safe_inputs_for_two_outputs || 675;
     $: feeSatPerByte = estimatedSelectedTxBytes > 0
-        ? (parseFloat(estimatedFee) || 0) * 100_000_000 / estimatedSelectedTxBytes
+        ? (parseFloat(String(estimatedFee)) || 0) * 100_000_000 / estimatedSelectedTxBytes
         : 0;
 
     // --- CONFIRMATION MODAL ---
     let showConfirmModal = false;
+    /** @type {any} */
     let previewData = null;
+    /** @type {string | null} */
     let previewJournalId = null;
 
     // --- LIFECYCLE ---
@@ -73,6 +87,7 @@
 
     // --- ASSET DATA ---
     // Store full objects: { name, balance, type }
+    /** @type {SendAsset[]} */
     let assetList = [];
     // Reactive: selected asset balance
     $: selectedBalance = (() => {
@@ -92,8 +107,8 @@
                     assets = [
                         "HEMP",
                         ...items
-                            .filter((i) => !i.name.endsWith("!"))
-                            .map((item) => item.name),
+                            .filter(/** @param {{ name: string }} i */ (i) => !i.name.endsWith("!"))
+                            .map(/** @param {{ name: string }} item */ (item) => item.name),
                     ];
                 })
                 .catch(() => {
@@ -135,6 +150,11 @@
         });
     }
 
+    /**
+     * @param {string} command
+     * @param {string} operationType
+     * @param {Record<string, any>} params
+     */
     async function buildPreview(command, operationType, params) {
         status = "Building preview...";
         try {
@@ -208,7 +228,7 @@
                 return;
             }
 
-            const fee = parseFloat(estimatedFee) || 0;
+            const fee = parseFloat(String(estimatedFee)) || 0;
             const changeAmount = totalSelected - sendAmount - fee;
             const warnings = [];
 
@@ -380,6 +400,7 @@
 
     // --- ADDRESS BOOK HELPERS ---
     let showAddressBook = false;
+    /** @type {number | null} */
     let editingIndex = null;
     let editLabelText = "";
 
@@ -515,22 +536,28 @@
         editingIndex = null;
     }
 
+    /**
+     * @param {{ address: string, label?: string }} fav
+     */
     function selectAddress(fav) {
         address = fav.address;
         closeAddressBook();
     }
 
+    /** @param {number} index */
     function toggleLock(index) {
         favorites[index].locked = !favorites[index].locked;
         favorites = favorites; // trigger reactivity
         saveFavorites();
     }
 
+    /** @param {number} index */
     function startEditLabel(index) {
         editingIndex = index;
         editLabelText = favorites[index].label;
     }
 
+    /** @param {number} index */
     function saveLabel(index) {
         if (editLabelText.trim()) {
             favorites[index].label = editLabelText.trim();
@@ -540,6 +567,7 @@
         editingIndex = null;
     }
 
+    /** @param {number} index */
     function deleteAddress(index) {
         favorites.splice(index, 1);
         favorites = favorites;
@@ -631,6 +659,7 @@
         saveFavorites();
     }
 
+    /** @param {string} addr */
     function isStarred(addr) {
         return favorites.some((f) => f.address === addr);
     }
@@ -647,11 +676,11 @@
     function setMax() {
         if (isAdvanced) {
             // In advanced mode, MAX is total selected inputs - fee
-            const maxVal = Math.max(0, totalSelected - estimatedFee);
+            const maxVal = Math.max(0, totalSelected - Number(estimatedFee || 0));
             amount = maxVal.toFixed(8);
         } else {
             // Standard mode: selectedBalance
-            amount = selectedBalance.replace(/,/g, "");
+            amount = String(selectedBalance || "0").replace(/,/g, "");
         }
     }
 
@@ -671,7 +700,7 @@
     async function fetchUtxos() {
         if (!tauriReady) return;
         try {
-            const data = await core.invoke("list_utxos");
+            const data = /** @type {WalletUtxo[]} */ (await core.invoke("list_utxos"));
             utxos = data.sort((a, b) => b.amount - a.amount);
             pruneSelection(utxos);
             try {
@@ -766,6 +795,7 @@
         }
     }
 
+    /** @param {WalletUtxo[]} currentUtxos */
     function pruneSelection(currentUtxos) {
         const currentIds = new Set(currentUtxos.map((u) => `${u.txid}:${u.vout}`));
         let changed = false;
@@ -784,6 +814,7 @@
         }
     }
 
+    /** @param {WalletUtxo} u */
     function isUnsafe(u) {
         if (u.spendable === false) return true;
         if (u.safe === false) return true;
@@ -792,6 +823,7 @@
         return false;
     }
 
+    /** @param {WalletUtxo} u */
     function toggleUtxo(u) {
         if (isUnsafe(u)) {
             status = "Unsafe, unspendable, or asset-bearing UTXOs cannot be used in advanced HEMP sends.";
@@ -842,7 +874,7 @@
 
             const sendAmount = parseFloat(amount);
             if (isNaN(sendAmount) || sendAmount <= 0) throw "Invalid amount";
-            const fee = parseFloat(estimatedFee) || 0;
+            const fee = parseFloat(String(estimatedFee)) || 0;
             if (fee <= 0) throw "Fee must be greater than zero";
 
             if (totalSelected < sendAmount + fee) {
@@ -856,6 +888,7 @@
             const changeAmount = totalSelected - sendAmount - fee;
 
             // 3. Prepare Inputs
+            /** @type {{ txid: string, vout: number }[]} */
             let inputs = [];
             for (const id of selectedUtxos) {
                 const [txid, voutStr] = id.split(":");
@@ -863,6 +896,7 @@
             }
 
             // 4. Prepare Outputs
+            /** @type {Record<string, string>} */
             let outputs = {};
             outputs[address] = sendAmount.toFixed(8);
 

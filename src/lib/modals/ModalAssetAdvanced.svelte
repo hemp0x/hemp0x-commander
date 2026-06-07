@@ -14,6 +14,7 @@
     export let isOpen = false;
     export let nodeOnline = false;
     export let inline = false;
+    /** @type {any[]} */
     export let assets = []; // Array of owned assets for pickers
     export let initialTab = "";
     export let initialTagName = "";
@@ -44,8 +45,10 @@
     let tagAction = "add"; // add or remove
 
     // Tag Lookup State
+    /** @type {any[]} */
     let tagLookupResults = [];
     let tagLookupLoading = false;
+    /** @type {any[]} */
     let recentTagTargets = [];
 
     // Verifier Lookup State
@@ -56,10 +59,13 @@
     // Snapshot State
     let snapAssetName = "";
     let snapBlockHeight = "";
+    /** @type {any[]} */
     let snapRequests = [];
     let snapRequestsLoading = false;
+    /** @type {any} */
     let snapData = null;
     let snapGetLoading = false;
+    /** @type {number | null} */
     let snapCurrentHeight = null;
     let snapBlockHeightTouched = false;
     let snapInlineMessage = "";
@@ -74,20 +80,25 @@
     let rewardGrossAmount = "";
     let rewardExceptions = "";
     let rewardChangeAddress = "";
+    /** @type {any} */
     let rewardStatusData = null;
     let rewardStatusLoading = false;
+    /** @type {any} */
     let rewardPreviewData = null;
     let rewardDryRunHash = "";
     let rewardDryRunLoading = false;
+    /** @type {any[]} */
     let rewardHistory = [];
     let rewardInlineMessage = "";
     let rewardInlineMessageType = "info";
     let rewardFormHash = "";
+    /** @type {any[]} */
     let rewardAssetOptions = [];
     let appliedInitialKey = "";
     let recentTagTargetsLoaded = false;
 
     // Wallet addresses
+    /** @type {any[]} */
     let walletAddresses = [];
     let walletLoading = false;
 
@@ -100,10 +111,13 @@
     // Confirm Modal
     let confirmOpen = false;
     let confirmType = "";
+    /** @type {any} */
     let previewData = null;
     let isBroadcasting = false;
     let previewInProgress = false;
+    /** @type {any} */
     let confirmPayload = null;
+    /** @type {string | null} */
     let previewJournalId = null;
 
     $: if (isOpen && nodeOnline) loadWalletAddresses();
@@ -149,6 +163,7 @@
         }
     }
 
+    /** @param {CustomEvent<{ label?: string }>} event */
     async function generateAddress(event) {
         if (!nodeOnline) return;
         try {
@@ -167,6 +182,11 @@
         }
     }
 
+    /**
+     * @param {string} title
+     * @param {string} message
+     * @param {string} [type]
+     */
     function triggerAlert(title, message, type = "info") {
         alertTitle = title;
         alertMessage = message;
@@ -189,6 +209,10 @@
         localStorage.setItem("commander.tagRecentTargets.v1", JSON.stringify(recentTagTargets.slice(0, 8)));
     }
 
+    /**
+     * @param {string} tagName
+     * @param {string} address
+     */
     function pushRecentTagTarget(tagName, address) {
         const cleanedTag = String(tagName || "").trim();
         const cleanedAddress = String(address || "").trim();
@@ -214,11 +238,19 @@
         appliedInitialKey = key;
     }
 
+    /**
+     * @param {string} message
+     * @param {string} [type]
+     */
     function setSnapshotMessage(message, type = "info") {
         snapInlineMessage = message;
         snapInlineMessageType = type;
     }
 
+    /**
+     * @param {string} message
+     * @param {string} [type]
+     */
     function setRewardMessage(message, type = "info") {
         rewardInlineMessage = message;
         rewardInlineMessageType = type;
@@ -281,6 +313,7 @@
         localStorage.setItem("commander.rewardHistory.v1", JSON.stringify(rewardHistory));
     }
 
+    /** @param {any} entry */
     function upsertRewardHistory(entry) {
         const existing = rewardHistory.findIndex((item) => item.id === entry.id);
         if (existing >= 0) {
@@ -537,11 +570,19 @@
         snapRequestsLoading = false;
     }
 
+    /**
+     * @param {string|number|undefined|null} blockHeight
+     * @returns {number | null}
+     */
     function snapshotBlocksRemaining(blockHeight) {
         if (!snapCurrentHeight || !Number.isInteger(Number(blockHeight))) return null;
         return Math.max(0, Number(blockHeight) - snapCurrentHeight);
     }
 
+    /**
+     * @param {string} assetName
+     * @param {string|number} blockHeight
+     */
     async function getSnapshotFromRequest(assetName, blockHeight) {
         snapGetLoading = true;
         snapData = null;
@@ -563,6 +604,10 @@
         snapGetLoading = false;
     }
 
+    /**
+     * @param {string} assetName
+     * @param {string|number} blockHeight
+     */
     async function cancelSnapshotRequest(assetName, blockHeight) {
         const confirmed = window.confirm(`Cancel snapshot request for ${assetName} @ ${blockHeight}?`);
         if (!confirmed) return;
@@ -653,6 +698,7 @@
         }
     }
 
+    /** @param {any} entry */
     async function checkRewardStatusForHistory(entry) {
         try {
             const status = await invoke("get_distribute_reward_status", {
@@ -1041,12 +1087,12 @@
                                                     class="recent-pill"
                                                     type="button"
                                                     on:click={() => {
-                                                        tagName = item.tag;
+                                                        tagName = item.tag || "";
                                                         tagAddr = item.address;
                                                     }}
-                                                    title={`${item.tag} -> ${item.address}`}
+                                                    title={`${item.tag || ""} -> ${item.address}`}
                                                 >
-                                                    <span>{item.tag}</span>
+                                                    <span>{item.tag || ""}</span>
                                                     <code>{item.address.slice(0, 8)}...{item.address.slice(-6)}</code>
                                                 </button>
                                             {/each}
@@ -1153,13 +1199,14 @@
                                 {#if snapRequests.length > 0}
                                     <div class="result-list">
                                         {#each snapRequests as sr}
+                                            {@const remainingBlocks = snapshotBlocksRemaining(sr.block_height)}
                                             <div class="result-item request-row">
                                                 <span class="snap-asset">{sr.asset_name}</span>
                                                 <span class="snap-height">@ {sr.block_height}</span>
-                                                {#if snapshotBlocksRemaining(sr.block_height) === null}
+                                                {#if remainingBlocks === null}
                                                     <span class="row-state">Readiness unknown</span>
-                                                {:else if snapshotBlocksRemaining(sr.block_height) > 0}
-                                                    <span class="row-state">Waiting ({snapshotBlocksRemaining(sr.block_height)} blocks)</span>
+                                                {:else if remainingBlocks > 0}
+                                                    <span class="row-state">Waiting ({remainingBlocks} blocks)</span>
                                                 {:else}
                                                     <span class="row-state ready">Ready</span>
                                                 {/if}

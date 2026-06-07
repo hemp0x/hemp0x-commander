@@ -3,7 +3,56 @@
     import { core } from "@tauri-apps/api";
     import { fade } from "svelte/transition";
 
+    /**
+     * @typedef {Object} ExistingFile
+     * @property {string} path
+     * @property {string} [mime]
+     * @property {number} size_bytes
+     */
+
+    /**
+     * @typedef {Object} PendingFile
+     * @property {string} path
+     * @property {string} mime
+     * @property {number} size_bytes
+     * @property {string} content_base64
+     */
+
+    /**
+     * @typedef {{ path: string, mime: string, content_base64: string }} FileInput
+     */
+
+    /**
+     * @typedef {Object} EditPackageData
+     * @property {string} id
+     * @property {string} name
+     * @property {string} [description]
+     * @property {string[]} [tags]
+     * @property {ExistingFile[]} [files]
+     * @property {string} [folder]
+     * @property {string} [cid]
+     * @property {string} [status]
+     * @property {string} [version]
+     * @property {string} [updated_at]
+     * @property {string} [created_at]
+     * @property {number} [file_count]
+     * @property {string} [provider]
+     * @property {string} [published_at]
+     */
+
+    /**
+     * @typedef {Object} SavePayload
+     * @property {string} name
+     * @property {string} description
+     * @property {string[]} tags
+     * @property {string} body
+     * @property {FileInput[]} [files]
+     * @property {string} [folder]
+     */
+
+    /** @type {EditPackageData | null} */
     export let editPackage = null;
+    /** @type {string | null} */
     export let createFolder = null;
     const dispatch = createEventDispatcher();
 
@@ -14,8 +63,11 @@
     let saving = false;
     let errorMsg = "";
     let showPreview = false;
+    /** @type {PendingFile[]} */
     let pendingFiles = [];
+    /** @type {ExistingFile[]} */
     let existingFiles = [];
+    /** @type {string[]} */
     let removingFiles = [];
 
     $: isEdit = !!editPackage;
@@ -52,6 +104,7 @@
         initBody();
     });
 
+    /** @param {string} str */
     function parseTags(str) {
         return str
             .split(",")
@@ -59,17 +112,20 @@
             .filter((t) => t.length > 0);
     }
 
+    /** @param {number} bytes */
     function formatSize(bytes) {
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
         return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     }
 
+    /** @param {number} idx */
     function removePendingFile(idx) {
         pendingFiles.splice(idx, 1);
         pendingFiles = pendingFiles;
     }
 
+    /** @param {number} idx */
     function removeExistingFile(idx) {
         const file = existingFiles[idx];
         removingFiles.push(file.path);
@@ -77,17 +133,20 @@
         existingFiles = existingFiles;
     }
 
+    /** @param {{ mime?: string }} file */
     function isImageFile(file) {
         const mime = file.mime || "";
         return mime.startsWith("image/");
     }
 
+    /** @param {DragEvent} e */
     function handleDrop(e) {
         e.preventDefault();
         if (!e.dataTransfer || !e.dataTransfer.files) return;
         processFiles(Array.from(e.dataTransfer.files));
     }
 
+    /** @param {DragEvent} e */
     function handleDragOver(e) {
         e.preventDefault();
     }
@@ -102,6 +161,7 @@
         input.click();
     }
 
+    /** @param {File[]} files */
     async function processFiles(files) {
         for (const file of files) {
             try {
@@ -124,18 +184,21 @@
         }
     }
 
+    /** @param {Uint8Array} bytes */
     function bytesToBase64(bytes) {
         let binary = "";
         const chunkSize = 0x8000;
         for (let i = 0; i < bytes.length; i += chunkSize) {
             const chunk = bytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, chunk);
+            binary += String.fromCharCode.apply(null, Array.from(chunk));
         }
         return btoa(binary);
     }
 
+    /** @param {string} name */
     function guessMimeFromName(name) {
-        const ext = name.split(".").pop().toLowerCase();
+        const ext = (name.split(".").pop() || "").toLowerCase();
+        /** @type {Record<string, string>} */
         const map = {
             md: "text/markdown",
             json: "application/json",
@@ -172,20 +235,22 @@
         }));
 
         // Include existing files not marked for removal
-        for (const f of existingFiles) {
-            if (!removingFiles.includes(f.path)) {
-                try {
-                    const result = await core.invoke("content_library_get_file", {
-                        packageId: editPackage.id,
-                        filePath: f.path,
-                    });
-                    fileInputs.push({
-                        path: f.path,
-                        mime: f.mime || result.mime,
-                        content_base64: result.content_base64,
-                    });
-                } catch (err) {
-                    console.warn("Failed to read existing file:", f.path, err);
+        if (editPackage) {
+            for (const f of existingFiles) {
+                if (!removingFiles.includes(f.path)) {
+                    try {
+                        const result = await core.invoke("content_library_get_file", {
+                            packageId: editPackage.id,
+                            filePath: f.path,
+                        });
+                        fileInputs.push({
+                            path: f.path,
+                            mime: f.mime || result.mime,
+                            content_base64: result.content_base64,
+                        });
+                    } catch (err) {
+                        console.warn("Failed to read existing file:", f.path, err);
+                    }
                 }
             }
         }
@@ -200,7 +265,7 @@
         };
 
         try {
-            if (isEdit) {
+            if (editPackage) {
                 await core.invoke("content_library_update", {
                     packageId: editPackage.id,
                     input,
@@ -219,9 +284,9 @@
         dispatch("cancel");
     }
 
-    // Markdown toolbar
+    /** @param {string} syntax */
     function insertMarkdown(syntax) {
-        const textarea = document.getElementById("package-body");
+        const textarea = /** @type {HTMLTextAreaElement | null} */ (document.getElementById("package-body"));
         if (!textarea) return;
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
@@ -275,6 +340,7 @@
         }, 0);
     }
 
+    /** @param {string} md */
     function renderPreview(md) {
         if (!md) return "";
         let html = md

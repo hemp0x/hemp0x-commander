@@ -9,15 +9,19 @@
 
     const dispatch = createEventDispatcher();
     let errorMsg = "";
+    /** @type {any} */
     let detailPackage = null;
+    /** @type {any} */
     let detailFull = null;
     let detailMarkdownBody = "";
     let detailMarkdownLoading = false;
     let detailCacheExists = false;
     let detailFetchState = "idle";
+    /** @type {any} */
     let detailFetchResult = null;
     let detailFetchError = "";
     let detailConsentGiven = false;
+    /** @type {any[]} */
     let detailAttachments = [];
     let showPublishPanel = false;
     let publishCid = "";
@@ -25,10 +29,14 @@
     let publishError = "";
     let publishLinking = false;
     let publishLoading = false;
+    /** @type {any} */
     let publishResult = null;
+    /** @type {any} */
     let attachmentPreviewFile = null;
     let viewMode = "grid";
+    /** @type {string[]} */
     let backendFolders = [];
+    /** @type {string | null} */
     let newPackageFolder = null;
     let deleteFolderConfirm = false;
     let deleteFolderDeleting = false;
@@ -48,10 +56,13 @@
     let moveTargetFolder = "";
 
     // Duplicate
+    /** @type {string | null} */
     let duplicatingId = null;
 
     // Delete confirmation in list view
+    /** @type {string | null} */
     let deleteConfirmId = null;
+    /** @type {string | null} */
     let deleteDeletingId = null;
 
     // Bulk delete confirmation
@@ -127,6 +138,9 @@
         bulkDeleteConfirm = false;
     }
 
+    /**
+     * @param {string | null} folder
+     */
     function enterFolder(folder) {
         $currentFolder = folder;
         selectMode = false;
@@ -170,6 +184,9 @@
         deleteFolderConfirm = false;
     }
 
+    /**
+     * @param {string} folderName
+     */
     function folderPackageCount(folderName) {
         return $contentLibrary.filter((p) => {
             if (!folderName) return !p.folder || !p.folder.trim();
@@ -177,6 +194,9 @@
         }).length;
     }
 
+    /**
+     * @param {string} folderName
+     */
     function folderLastUpdated(folderName) {
         const pkgs = $contentLibrary.filter((p) => {
             if (!folderName) return !p.folder || !p.folder.trim();
@@ -186,6 +206,9 @@
         return pkgs.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0].updated_at;
     }
 
+    /**
+     * @param {{ id: string }} pkg
+     */
     function toggleSelect(pkg) {
         if (!selectMode) return;
         const next = new Set(selectedIds);
@@ -197,6 +220,9 @@
         selectedIds = next;
     }
 
+    /**
+     * @param {{ id: string }} pkg
+     */
     function isSelected(pkg) {
         return selectMode && selectedIds.has(pkg.id);
     }
@@ -235,6 +261,9 @@
         bulkMoving = false;
     }
 
+    /**
+     * @param {{ id: string }} pkg
+     */
     async function duplicatePackage(pkg) {
         duplicatingId = pkg.id;
         try {
@@ -253,6 +282,9 @@
         return all.filter((f) => (f || "unsorted").toLowerCase().includes(q));
     }
 
+    /**
+     * @param {{ id: string, cid?: string }} pkg
+     */
     async function showDetail(pkg) {
         detailPackage = pkg;
         detailFull = null;
@@ -267,8 +299,8 @@
         try {
             detailFull = await core.invoke("content_library_get", { packageId: pkg.id });
             if (detailFull.files) {
-                detailAttachments = detailFull.files.filter((f) => f.path !== "content.md");
-                const mdFile = detailFull.files.find((f) => f.path === "content.md");
+                detailAttachments = detailFull.files.filter(/** @param {{ path: string }} f */ (f) => f.path !== "content.md");
+                const mdFile = detailFull.files.find(/** @param {{ path: string }} f */ (f) => f.path === "content.md");
                 if (mdFile) {
                     detailMarkdownLoading = true;
                     try {
@@ -292,6 +324,9 @@
         }
     }
 
+    /**
+     * @param {any} e
+     */
     function onView(e) {
         const id = e.detail || (e.target && e.target.pkg && e.target.pkg.id);
     }
@@ -306,32 +341,41 @@
         refresh();
     }
 
+    /** @param {CustomEvent<any> & { target: EventTarget | null }} event */
     function handleCardView(event) {
-        const pkgId = event.target?.closest?.("[data-pkg-id]")?.dataset?.pkgId;
+        const target = event.target instanceof Element ? event.target : null;
+        const pkgEl = target?.closest?.("[data-pkg-id]");
+        const pkgId = pkgEl instanceof HTMLElement ? pkgEl.dataset.pkgId : null;
         if (pkgId) {
             const pkg = $contentLibrary.find((p) => p.id === pkgId);
             if (pkg) showDetail(pkg);
         }
     }
 
+    /**
+     * @param {string} cid
+     */
     function showCidViewer(cid) {
         $ipfsHubSection = "cid-viewer";
     }
 
+    /** @param {Uint8Array} bytes */
     function bytesToBase64(bytes) {
         let binary = "";
         const chunkSize = 0x8000;
         for (let i = 0; i < bytes.length; i += chunkSize) {
             const chunk = bytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, chunk);
+            binary += String.fromCharCode.apply(null, Array.from(chunk));
         }
         return btoa(binary);
     }
 
+    /** @param {string} text */
     function textToBase64(text) {
         return bytesToBase64(new TextEncoder().encode(text || ""));
     }
 
+    /** @param {number} bytes */
     function formatSize(bytes) {
         if (!bytes) return "0 B";
         if (bytes < 1024) return bytes + " B";
@@ -339,10 +383,12 @@
         return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     }
 
+    /** @param {string} mime */
     function isImageMime(mime) {
         return mime && mime.startsWith("image/");
     }
 
+    /** @param {string} mime */
     function isPreviewable(mime) {
         return mime && (
             mime.startsWith("image/") ||
@@ -351,6 +397,7 @@
         );
     }
 
+    /** @param {string} path */
     async function copyFilename(path) {
         try {
             await navigator.clipboard.writeText(path);
@@ -486,6 +533,7 @@
         }
     }
 
+    /** @param {string} text */
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text).catch(() => {});
     }

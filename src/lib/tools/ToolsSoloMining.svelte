@@ -18,18 +18,23 @@
     let port = 3333;
     let validationError = "";
     let customWarning = false;
+    /** @type {any[]} */
     let walletAddresses = [];
+    /** @type {{ label: string, address: string, scope: string }[]} */
     let bindCandidates = [];
     let loadingAddresses = false;
     let addressesError = "";
     let showChange = false;
 
+    /** @type {ReturnType<typeof setInterval> | undefined} */
     let pollTimer;
 
     // Dropdown state
     let walletDropdownOpen = false;
     let bindDropdownOpen = false;
+    /** @type {HTMLElement | undefined} */
     let walletDropdownRef;
+    /** @type {HTMLElement | undefined} */
     let bindDropdownRef;
 
     async function pollStatus() {
@@ -76,6 +81,9 @@
         }
     }
 
+    /**
+     * @param {string} addr
+     */
     async function validatePayoutAddress(addr) {
         if (!tauriReady || !addr || !String(addr).trim()) return false;
         validationError = "";
@@ -94,21 +102,33 @@
         }
     }
 
+    /**
+     * @param {string | { address?: string } | null | undefined} item
+     */
     function walletAddressValue(item) {
         if (typeof item === "string") return item;
         return item?.address || "";
     }
 
+    /**
+     * @param {string | undefined} address
+     */
     function compactAddress(address) {
         if (!address || address.length <= 18) return address || "";
         return `${address.slice(0, 8)}...${address.slice(-6)}`;
     }
 
+    /**
+     * @param {string} value
+     */
     function compactDigest(value) {
         if (!value || value.length <= 24) return value || "";
         return `${value.slice(0, 16)}...${value.slice(-8)}`;
     }
 
+    /**
+     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
+     */
     function displayWalletAddress(item) {
         if (typeof item === "string") return item;
         const address = item?.address || "";
@@ -119,6 +139,9 @@
         return `${label}${address}${balance}`;
     }
 
+    /**
+     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
+     */
     function displayWalletAddressCompact(item) {
         if (typeof item === "string") return compactAddress(item);
         const address = item?.address || "";
@@ -129,6 +152,9 @@
         return `${label}${compactAddress(address)}${balance}`;
     }
 
+    /**
+     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
+     */
     function displayWalletAddressFull(item) {
         if (typeof item === "string") return item;
         const address = item?.address || "";
@@ -139,15 +165,24 @@
         return `${label}${address}${balance}`;
     }
 
+    /**
+     * @param {{ label: string, scope: string }} cand
+     */
     function bindCandidateLabel(cand) {
         return `${cand.label} (${cand.scope})`;
     }
 
+    /**
+     * @param {any} result
+     */
     function submitResultLabel(result) {
         if (!result) return "--";
         return result;
     }
 
+    /**
+     * @param {string | undefined} status
+     */
     function subStatusClass(status) {
         switch (status) {
             case "accepted": return "sub-accepted";
@@ -163,6 +198,9 @@
         }
     }
 
+    /**
+     * @param {string | undefined} status
+     */
     function subStatusLabel(status) {
         switch (status) {
             case "accepted": return "Accepted";
@@ -177,28 +215,43 @@
         }
     }
 
+    /**
+     * @param {number} ts
+     */
     function formatTimestamp(ts) {
         if (!ts) return "--";
         const d = new Date(ts * 1000);
-        const pad = (n) => String(n).padStart(2, "0");
+        const pad = /** @param {number} n */ (n) => String(n).padStart(2, "0");
         return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     }
 
+    /**
+     * @param {number | undefined} hs
+     */
     function workerHashrateLabel(hs) {
         return formatHashrate(hs);
     }
 
+    /**
+     * @param {string} address
+     */
     function selectWalletAddress(address) {
         selectedWalletAddress = address;
         walletDropdownOpen = false;
         validatePayoutAddress(address);
     }
 
+    /**
+     * @param {{ address: string }} candidate
+     */
     function selectBindAddress(candidate) {
         bindAddress = candidate.address;
         bindDropdownOpen = false;
     }
 
+    /**
+     * @param {string} mode
+     */
     function setPayoutMode(mode) {
         payoutMode = mode;
         validationError = "";
@@ -219,10 +272,13 @@
     $: customWarning = payoutMode === "custom" && activePayoutAddress.trim().length > 0;
 
     $: selectedBindCandidate = bindCandidates.find(
-        (c) => c.address === bindAddress,
+        /** @param {{ address: string, scope: string }} c */ (c) => c.address === bindAddress,
     );
-    $: lanWarning =
-        selectedBindCandidate && selectedBindCandidate.scope === "lan";
+    $: lanWarning = (() => {
+        const c = selectedBindCandidate;
+        if (typeof c !== "object" || c === null) return false;
+        return c.scope === "lan";
+    })();
 
     async function startServer() {
         if (!tauriReady) return;
@@ -298,10 +354,17 @@
     // Toast
     import { createEventDispatcher } from "svelte";
     const dispatch = createEventDispatcher();
+    /**
+     * @param {string} msg
+     * @param {"info" | "success" | "warning" | "error"} [type]
+     */
     function showToast(msg, type = "info") {
         dispatch("toast", { msg, type });
     }
 
+    /**
+     * @param {string} text
+     */
     function copyToClipboard(text) {
         if (!text) return;
         navigator.clipboard.writeText(text).then(
@@ -311,16 +374,18 @@
     }
 
     // Outside click handler for dropdowns
+    /** @param {MouseEvent} event */
     function handleClickOutside(event) {
-        if (walletDropdownRef && !walletDropdownRef.contains(event.target)) {
+        if (walletDropdownRef && event.target instanceof Node && !walletDropdownRef.contains(event.target)) {
             walletDropdownOpen = false;
         }
-        if (bindDropdownRef && !bindDropdownRef.contains(event.target)) {
+        if (bindDropdownRef && event.target instanceof Node && !bindDropdownRef.contains(event.target)) {
             bindDropdownOpen = false;
         }
     }
 
     // Keyboard escape to close dropdowns
+    /** @param {KeyboardEvent} event */
     function handleKeydown(event) {
         if (event.key === "Escape") {
             walletDropdownOpen = false;
@@ -724,7 +789,7 @@
                         </div>
                         {#each $stratumStatus.submission_history as sub}
                             <div class="sub-row">
-                                <span class="sub-col-time mono">{formatTimestamp(sub.timestamp)}</span>
+                                <span class="sub-col-time mono">{formatTimestamp(sub.timestamp || 0)}</span>
                                 <span class="sub-col-h mono">{sub.height ?? '--'}</span>
                                 <span
                                     class="sub-col-digest mono"

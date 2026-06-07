@@ -13,10 +13,15 @@
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
 
+    /**
+     * @param {string} msg
+     * @param {"info" | "success" | "warning" | "error"} [type]
+     */
     function showToast(msg, type = "info") {
         dispatch("toast", { msg, type });
     }
 
+    /** @type {any[]} */
     let utxos = [];
     let selectedIds = new Set();
     let totalSelected = 0;
@@ -29,12 +34,15 @@
     let sourceAddressFilter = "__all__";
     let destination = "";
     let loading = false;
+    /** @type {any} */
     let previewData = null;
+    /** @type {string | null} */
     let previewJournalId = null;
     let showPreviewModal = false;
     let previewing = false;
     let broadcasting = false;
     let status = "";
+    /** @type {any} */
     let policyDiag = null;
     let showPlanModal = false;
     let showUnlockModal = false;
@@ -45,11 +53,14 @@
     $: unlockBody = unlockAfterAction === "multi"
         ? "Your wallet is locked. Commander will unlock it for 5 minutes to run multi-round consolidation. Lock the wallet again after consolidation if you are done sending transactions."
         : "Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this consolidation transaction. Lock the wallet again after consolidation if you are done sending transactions.";
+    /** @type {any} */
     let planData = null;
     let planning = false;
     let multiRoundRunning = false;
     let stopAfterCurrentRound = false;
+    /** @type {any[]} */
     let executionLog = [];
+    /** @type {any} */
     let activeRun = null;
     let displayManualSortVersion = 0;
     let lastAppliedSortVersion = -1;
@@ -66,8 +77,10 @@
     let selectionProgressTotal = 0;
     let selectionMode = "manual";
     let previewFeeRateSatPerByte = 1000;
+    /** @type {any[]} */
     let walletAddresses = [];
     let lastSourceAddressFilter = "__all__";
+    /** @type {HTMLElement | undefined} */
     let utxoListEl;
     let utxoListScrollTop = 0;
     let utxoListViewportHeight = 500;
@@ -206,9 +219,12 @@
     $: virtualBottomPadding = (displayUtxos.length - virtualEndIndex) * VIRTUAL_ROW_HEIGHT_PX;
     $: visibleUtxos = displayUtxos.slice(virtualStartIndex, virtualEndIndex);
 
+    /**
+     * @param {any[]} visibleUtxos
+     */
     function pruneSelectionToFiltered(visibleUtxos) {
         if (selectionMode === "all-safe-filtered") return;
-        const visibleIds = new Set(visibleUtxos.map((u) => `${u.txid}:${u.vout}`));
+        const visibleIds = new Set(visibleUtxos.map(/** @param {any} u */ (u) => `${u.txid}:${u.vout}`));
         let changed = false;
         const next = new Set();
         for (const id of selectedIds) {
@@ -232,6 +248,11 @@
         }
     }
 
+    /**
+     * @param {number} count
+     * @param {number} targetFinal
+     * @param {number} maxInputsPerRound
+     */
     function estimateRoundsForCount(count, targetFinal, maxInputsPerRound) {
         if (!Number.isFinite(count) || count <= targetFinal || maxInputsPerRound < 2) return 0;
         let rounds = 0;
@@ -245,6 +266,9 @@
         return rounds;
     }
 
+    /**
+     * @param {string} name
+     */
     function clearZeroOptionalFilter(name) {
         if (name === "maxAmount" && Number(maxAmount || 0) <= 0) {
             maxAmount = "";
@@ -265,6 +289,9 @@
         return out;
     }
 
+    /**
+     * @param {any} err
+     */
     function isWalletUnlockError(err) {
         const errText = String(err || "");
         const lowerErr = errText.toLowerCase();
@@ -274,6 +301,9 @@
             || lowerErr.includes("please enter the wallet passphrase");
     }
 
+    /**
+     * @param {string} [action]
+     */
     function requestWalletUnlock(action = "single") {
         unlockAfterAction = action;
         status = action === "multi"
@@ -287,6 +317,9 @@
         }
     }
 
+    /**
+     * @param {string} id
+     */
     function toggleUtxo(id) {
         const utxo = utxos.find((u) => `${u.txid}:${u.vout}` === id);
         if (utxo && isUnsafe(utxo)) {
@@ -302,6 +335,10 @@
         selectedIds = next;
     }
 
+    /**
+     * @param {string} label
+     * @param {string} [detail]
+     */
     async function showSelectionBusy(label, detail = "") {
         selectionBusy = true;
         selectionStatus = detail || label;
@@ -469,11 +506,17 @@
         persistRunState();
     }
 
+    /**
+     * @param {string} phase
+     */
     function setPhase(phase) {
         consolidationPhase = phase;
         status = phase;
     }
 
+    /**
+     * @param {string} message
+     */
     async function completeRun(message) {
         activeRun = null;
         executionLog = [];
@@ -491,6 +534,15 @@
         status = message;
     }
 
+    /**
+     * @param {{
+     *   inputs: { txid: string, vout: number }[],
+     *   roundLabel?: string,
+     *   plan?: any,
+     *   journalEntryId?: string | null,
+     *   runData?: any
+     * }} opts
+     */
     async function broadcastConsolidationRound(opts) {
         const { inputs, roundLabel, plan, journalEntryId, runData } = opts;
         const roundDestination = String(plan?.destination || runData?.destination || destination || "").trim();
@@ -526,8 +578,8 @@
             const currentRound = (runData.rounds?.length || 0) + 1;
             const entry = { round_number: currentRound, input_count: preview.utxo_count, fee_estimate: preview.fee_estimate, txid, status: "broadcasted", confirmed: false, updated_at: new Date().toISOString() };
             runData.rounds = [...(runData.rounds || []), entry];
-            const consumed = new Set(inputs.map((u) => `${u.txid}:${u.vout}`));
-            runData.remaining_selected_outpoints = (runData.remaining_selected_outpoints || []).filter((op) => !consumed.has(op));
+            const consumed = new Set(inputs.map(/** @param {{ txid: string, vout: number }} u */ (u) => `${u.txid}:${u.vout}`));
+            runData.remaining_selected_outpoints = (runData.remaining_selected_outpoints || []).filter(/** @param {string} op */ (op) => !consumed.has(op));
             executionLog = runData.rounds;
             activeRun = runData;
             persistRunState();
@@ -539,19 +591,26 @@
         return { txid, preview, journalId };
     }
 
+    /**
+     * @param {string} txid
+     * @param {string} [roundLabel]
+     */
     async function confirmRound(txid, roundLabel) {
         setPhase(`Waiting for confirmation${roundLabel ? ` on round ${roundLabel}` : ""}...`);
         while (true) {
             if (!multiRoundRunning && !broadcasting) return false;
             try {
                 const history = await core.invoke("get_transaction_history", { count: 500, skip: 0, category: null });
-                const match = (history?.items || []).find((item) => item.txid === txid);
+                const match = (history?.items || []).find(/** @param {{ txid: string }} item */ (item) => item.txid === txid);
                 if (match && Number(match.confirmations || 0) > 0) return true;
             } catch {}
             await new Promise((r) => setTimeout(r, CONFIRM_POLL_MS));
         }
     }
 
+    /**
+     * @param {string[] | undefined} outpoints
+     */
     function collectInputsFromOutpoints(outpoints) {
         const lookup = new Map();
         for (const u of utxos) lookup.set(`${u.txid}:${u.vout}`, u);
@@ -592,7 +651,7 @@
                     maxRounds: 1,
                     targetMaxTxBytes: null,
                     feeRateSatPerByte: null,
-                    selectedOutpoints: (activeRun.remaining_selected_outpoints || []).map((op) => {
+                    selectedOutpoints: (activeRun.remaining_selected_outpoints || []).map(/** @param {string} op */ (op) => {
                         const [txid, vout] = op.split(":");
                         return { txid, vout: Number(vout) };
                     }),
@@ -625,7 +684,7 @@
 
                 const confirmed = await confirmRound(txid, `${currentRound}/${plannedRounds}`);
                 if (!confirmed) break;
-                const entry = activeRun.rounds?.find((r) => r.txid === txid);
+                const entry = activeRun.rounds?.find(/** @param {{ txid: string }} r */ (r) => r.txid === txid);
                 if (entry) { entry.status = "confirmed"; entry.confirmed = true; entry.updated_at = new Date().toISOString(); }
                 activeRun.updated_at = new Date().toISOString();
                 executionLog = [...activeRun.rounds];
@@ -726,6 +785,9 @@
         status = "Will stop after current round confirmation.";
     }
 
+    /**
+     * @param {any} u
+     */
     function isUnsafe(u) {
         if (u.spendable === false) return true;
         if (u.safe === false) return true;
@@ -763,6 +825,9 @@
         }
     }
 
+    /**
+     * @param {string | null} [label]
+     */
     async function refreshDestination(label = null) {
         if (!tauriReady) return;
         try {
@@ -785,6 +850,9 @@
         }
     }
 
+    /**
+     * @param {CustomEvent<{ label?: string }>} event
+     */
     async function handleAddressGenerate(event) {
         await refreshDestination(event?.detail?.label || null);
     }
@@ -837,7 +905,7 @@
                             fee_rate_sat_per_byte: previewFeeRateSatPerByte,
                             destination: previewData.destination,
                             warnings: previewData.warnings,
-                            selected_utxos: (previewData.utxos || []).map((u) => ({
+                            selected_utxos: (previewData.utxos || []).map(/** @param {{ txid: string, vout: number, amount: number, address: string, confirmations: number }} u */ (u) => ({
                                 txid: u.txid,
                                 vout: u.vout,
                                 amount: u.amount,
@@ -878,7 +946,7 @@
         }
         showPreviewModal = false;
         broadcasting = true;
-        const inputs = (previewData.utxos || []).map((u) => ({ txid: u.txid, vout: u.vout }));
+        const inputs = (previewData.utxos || []).map(/** @param {{ txid: string, vout: number }} u */ (u) => ({ txid: u.txid, vout: u.vout }));
         try {
             await broadcastConsolidationRound({
                 inputs,
@@ -976,6 +1044,7 @@
     onMount(() => {
         loadPersistedRunState();
         fetchUtxos(true);
+        /** @type {number | null} */
         let raf = null;
         const syncViewport = () => {
             if (raf !== null) cancelAnimationFrame(raf);

@@ -5,16 +5,20 @@ export const libraryLoading = writable(false);
 export const activePanel = writable("browse");
 export const searchQuery = writable("");
 export const statusFilter = writable("all");
+/** @type {import('svelte/store').Writable<string | null>} */
 export const currentFolder = writable(null); // null = root, '' = unsorted, 'name' = folder
 export const ipfsHubSection = writable("library");
 export const cidViewerTarget = writable(/** @type {string | null} */ (null));
 export const packageSortMode = writable("updated-desc"); // alpha-asc, alpha-desc, updated-newest, updated-oldest
 
+/** @param {any[]} packages */
 export function sortByUpdatedDesc(packages) {
     return [...packages].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 }
 
+/** @param {any[]} packages */
 export function getFolders(packages) {
+    /** @type {Set<string>} */
     const folders = new Set();
     for (const p of packages) {
         if (p.folder && p.folder.trim()) {
@@ -24,8 +28,11 @@ export function getFolders(packages) {
     return Array.from(folders).sort((a, b) => a.localeCompare(b));
 }
 
+/** @param {any[]} packages */
 export function groupByFolder(packages) {
+    /** @type {Map<string, any[]>} */
     const groups = new Map();
+    /** @type {any[]} */
     const unsorted = [];
     for (const p of packages) {
         const folder = p.folder && p.folder.trim() ? p.folder.trim() : "";
@@ -33,20 +40,25 @@ export function groupByFolder(packages) {
             unsorted.push(p);
         } else {
             if (!groups.has(folder)) groups.set(folder, []);
-            groups.get(folder).push(p);
+            groups.get(folder)?.push(p);
         }
     }
+    /** @type {{ folder: string, label: string, packages: any[] }[]} */
     const result = [];
     if (unsorted.length > 0) {
         result.push({ folder: "", label: "Unsorted", packages: sortByUpdatedDesc(unsorted) });
     }
     const sortedFolders = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
     for (const folder of sortedFolders) {
-        result.push({ folder, label: folder, packages: sortByUpdatedDesc(groups.get(folder)) });
+        result.push({ folder, label: folder, packages: sortByUpdatedDesc(groups.get(folder) || []) });
     }
     return result;
 }
 
+/**
+ * @param {any[]} pkgs
+ * @param {string} mode
+ */
 function sortPackages(pkgs, mode) {
     const list = [...pkgs];
     if (mode === "alpha-asc") {
@@ -69,7 +81,7 @@ export const filteredPackages = derived(
             pkgs = pkgs.filter((p) =>
                 p.name.toLowerCase().includes(q) ||
                 (p.description && p.description.toLowerCase().includes(q)) ||
-                (p.tags && p.tags.some((t) => t.toLowerCase().includes(q))) ||
+                (p.tags && p.tags.some((/** @type {string} */ t) => t.toLowerCase().includes(q))) ||
                 (p.cid && p.cid.toLowerCase().includes(q)) ||
                 (p.folder && p.folder.toLowerCase().includes(q))
             );
@@ -101,7 +113,7 @@ export const folderGroups = derived(
             pkgs = pkgs.filter((p) =>
                 p.name.toLowerCase().includes(q) ||
                 (p.description && p.description.toLowerCase().includes(q)) ||
-                (p.tags && p.tags.some((t) => t.toLowerCase().includes(q))) ||
+                (p.tags && p.tags.some((/** @type {string} */ t) => t.toLowerCase().includes(q))) ||
                 (p.cid && p.cid.toLowerCase().includes(q)) ||
                 (p.folder && p.folder.toLowerCase().includes(q))
             );

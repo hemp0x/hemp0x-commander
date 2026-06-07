@@ -1451,4 +1451,28 @@
         color: #000;
         box-shadow: 0 0 20px var(--color-primary);
     }
+
+    .table-pack-status.standalone {
+        align-items: center;
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        color: #9cffad;
+        display: flex;
+        font-size: 0.62rem;
+        gap: 0.45rem;
+        margin-top: 0.35rem;
+        padding: 0.35rem 0.45rem;
+    }
+    .table-pack-status.standalone.busy::before {
+        animation: table-pack-spin 0.8s linear infinite;
+        border: 2px solid rgba(0, 255, 65, 0.18);
+        border-top-color: var(--color-primary);
+        border-radius: 999px;
+        content: "";
+        display: inline-block;
+        flex: 0 0 auto;
+        height: 0.75rem;
+        width: 0.75rem;
+    }
+    @keyframes table-pack-spin { to { transform: rotate(360deg); } }
 </style>

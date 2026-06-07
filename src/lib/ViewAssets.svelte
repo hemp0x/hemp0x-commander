@@ -1,5 +1,5 @@
 <script>
-    import { onMount } from "svelte";
+    import { onDestroy, onMount } from "svelte";
     import { fly, fade, scale } from "svelte/transition";
     import { flip } from "svelte/animate";
     import { core } from "@tauri-apps/api";
@@ -17,11 +17,39 @@
     import eyeOpen from "../assets/eye-open.png";
     import eyeClosed from "../assets/eye-closed.png";
 
+    /**
+     * @typedef {{ name: string, balance?: number|string, type?: string, hasOwner?: boolean, units?: number }} AssetItem
+     * @typedef {{ name: string, amount?: number, units?: number, reissuable?: boolean, block_height?: number, has_ipfs?: boolean, ipfs_hash?: string }} AssetMetadata
+     * @typedef {AssetItem & { hasOwner: boolean, ownerBalance: string|number|null, isSubAsset: boolean, parentName: string|null }} GroupedAsset
+     * @typedef {{
+     *   asset?: string,
+     *   to?: string,
+     *   amount?: string|number,
+     *   name?: string,
+     *   qty?: string|number,
+     *   units?: number|string,
+     *   reissuable?: boolean,
+     *   ipfs?: string,
+     *   ipfs_hash?: string,
+     *   asset_name?: string,
+     *   operation_type?: string,
+     *   parent_asset?: string,
+     *   tags?: string[],
+     *   summary?: string,
+     *   warnings?: string[]
+     * }} IssuePreviewData
+     * @typedef {{ id: string, status: string, operation_type: string, summary?: string, txid?: string|null, details?: unknown }} JournalEntry
+     * @typedef {{ asset: string, to: string, amount: string|number }} TransferPayload
+     * @typedef {AssetItem & AssetMetadata} AssetDetail
+     */
+
+    /** @type {AssetItem[]} */
     let myAssets = [];
     let tauriReady = false;
     let status = "";
 
     // Detail View
+    /** @type {AssetDetail | null} */
     let selectedDetail = null;
 
     // Transfer
@@ -40,12 +68,14 @@
     let subModalOpen = false;
     let nftModalOpen = false;
     let govModalOpen = false;
+    /** @type {AssetDetail | null} */
     let selectedGovAsset = null;
     let advancedModalOpen = false;
     let advancedInitialTab = "";
     let advancedInitialTagName = "";
 
     // Back navigation: remember last detail asset when opening action panels
+    /** @type {AssetDetail | null} */
     let lastDetailAsset = null;
     let lastDetailTab = "DETAILS";
     let initialDetailTab = "DETAILS";
@@ -77,16 +107,22 @@
 
     // Confirm Modal
     let confirmOpen = false;
+    /** @type {TransferPayload | null} */
     let confirmPayload = null;
     let confirmType = "";
+    /** @type {IssuePreviewData | null} */
     let previewData = null;
+    /** @type {string | null} */
     let previewJournalId = null;
     let isBroadcasting = false;
 
     // Persistent UI State
     let showHidden = false;
+    /** @type {Set<string>} */
     let hiddenAssets = new Set();
+    /** @type {string[]} */
     let assetOrder = [];
+    /** @type {AssetItem | null} */
     let draggingItem = null;
 
     // Allow parent to pass initial state
@@ -106,9 +142,10 @@
         }
 
         // Global DnD Fix: Explicitly allow 'move' everywhere to prevent forbidden cursor
+        /** @param {DragEvent} e */
         const handleGlobalDrag = (e) => {
             e.preventDefault();
-            e.dataTransfer.dropEffect = "move"; // CRITICAL: Must match effectAllowed
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; // CRITICAL: Must match effectAllowed
             return false;
         };
         window.addEventListener("dragover", handleGlobalDrag, false);
@@ -136,6 +173,11 @@
                 } catch (e) {}
             }
         }
+    });
+
+    onDestroy(() => {
+        dragGhostEl?.remove();
+        dragGhostEl = null;
     });
 
     // Save helpers
@@ -232,10 +274,10 @@
             const orderMap = new Map(assetOrder.map((n, i) => [n, i]));
             results.sort((a, b) => {
                 const idxA = orderMap.has(a.name)
-                    ? orderMap.get(a.name)
+                    ? /** @type {number} */ (orderMap.get(a.name))
                     : 99999;
                 const idxB = orderMap.has(b.name)
-                    ? orderMap.get(b.name)
+                    ? /** @type {number} */ (orderMap.get(b.name))
                     : 99999;
 
                 // Secondary sort: Owner tokens first, then alphabetic
@@ -252,6 +294,10 @@
     })();
 
     // --- UI ACTIONS ---
+    /**
+     * @param {MouseEvent} e
+     * @param {string} assetName
+     */
     function toggleHide(e, assetName) {
         e.stopPropagation();
         if (hiddenAssets.has(assetName)) {
@@ -263,23 +309,43 @@
         persistSettings();
     }
 
+    /**
+     * @param {DragEvent} e
+     * @param {AssetItem} asset
+     */
     function handleDragStart(e, asset) {
         draggingItem = asset;
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", asset.name);
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", asset.name);
+            // Use a tiny 1x1 hidden image as the drag preview so the native
+            // browser ghost doesn't render the full card at its rendered size.
+            if (!dragGhostEl) {
+                dragGhostEl = document.createElement("div");
+                dragGhostEl.style.cssText =
+                    "position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;";
+                document.body.appendChild(dragGhostEl);
+            }
+            e.dataTransfer.setDragImage(dragGhostEl, 0, 0);
+        }
         // HACK: Delay adding class to avoid browser canceling drag immediately
         setTimeout(() => document.body.classList.add("dragging-active"), 0);
     }
 
+    /** @param {DragEvent} e */
     function handleDragOver(e) {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
         return false;
     }
 
     let lastSwap = 0;
 
+    /**
+     * @param {DragEvent} e
+     * @param {AssetItem} targetAsset
+     */
     function handleDragEnter(e, targetAsset) {
         // Debounce swaps to prevent fluttering (rapid oscillations)
         const now = Date.now();
@@ -312,11 +378,19 @@
         }
     }
 
+    /** @param {DragEvent} e */
     function handleDragEnd(e) {
         document.body.classList.remove("dragging-active");
         draggingItem = null;
     }
 
+    /** @type {HTMLDivElement | null} */
+    let dragGhostEl = null;
+
+    /**
+     * @param {DragEvent} e
+     * @param {AssetItem} targetAsset
+     */
     function handleDrop(e, targetAsset) {
         e.preventDefault();
         e.stopPropagation();
@@ -337,10 +411,15 @@
     );
 
     // Asset metadata from getassetdata
+    /** @type {AssetMetadata | null} */
     let assetMetadata = null;
     let metadataLoading = false;
     let slideDirection = 0; // -1 = left, 1 = right, 0 = none
 
+    /**
+     * @param {AssetItem} asset
+     * @param {string} [tab]
+     */
     async function openDetail(asset, tab = "DETAILS") {
         selectedDetail = asset;
         // Close all other panels when opening detail
@@ -377,8 +456,9 @@
 
     function navigatePrev() {
         if (!selectedDetail || groupedAssets.length <= 1) return;
+        const current = selectedDetail;
         const currentIdx = groupedAssets.findIndex(
-            (a) => a.name === selectedDetail.name,
+            (a) => a.name === current.name,
         );
         const prevIdx =
             currentIdx <= 0 ? groupedAssets.length - 1 : currentIdx - 1;
@@ -388,8 +468,9 @@
 
     function navigateNext() {
         if (!selectedDetail || groupedAssets.length <= 1) return;
+        const current = selectedDetail;
         const currentIdx = groupedAssets.findIndex(
-            (a) => a.name === selectedDetail.name,
+            (a) => a.name === current.name,
         );
         const nextIdx =
             currentIdx >= groupedAssets.length - 1 ? 0 : currentIdx + 1;
@@ -397,6 +478,9 @@
         openDetail(groupedAssets[nextIdx], activeDetailTab);
     }
 
+    /**
+     * @param {string} assetName
+     */
     function goToTransfer(assetName) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -405,6 +489,9 @@
         transferModalOpen = true;
     }
 
+    /**
+     * @param {AssetItem} asset
+     */
     function goToReissue(asset) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -413,6 +500,9 @@
         reissueModalOpen = true;
     }
 
+    /**
+     * @param {AssetItem} [asset]
+     */
     function goToManageTags(asset) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -422,6 +512,9 @@
         advancedModalOpen = true;
     }
 
+    /**
+     * @param {string} parentName
+     */
     function goToSubAsset(parentName) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -436,6 +529,9 @@
         subModalOpen = true;
     }
 
+    /**
+     * @param {string} parentName
+     */
     function goToNft(parentName) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -447,6 +543,9 @@
         nftModalOpen = true;
     }
 
+    /**
+     * @param {AssetItem} asset
+     */
     async function openGovernance(asset) {
         lastDetailAsset = selectedDetail;
         lastDetailTab = activeDetailTab;
@@ -524,14 +623,15 @@
                 confirmType = "ROOT ASSET ISSUE";
             }
             status = "";
+            const preview = previewData;
             try {
                 const entry = await core.invoke("add_tx_journal_entry", {
                     input: {
                         status: "Previewed",
                         operation_type: issueType === "sub" ? "issue_sub" : "issue_root",
-                        summary: previewData.summary,
+                        summary: preview ? preview.summary : "",
                         txid: null,
-                        details: previewData,
+                        details: preview || {},
                     },
                 });
                 previewJournalId = entry.id;
@@ -562,14 +662,15 @@
             });
             confirmType = "REISSUE";
             status = "";
+            const preview = previewData;
             try {
                 const entry = await core.invoke("add_tx_journal_entry", {
                     input: {
                         status: "Previewed",
                         operation_type: "reissue",
-                        summary: previewData.summary,
+                        summary: preview ? preview.summary : "",
                         txid: null,
-                        details: previewData,
+                        details: preview || {},
                     },
                 });
                 previewJournalId = entry.id;
@@ -603,14 +704,15 @@
             });
             confirmType = "NFT MINT";
             status = "";
+            const preview = previewData;
             try {
                 const entry = await core.invoke("add_tx_journal_entry", {
                     input: {
                         status: "Previewed",
                         operation_type: "issue_unique",
-                        summary: previewData.summary,
+                        summary: preview ? preview.summary : "",
                         txid: null,
-                        details: previewData,
+                        details: preview || {},
                     },
                 });
                 previewJournalId = entry.id;
@@ -632,37 +734,43 @@
         try {
             let txid = "";
             if (confirmType === "TRANSFER") {
+                if (!confirmPayload) return;
+                const payload = confirmPayload;
                 txid = await core.invoke("transfer_asset", {
-                    asset: confirmPayload.asset,
-                    amount: confirmPayload.amount,
-                    to: confirmPayload.to,
+                    asset: payload.asset,
+                    amount: payload.amount,
+                    to: payload.to,
                 });
                 status = `Sent! TXID: ${txid.slice(0, 16)}...`;
                 transferTo = "";
                 transferAmt = "";
             } else if (confirmType === "ROOT ASSET ISSUE" || confirmType === "SUB-ASSET ISSUE") {
+                if (!previewData) return;
+                const preview = previewData;
                 txid = await core.invoke("issue_asset", {
-                    name: previewData.asset_name,
-                    qty: String(previewData.qty),
-                    units: Number(previewData.units || 0),
-                    reissuable: previewData.reissuable,
-                    ipfs: previewData.ipfs_hash || "",
+                    name: preview.asset_name,
+                    qty: String(preview.qty),
+                    units: Number(preview.units || 0),
+                    reissuable: preview.reissuable,
+                    ipfs: preview.ipfs_hash || "",
                 });
-                status = `${previewData.operation_type === "issue_sub" ? "Sub-asset" : "Asset"} created! TXID: ${txid.slice(0, 16)}...`;
+                status = `${preview.operation_type === "issue_sub" ? "Sub-asset" : "Asset"} created! TXID: ${txid.slice(0, 16)}...`;
                 issueName = "";
                 issueQty = "1";
                 issueIpfs = "";
                 if (issueType === "sub") issueParent = "";
             } else if (confirmType === "REISSUE") {
+                if (!previewData) return;
+                const preview = previewData;
                 txid = await core
                     .invoke("reissue_asset", {
-                        name: previewData.asset_name,
-                        qty: String(previewData.qty),
+                        name: preview.asset_name,
+                        qty: String(preview.qty),
                         toAddress: "",
                         changeAddress: "",
-                        reissuable: previewData.reissuable,
+                        reissuable: preview.reissuable,
                         newUnits: null,
-                        newIpfs: previewData.ipfs_hash || "",
+                        newIpfs: preview.ipfs_hash || "",
                     })
                     .catch((e) => {
                         throw "Reissue failed: " + e;
@@ -670,12 +778,14 @@
                 status = `Reissued! TXID: ${txid.slice(0, 16)}...`;
                 reissueNewIpfs = "";
             } else if (confirmType === "NFT MINT") {
-                const tags = previewData.tags.map(t => t.split("#")[1] || t);
-                const ipfsHashes = previewData.ipfs_hash
-                    ? previewData.ipfs_hash.split(", ").filter(h => h)
+                if (!previewData) return;
+                const preview = previewData;
+                const tags = (preview.tags || []).map(/** @param {string} t */ (t) => t.split("#")[1] || t);
+                const ipfsHashes = preview.ipfs_hash
+                    ? preview.ipfs_hash.split(", ").filter(/** @param {string} h */ (h) => h)
                     : [];
                 txid = await core.invoke("issue_unique_asset", {
-                    rootName: previewData.asset_name,
+                    rootName: preview.asset_name,
                     tags,
                     ipfsHashes,
                 });
@@ -757,7 +867,7 @@
                 <button
                     type="button"
                     class="header-title"
-                    class:active={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                    class:active={advancedModalOpen || createModalOpen || browseModalOpen || !!selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
                     on:click={() => { advancedModalOpen = false; createModalOpen = false; browseModalOpen = false; selectedDetail = null; transferModalOpen = false; reissueModalOpen = false; subModalOpen = false; nftModalOpen = false; govModalOpen = false; }}
                 >
                     ◈ MY ASSETS
@@ -769,12 +879,12 @@
                 >
                     <label
                         class="toggle-hidden"
-                        class:disabled={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                        class:disabled={advancedModalOpen || createModalOpen || browseModalOpen || !!selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
                     >
                         <input
                             type="checkbox"
                             bind:checked={showHidden}
-                            disabled={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                            disabled={advancedModalOpen || createModalOpen || browseModalOpen || !!selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
                         />
                         <img
                             src={showHidden ? eyeOpen : eyeClosed}
@@ -788,7 +898,7 @@
                 <button
                     class="header-btn refresh-btn"
                     on:click={refreshAssets}
-                    disabled={!nodeOnline || advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
+                    disabled={!nodeOnline || advancedModalOpen || createModalOpen || browseModalOpen || !!selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}
                     title="Refresh Asset List"
                 >
                     <span class="btn-icon">↻</span> REFRESH
@@ -839,7 +949,7 @@
 
         <!-- CONTENT -->
         <div class="content-area">
-            <div class="tab-content" class:panel-open={advancedModalOpen || createModalOpen || browseModalOpen || selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}>
+            <div class="tab-content" class:panel-open={advancedModalOpen || createModalOpen || browseModalOpen || !!selectedDetail || transferModalOpen || reissueModalOpen || subModalOpen || nftModalOpen || govModalOpen}>
                 {#if advancedModalOpen}
                     <ModalAssetAdvanced
                         inline
@@ -1112,8 +1222,8 @@
     <ModalConfirm
         isOpen={confirmOpen}
         type={confirmType}
-        payload={confirmPayload}
-        {previewData}
+        payload={confirmPayload || {}}
+        previewData={previewData || null}
         {isBroadcasting}
         on:close={cancelConfirm}
         on:confirm={confirmAction}

@@ -3,7 +3,9 @@
 
     export let isOpen = false;
     export let type = "";
+    /** @type {Record<string, any> | null} */
     export let payload = {};
+    /** @type {Record<string, any> | null} */
     export let previewData = null;
     export let isBroadcasting = false;
 
@@ -19,6 +21,8 @@
     }
 
     $: isPreview = previewData && previewData.validated !== undefined;
+    $: previewDetails = previewData || {};
+    $: payloadEntries = Object.entries(payload || {});
 </script>
 
 {#if isOpen}
@@ -32,81 +36,81 @@
                 {#if isPreview}
                     <div class="confirm-row">
                         <span class="row-key">OPERATION</span>
-                        <span class="row-val">{previewData.operation_type || type}</span>
+                        <span class="row-val">{previewDetails.operation_type || type}</span>
                     </div>
                     <div class="confirm-row">
                         <span class="row-key">ASSET</span>
-                        <span class="row-val">{previewData.asset_name}</span>
+                        <span class="row-val">{previewDetails.asset_name}</span>
                     </div>
-                    {#if previewData.qty}
+                    {#if previewDetails.qty}
                         <div class="confirm-row">
                             <span class="row-key">QUANTITY</span>
-                            <span class="row-val">{previewData.qty}</span>
+                            <span class="row-val">{previewDetails.qty}</span>
                         </div>
                     {/if}
-                    {#if previewData.units != null && previewData.units !== undefined}
+                    {#if previewDetails.units != null && previewDetails.units !== undefined}
                         <div class="confirm-row">
                             <span class="row-key">DECIMALS</span>
-                            <span class="row-val">{previewData.units}</span>
+                            <span class="row-val">{previewDetails.units}</span>
                         </div>
                     {/if}
-                    {#if previewData.reissuable != null && previewData.reissuable !== undefined}
+                    {#if previewDetails.reissuable != null && previewDetails.reissuable !== undefined}
                         <div class="confirm-row">
                             <span class="row-key">REISSUABLE</span>
-                            <span class="row-val yes">{previewData.reissuable ? "YES" : "NO"}</span>
+                            <span class="row-val yes">{previewDetails.reissuable ? "YES" : "NO"}</span>
                         </div>
                     {/if}
-                    {#if previewData.ipfs_hash}
+                    {#if previewDetails.ipfs_hash}
                         <div class="confirm-row">
                             <span class="row-key">IPFS</span>
-                            <span class="row-val mono" style="font-size:0.7rem;">{previewData.ipfs_hash}</span>
+                            <span class="row-val mono" style="font-size:0.7rem;">{previewDetails.ipfs_hash}</span>
                         </div>
                     {/if}
-                    {#if previewData.parent_asset}
+                    {#if previewDetails.parent_asset}
                         <div class="confirm-row">
                             <span class="row-key">PARENT</span>
-                            <span class="row-val">{previewData.parent_asset}</span>
+                            <span class="row-val">{previewDetails.parent_asset}</span>
                         </div>
                     {/if}
-                    {#if previewData.tags}
+                    {#if previewDetails.tags}
                         <div class="confirm-row">
                             <span class="row-key">TAGS</span>
-                            <span class="row-val" style="font-size:0.7rem;">{previewData.tags.join(", ")}</span>
+                            <span class="row-val" style="font-size:0.7rem;">{previewDetails.tags.join(", ")}</span>
                         </div>
                     {/if}
-                    {#if previewData.operation_type === "distribute_reward"}
+                    {#if previewDetails.operation_type === "distribute_reward"}
                         <div class="confirm-row">
                             <span class="row-key">SNAPSHOT HEIGHT</span>
-                            <span class="row-val">{previewData.snapshot_height}</span>
+                            <span class="row-val">{previewDetails.snapshot_height}</span>
                         </div>
                         <div class="confirm-row">
                             <span class="row-key">DISTRIBUTION ASSET</span>
-                            <span class="row-val">{previewData.distribution_asset}</span>
+                            <span class="row-val">{previewDetails.distribution_asset}</span>
                         </div>
                         <div class="confirm-row">
                             <span class="row-key">GROSS AMOUNT</span>
-                            <span class="row-val">{previewData.gross_amount}</span>
+                            <span class="row-val">{previewDetails.gross_amount}</span>
                         </div>
                         <div class="confirm-row">
                             <span class="row-key">RECIPIENTS</span>
-                            <span class="row-val">{previewData.estimated_recipient_count ?? "unknown"}</span>
+                            <span class="row-val">{previewDetails.estimated_recipient_count ?? "unknown"}</span>
                         </div>
-                        {#if previewData.exception_addresses}
+                        {#if previewDetails.exception_addresses}
                             <div class="confirm-row">
                                 <span class="row-key">EXCLUSIONS</span>
-                                <span class="row-val mono" style="font-size:0.65rem;">{previewData.exception_addresses}</span>
+                                <span class="row-val mono" style="font-size:0.65rem;">{previewDetails.exception_addresses}</span>
                             </div>
                         {/if}
                     {/if}
 
-                    {#if previewData.is_irreversible}
+                    {#if previewDetails.is_irreversible}
                         <div class="warning-box irreversible">
                             <span class="warning-icon">&#9888;</span>
                             <span>This operation has IRREVERSIBLE effects that cannot be undone.</span>
                         </div>
                     {/if}
 
-                    {#each previewData.warnings as warn}
+                    {#each previewDetails.warnings || [] as warn}
                         <div class="warning-box">
                             <span class="warning-icon">&#9432;</span>
                             <span>{warn}</span>
@@ -114,10 +118,10 @@
                     {/each}
 
                     <div class="summary-box">
-                        <span class="summary-text">{previewData.summary}</span>
+                        <span class="summary-text">{previewDetails.summary}</span>
                     </div>
                 {:else}
-                    {#each Object.entries(payload) as [k, v]}
+                    {#each payloadEntries as [k, v]}
                         <div class="confirm-row">
                             <span class="row-key">{k}</span>
                             <span class="row-val">{v}</span>
@@ -132,7 +136,7 @@
                 </button>
                 <button
                     class="neon-btn sm"
-                    class:danger={isPreview && previewData?.is_irreversible}
+                    class:danger={isPreview && previewDetails.is_irreversible}
                     on:click={confirm}
                     disabled={isBroadcasting}
                 >

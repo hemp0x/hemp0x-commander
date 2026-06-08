@@ -8,7 +8,7 @@
     import H0xCUserContextMenu from "./H0xCUserContextMenu.svelte";
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
     import { addNotification } from "../../stores/notifications.js";
-    import { deriveRootNameFn, isH0xCChannelAsset } from "../../stores/h0xc.js";
+    import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
 
     const dispatch = createEventDispatcher();
 
@@ -145,7 +145,7 @@
             const msgs = await core.invoke("view_asset_messages");
             const prevMessages = messages;
             messages = (Array.isArray(msgs) ? msgs : [])
-                .filter((/** @type {AssetMessage} */ m) => isH0xCChannelAsset(m.asset_name));
+                .filter((/** @type {AssetMessage} */ m) => isH0xCAsset(m.asset_name));
             updateParticipantsFromMessages(messages);
             decodeVisible(messages);
 
@@ -422,13 +422,13 @@
                         discovered = Object.keys(parsed);
                     }
                 } catch {
-                    discovered = raw.split(/\n/).map((s) => s.trim()).filter((s) => isH0xCChannelAsset(s));
+                    discovered = raw.split(/\n/).map((s) => s.trim()).filter((s) => isH0xCAsset(s));
                 }
             } else if (Array.isArray(raw)) {
                 discovered = raw.map((item) => typeof item === "string" ? item : item?.name || item?.asset_name || "").filter(Boolean);
             }
 
-            const h0xcDiscovered = discovered.filter((s) => isH0xCChannelAsset(s));
+            const h0xcDiscovered = discovered.filter((s) => isH0xCAsset(s));
             const existing = new Set(participants.map((p) => p.assetName));
             let added = 0;
             for (const name of h0xcDiscovered) {

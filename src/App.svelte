@@ -132,6 +132,9 @@
   // --- WELCOME POPUP ---
   let showWelcome = false;
   let showWelcomeOnStartup = true; // Default ON
+  let disclaimerScrolled = false;
+  /** @type {HTMLElement | null} */
+  let disclaimerBodyEl = null;
 
   // --- HIDE BALANCE ---
   // Default to true (hidden) if not set, or restore from storage
@@ -259,7 +262,6 @@
   }
 
   function closeWelcome() {
-    // Save preference
     localStorage.setItem(
       "hemp0x_showWelcome",
       showWelcomeOnStartup ? "1" : "0",
@@ -267,12 +269,28 @@
     showWelcome = false;
   }
 
+  /** @param {Event} e */
+  function handleDisclaimerScroll(e) {
+    const el = e.target;
+    if (el instanceof HTMLElement) {
+      updateDisclaimerScrolled(el);
+    }
+  }
+
+  function updateDisclaimerScrolled(el = disclaimerBodyEl) {
+    if (!el) return;
+    const noScrollNeeded = el.scrollHeight <= el.clientHeight + 2;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    if (noScrollNeeded || atBottom) disclaimerScrolled = true;
+  }
+
   function checkWelcomePopup() {
     const stored = localStorage.getItem("hemp0x_showWelcome");
-    // Default to showing if never set
     showWelcomeOnStartup = stored !== "0";
     if (showWelcomeOnStartup) {
+      disclaimerScrolled = false;
       showWelcome = true;
+      setTimeout(() => updateDisclaimerScrolled(), 0);
     }
   }
 
@@ -1185,54 +1203,69 @@
         </div>
 
         <div class="about-section">
-          <h3 class="section-header">📖 ABOUT</h3>
+          <h3 class="section-header">ABOUT</h3>
           <p class="about-text">
-            All-In-One Manager for Hemp0x blockchain.<br />
+            <strong>All-In-One Manager</strong> for the Hemp0x blockchain.
+          </p>
+          <p class="about-text">
             This application controls <strong>hemp0xd</strong> and
-            <strong>hemp0x-cli</strong> binaries built from the Hemp0x repository.
+            <strong>hemp0x-cli</strong> binaries built from the official Hemp0x repository.
           </p>
           <p class="about-credit">
-            Forked from Raven Coin (12-18-25)<br />
-            Special thanks to: <strong>cc2002cc</strong> and the Ravencoin community
-            for making this all possible
+            Forked from Ravencoin (December 18, 2025)<br />
+            Special thanks to <strong>cc2002cc</strong> and the entire Ravencoin community
+            for their foundational work.
           </p>
         </div>
 
         <div class="about-section disclaimer-section">
-          <h3 class="section-header">⚠️ DISCLAIMER</h3>
+          <h3 class="section-header">DISCLAIMER</h3>
           <p class="disclaimer-text">
-            This software allows you to make <strong class="danger"
-              >irreversible changes</strong
-            >
-            to your wallet and blockchain data.
+            This software and all its features are experimental proof-of-concept tools built to demonstrate what is possible on the Hemp0x blockchain.
+          </p>
+          <p class="disclaimer-text" style="color: #ffcc00; font-weight: 600;">
+            Use at your own risk and discretion.
           </p>
           <p class="disclaimer-text">
             By using this application, you acknowledge and agree that:
           </p>
           <ul class="disclaimer-list">
-            <li>You use this software <strong>at your own risk</strong></li>
-            <li>
-              We are <strong>not responsible</strong> for any lost funds or data
-            </li>
-            <li>
-              You should always <strong>backup your wallet</strong> before making
-              changes
-            </li>
-            <li>
-              Encrypted wallets require you to remember your password - there is
-              no recovery
-            </li>
+            <li>This software allows you to make <strong>irreversible changes</strong> to your wallet and assets.</li>
+            <li>All features are experimental and may contain bugs or unexpected behavior.</li>
+            <li>You are <strong>18 years of age or older</strong>.</li>
+            <li>You will comply with all applicable local laws and regulations in your jurisdiction.</li>
+            <li>The developers, contributors, and maintainers of Hemp0x Commander are <strong>not responsible</strong> for any lost funds, stolen assets, data loss, or any other damages resulting from the use of this software.</li>
           </ul>
+          <div class="disclaimer-warnings">
+            <p class="disclaimer-warning">Always backup your wallet before using any features.</p>
+            <p class="disclaimer-warning">Only download and build Commander from official sources (hemp0x.com or verified GitHub releases).</p>
+            <p class="disclaimer-warning">Encrypted wallets require you to remember your password. There is no recovery option.</p>
+          </div>
+        </div>
+
+        <div class="about-section">
+          <h3 class="section-header">CONTRIBUTING</h3>
+          <p class="about-text">
+            Hemp0x Commander is fully open source. We welcome contributions from developers and the community.
+          </p>
+        </div>
+
+        <div class="about-section">
+          <h3 class="section-header">USEFUL LINKS</h3>
+          <div class="about-links">
+            <a href="https://hemp0x.com" target="_blank" rel="noopener noreferrer" class="about-link-card">
+              <span class="about-link-label">Official Website</span>
+              <span class="about-link-url">hemp0x.com</span>
+            </a>
+            <a href="https://github.com/hemp0x" target="_blank" rel="noopener noreferrer" class="about-link-card">
+              <span class="about-link-label">Project Repository</span>
+              <span class="about-link-url">github.com/hemp0x</span>
+            </a>
+          </div>
         </div>
 
         <div class="about-footer">
           <span class="neon">Hemp0x - We Build Together</span>
-          <a
-            href="https://hemp0x.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="about-link">hemp0x.com</a
-          >
         </div>
       </div>
     </div>
@@ -1312,33 +1345,40 @@
   <!-- WELCOME POPUP -->
   {#if showWelcome}
     <div class="welcome-overlay">
-      <div class="welcome-modal">
+      <div class="welcome-modal welcome-modal-disclaimer">
         <div class="welcome-header">
-          <h2>Welcome To Hemp0x Commander</h2>
+          <h2>IMPORTANT NOTICE</h2>
           <span class="welcome-version">{APP_VERSION}</span>
         </div>
-        <div class="welcome-body">
+        <div class="welcome-body disclaimer-scroll" bind:this={disclaimerBodyEl} on:scroll={handleDisclaimerScroll}>
           <p class="welcome-text">
-            This software allows you to make <strong
-              >irreversible changes</strong
-            > to your wallet.
+            This software and all its features are experimental proof-of-concept tools built to demonstrate what is possible on the Hemp0x blockchain.
           </p>
-          <p class="welcome-caution">
-            ⚠️ Use with caution. See the <strong>ABOUT</strong> page for more information
-            before use.
+          <p class="welcome-text" style="color: #ffcc00; font-weight: 600;">
+            Use at your own risk and discretion.
           </p>
-          <p class="welcome-disclaimer">
-            We are not responsible for any lost funds.
+          <p class="welcome-text" style="margin-bottom: 0.5rem;">
+            By continuing, you acknowledge and agree that:
+          </p>
+          <ul class="disclaimer-list-new">
+            <li>This software allows you to make <strong>irreversible changes</strong> to your wallet and assets.</li>
+            <li>All features are experimental and may contain bugs or unexpected behavior.</li>
+            <li>You are <strong>18 years of age or older</strong>.</li>
+            <li>You will comply with all applicable local laws and regulations in your jurisdiction.</li>
+            <li>The developers, contributors, and maintainers of Hemp0x Commander are <strong>not responsible</strong> for any lost funds, stolen assets, or any other damages resulting from the use of this software.</li>
+          </ul>
+          <p class="welcome-text" style="margin-top: 0.75rem; color: #888; font-size: 0.85rem;">
+            We strongly recommend reviewing the <strong style="color: var(--color-primary);">ABOUT</strong> page before using any features.
           </p>
         </div>
-        <div class="welcome-footer">
+        <div class="welcome-footer disclaimer-footer">
           <label class="welcome-checkbox">
             <input type="checkbox" bind:checked={showWelcomeOnStartup} />
             <span class="checkmark"></span>
             Show this message on startup
           </label>
-          <button class="welcome-btn" on:click={closeWelcome}
-            >[ CONTINUE ]</button
+          <button class="welcome-btn" class:disabled={!disclaimerScrolled} disabled={!disclaimerScrolled} on:click={closeWelcome}
+            >[ Agree + Continue ]</button
           >
         </div>
       </div>
@@ -2397,14 +2437,24 @@
     border: 1px solid rgba(255, 204, 0, 0.2);
     border-radius: 6px;
   }
-  .welcome-caution strong {
-    color: var(--color-primary);
-  }
   .welcome-disclaimer {
     color: #888;
     font-size: 0.85rem;
     margin: 0;
     font-style: italic;
+  }
+  .disclaimer-list-new {
+    margin: 0;
+    padding-left: 1.2rem;
+    color: #bbb;
+    font-size: 0.85rem;
+    line-height: 1.7;
+  }
+  .disclaimer-list-new li {
+    margin-bottom: 0.3rem;
+  }
+  .disclaimer-list-new strong {
+    color: #ff6b6b;
   }
   .welcome-footer {
     padding: 1rem 1.5rem;
@@ -2412,6 +2462,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
   }
   .welcome-checkbox {
     display: flex;
@@ -2431,31 +2483,65 @@
     border: none;
     color: #000;
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-weight: 700;
-    padding: 0.8rem 1.5rem;
+    padding: 0.8rem 1.2rem;
     border-radius: 6px;
     cursor: pointer;
     letter-spacing: 1px;
     transition: all 0.2s;
     box-shadow: 0 0 16px rgba(0, 255, 65, 0.2);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .welcome-btn:hover {
     box-shadow: 0 0 20px rgba(0, 255, 65, 0.35);
   }
+  .welcome-btn.disabled {
+    background: #444;
+    color: #777;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  .welcome-btn.disabled:hover {
+    box-shadow: none;
+  }
+  .welcome-modal-disclaimer {
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .disclaimer-scroll {
+    flex: 1 1 0%;
+    overflow-y: auto;
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 255, 65, 0.3) transparent;
+  }
+  .disclaimer-scroll::-webkit-scrollbar { width: 5px; }
+  .disclaimer-scroll::-webkit-scrollbar-track { background: transparent; }
+  .disclaimer-scroll::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.3); border-radius: 3px; }
+  .disclaimer-footer {
+    flex-shrink: 0;
+  }
 
   /* --- ABOUT PAGE --- */
   .about-page {
-    flex: 1; /* KEY FIX: Fill available space */
-    height: 100%; /* Ensure full height logic applies */
+    flex: 1;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    overflow-y: auto; /* Internal scroll ONLY */
-    padding: 1.5rem;
-    padding-bottom: 5rem; /* KEY FIX: Extra padding to prevent border cutoff */
-    margin: 4px; /* KEY FIX: Pull in from edges to show border/shadow */
-    min-height: 0; /* Allow shrinking */
+    overflow-y: auto;
+    padding: 1.5rem 2rem;
+    padding-bottom: 5rem;
+    margin: 4px;
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 255, 65, 0.3) transparent;
   }
+  .about-page::-webkit-scrollbar { width: 6px; }
+  .about-page::-webkit-scrollbar-track { background: transparent; }
+  .about-page::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.3); border-radius: 3px; }
   .about-header {
     display: flex;
     align-items: center;
@@ -2465,9 +2551,9 @@
     margin-bottom: 1.5rem;
   }
   .about-logo {
-    width: 100px;
-    height: 100px;
-    border-radius: 8px;
+    width: 80px;
+    height: 80px;
+    border-radius: 10px;
     box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
     object-fit: contain;
   }
@@ -2479,13 +2565,13 @@
   .about-title {
     margin: 0;
     color: white;
-    font-size: 1.5rem;
+    font-size: 1.3rem;
     letter-spacing: 3px;
   }
   .about-version {
     color: var(--color-primary);
     font-family: var(--font-mono);
-    font-size: 0.9rem;
+    font-size: 0.85rem;
   }
   .welcome-toggle {
     margin-left: auto;
@@ -2509,57 +2595,125 @@
   }
   .section-header {
     color: var(--color-primary);
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     margin: 0 0 0.8rem 0;
     letter-spacing: 2px;
+    text-transform: uppercase;
+    font-weight: 700;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   }
   .about-text {
     color: #bbb;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     line-height: 1.6;
-    margin: 0 0 0.8rem 0;
+    margin: 0 0 0.6rem 0;
   }
   .about-text strong {
-    color: var(--color-primary);
+    color: #fff;
   }
   .about-credit {
     color: #888;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    margin: 0.5rem 0 0 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
   }
   .about-credit strong {
-    color: #aaa;
+    color: var(--color-primary);
   }
   .disclaimer-section {
     background: rgba(255, 100, 100, 0.03);
-    border: 1px solid rgba(255, 100, 100, 0.1);
+    border: 1px solid rgba(255, 100, 100, 0.08);
     border-radius: 8px;
-    padding: 1rem;
+    padding: 1rem 1.2rem;
+  }
+  .disclaimer-section .section-header {
+    color: #ff8888;
+    border-bottom-color: rgba(255, 100, 100, 0.1);
   }
   .disclaimer-text {
     color: #ccc;
     font-size: 0.85rem;
-    line-height: 1.5;
+    line-height: 1.6;
     margin: 0 0 0.6rem 0;
-  }
-  .disclaimer-text .danger {
-    color: #ff6b6b;
   }
   .disclaimer-list {
     margin: 0;
     padding-left: 1.5rem;
     color: #aaa;
     font-size: 0.85rem;
-    line-height: 1.8;
+    line-height: 1.9;
   }
   .disclaimer-list li {
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.2rem;
   }
   .disclaimer-list strong {
+    color: #ff8888;
+  }
+  .disclaimer-warnings {
+    margin-top: 0.8rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid rgba(255, 100, 100, 0.08);
+  }
+  .disclaimer-warning {
+    margin: 0 0 0.4rem 0;
+    font-size: 0.78rem;
     color: #ffcc00;
+    line-height: 1.5;
+    padding-left: 1rem;
+    position: relative;
+  }
+  .disclaimer-warning::before {
+    content: "!";
+    position: absolute;
+    left: 0;
+    color: #ffcc00;
+    font-weight: 700;
+  }
+  .about-links {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+  }
+  .about-link-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.6rem 1rem;
+    background: rgba(0, 255, 65, 0.03);
+    border: 1px solid rgba(0, 255, 65, 0.12);
+    border-radius: 6px;
+    text-decoration: none;
+    transition: all 0.2s;
+    flex: 1;
+    min-width: 160px;
+  }
+  .about-link-card:hover {
+    background: rgba(0, 255, 65, 0.06);
+    border-color: rgba(0, 255, 65, 0.25);
+    box-shadow: 0 0 12px rgba(0, 255, 65, 0.1);
+  }
+  .about-link-label {
+    font-size: 0.7rem;
+    color: #888;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .about-link-url {
+    font-size: 0.85rem;
+    color: var(--color-primary);
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+  }
+  .about-footer {
+    margin-top: auto;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    justify-content: center;
+    align-items: center;
   }
   .settings-section {
     background: rgba(0, 255, 65, 0.02);

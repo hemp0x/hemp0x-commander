@@ -100,6 +100,17 @@
                 </div>
 
                 <div class="sett-section">
+                    <span class="sett-label">CHAT HISTORY WINDOW</span>
+                    <div class="sett-expiry-row">
+                        <button class="sett-expiry-btn" class:active={draft.historyDays === 30} on:click={() => { draft.historyDays = 30; draft = draft; }}>30 Days</button>
+                        <button class="sett-expiry-btn" class:active={draft.historyDays === 90} on:click={() => { draft.historyDays = 90; draft = draft; }}>90 Days</button>
+                        <button class="sett-expiry-btn" class:active={draft.historyDays === 180} on:click={() => { draft.historyDays = 180; draft = draft; }}>180 Days</button>
+                        <button class="sett-expiry-btn" class:active={draft.historyDays === 0} on:click={() => { draft.historyDays = 0; draft = draft; }}>All</button>
+                    </div>
+                    <p class="sett-hint">How far back to show messages in the chat feed. Older messages are filtered in the UI only — nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
+                </div>
+
+                <div class="sett-section">
                     <div class="field-row">
                         <div class="field-group narrow-inline">
                             <span class="sett-label">DISCOVERY SCAN LIMIT</span>

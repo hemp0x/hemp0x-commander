@@ -120,11 +120,18 @@
     let resolvedAddresses = {};
     let resolvingAddress = false;
 
+    // Message detail panel
+    /** @type {null | { msg: AssetMessage, rootName: string, decoded: DecodeResult|undefined, time: string }} */
+    let msgDetail = null;
+
     // Username context menu
     /** @type {string | null} */
     let ctxUser = null;
     let ctxX = 0;
     let ctxY = 0;
+
+    $: ctxParticipant = ctxUser ? participants.find((p) => p.rootName === ctxUser) : null;
+    $: ctxIsSelf = ctxUser ? ctxUser.toUpperCase() === rootName().toUpperCase() : false;
 
     function rootName() {
         return deriveRootNameFn(identity);
@@ -307,6 +314,10 @@
         }
     }
 
+    let searchUserFilter = "";
+    let searchChannelFilter = "";
+    let historyOverride = false;
+
     /** @type {AssetMessage[]} */
     $: filteredMessages = (() => {
         const bl = new Set(blockedUsers.map((u) => u.toUpperCase()));
@@ -323,20 +334,42 @@
                 return !tagBlockedChannels.has(msg.asset_name);
             });
         }
+        if (searchUserFilter.trim()) {
+            const q = searchUserFilter.trim().toLowerCase();
+            msgs = msgs.filter((msg) => {
+                const rn = deriveRootNameFn(msg.asset_name).toLowerCase();
+                return rn.includes(q);
+            });
+        }
+        if (searchChannelFilter.trim()) {
+            const q = searchChannelFilter.trim().toLowerCase();
+            msgs = msgs.filter((msg) => {
+                return msg.asset_name.toLowerCase().includes(q);
+            });
+        }
         if (searchFilter.trim()) {
             const q = searchFilter.trim().toLowerCase();
             msgs = msgs.filter((msg) => {
                 const rn = deriveRootNameFn(msg.asset_name).toLowerCase();
                 const dec = decodeCache[msg.message];
                 const body = dec?.is_short_message && dec.text ? dec.text.toLowerCase() : "";
-                return rn.includes(q) || body.includes(q) || msg.message.toLowerCase().includes(q);
+                const assetMatch = msg.asset_name.toLowerCase().includes(q);
+                return rn.includes(q) || body.includes(q) || msg.message.toLowerCase().includes(q) || assetMatch;
             });
         }
+        if (!historyOverride && settings.historyDays > 0) {
+            const cutoff = Date.now() - settings.historyDays * 86400000;
+            msgs = msgs.filter((msg) => parseTime(msg.time) >= cutoff);
+        }
+        msgs.sort((a, b) => parseTime(a.time) - parseTime(b.time));
         return msgs;
     })();
 
-    $: pagedMessages = filteredMessages.slice(0, showCount);
+    $: pagedMessages = filteredMessages.length <= showCount
+        ? filteredMessages
+        : filteredMessages.slice(filteredMessages.length - showCount);
     $: hasMore = filteredMessages.length > showCount;
+    $: olderCount = hasMore ? filteredMessages.length - showCount : 0;
 
     $: messageRows = pagedMessages.map((msg) => ({
         msg,
@@ -359,17 +392,36 @@
         return `[${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}]`;
     }
 
+    /** @param {string|number|undefined|null} raw */
+    function formatFullTime(raw) {
+        if (!raw) return "";
+        let d = new Date(raw);
+        if (isNaN(d.getTime())) {
+            const n = Number(raw);
+            if (!Number.isNaN(n) && n > 1000000000) d = new Date(n * 1000);
+        }
+        if (isNaN(d.getTime())) return String(raw);
+        return d.toLocaleString();
+    }
+
     function refresh() {
         showCount = pageSize;
         loadMessages();
     }
 
     function loadMore() {
-        showCount = showCount + pageSize;
+        if (!historyOverride && settings.historyDays > 0 && olderCount > 0) {
+            historyOverride = true;
+            showCount = pageSize;
+        } else {
+            showCount = showCount + pageSize;
+        }
     }
 
     function clearSearch() {
         searchFilter = "";
+        searchUserFilter = "";
+        searchChannelFilter = "";
         showCount = pageSize;
     }
 
@@ -569,19 +621,6 @@
     function handleViewDetails(e) { showUserDetails(e.detail.rootName); }
 
     /** @param {MouseEvent} e */
-    function openCtx(e, clickedRoot) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (clickedRoot.toUpperCase() === rootName().toUpperCase()) return;
-        ctxUser = clickedRoot;
-        ctxX = e.clientX;
-        ctxY = e.clientY;
-    }
-
-    function closeCtx() {
-        ctxUser = null;
-    }
-
     function requestWalletUnlock(callback) {
         unlockPassword = "";
         unlockError = "";
@@ -749,12 +788,71 @@
         if (isNearBottom) scrollToBottom();
     });
 
-    function handleWindowClick() {
-        if (ctxUser) closeCtx();
+    function openMsgDetail(e, row) {
+        e.preventDefault();
+        e.stopPropagation();
+        msgDetail = row;
+        if (!resolvedAddresses[row.rootName]) {
+            resolveUserAddress(row.rootName);
+        }
+    }
+
+    function openUserContext(e, clickedRoot) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctxUser = clickedRoot;
+        ctxX = e.clientX;
+        ctxY = e.clientY;
+        resolveUserAddress(clickedRoot);
+    }
+
+    function closeUserContext() {
+        ctxUser = null;
+    }
+
+    function closeMsgDetail() {
+        msgDetail = null;
+    }
+
+    function filterByUser(rootName) {
+        searchUserFilter = rootName;
+        searchFilter = "";
+        searchChannelFilter = "";
+        searchOpen = true;
+        msgDetail = null;
+        showCount = pageSize;
+    }
+
+    function filterByChannel(assetName) {
+        searchChannelFilter = assetName;
+        searchFilter = "";
+        searchUserFilter = "";
+        searchOpen = true;
+        msgDetail = null;
+        showCount = pageSize;
+    }
+
+    async function copyText(text) {
+        try { await navigator.clipboard.writeText(text); } catch {}
+    }
+
+    /** @param {{ rootName: string, address: string, tag: string }} detail */
+    function handleAddTag(detail) {
+        const tag = detail.tag.startsWith("#") ? detail.tag : `#${detail.tag}`;
+        const currentTags = settings.autoBlockTags || [];
+        if (!currentTags.includes(tag)) {
+            settings.autoBlockTags = [...currentTags, tag];
+            settings = settings;
+            addNotification({
+                type: "message",
+                severity: "info",
+                title: "Tag Added",
+                body: `Added "${tag}" to auto-block tags`,
+            });
+            setTimeout(() => maybeCheckChannelTags(), 500);
+        }
     }
 </script>
-
-<svelte:window on:click={handleWindowClick} />
 
 <div class="h0xc-chat-room" transition:fade={{ duration: 120 }}>
     <div class="chat-header">
@@ -827,11 +925,27 @@
                 type="text"
                 bind:value={searchFilter}
                 on:input={() => { showCount = pageSize; }}
-                placeholder="Filter messages..."
-                aria-label="Filter messages"
+                placeholder="Search text..."
+                aria-label="Search messages by text"
             />
-            {#if searchFilter}
-                <button class="search-clear" on:click={clearSearch} title="Clear filter">✕</button>
+            <input
+                class="search-input search-user"
+                type="text"
+                bind:value={searchUserFilter}
+                on:input={() => { showCount = pageSize; }}
+                placeholder="User..."
+                aria-label="Filter by user"
+            />
+            <input
+                class="search-input search-channel"
+                type="text"
+                bind:value={searchChannelFilter}
+                on:input={() => { showCount = pageSize; }}
+                placeholder="Channel..."
+                aria-label="Filter by channel"
+            />
+            {#if searchFilter || searchUserFilter || searchChannelFilter}
+                <button class="search-clear" on:click={clearSearch} title="Clear all filters">✕</button>
             {/if}
         </div>
     {/if}
@@ -865,18 +979,35 @@
                     {/if}
                 </div>
             {:else}
+                {#if hasMore}
+                    <button class="show-more-btn load-older" on:click={loadMore}>
+                        {#if !historyOverride && settings.historyDays > 0}
+                            Load older messages ({olderCount} beyond {settings.historyDays}-day window)
+                        {:else}
+                            Load older messages ({olderCount} remaining)
+                        {/if}
+                    </button>
+                {/if}
                 {#each messageRows as row (row.msg.asset_name + row.msg.time + row.msg.message)}
                     <div class="chat-msg" class:me={row.rootName.toUpperCase() === rootName().toUpperCase()}>
                         <span class="msg-time">{row.time}</span>
                         <span
                             class="msg-user"
                             class:me={row.rootName.toUpperCase() === rootName().toUpperCase()}
-                            on:click|preventDefault={(e) => openCtx(e, row.rootName)}
+                            on:click|preventDefault={(e) => openUserContext(e, row.rootName)}
+                            on:contextmenu|preventDefault={(e) => openUserContext(e, row.rootName)}
                             role="button"
                             tabindex="0"
-                            on:keydown={(e) => e.key === "Enter" && openCtx(e, row.rootName)}
+                            on:keydown={(e) => e.key === "Enter" && openUserContext(e, row.rootName)}
                         >[{row.rootName.toUpperCase()}]</span>
-                        <span class="msg-body">
+                        <span
+                            class="msg-body"
+                            role="button"
+                            tabindex="0"
+                            title="Open message details"
+                            on:click={(e) => openMsgDetail(e, row)}
+                            on:keydown={(e) => e.key === "Enter" && openMsgDetail(e, row)}
+                        >
                             {#if row.decoded?.is_short_message && row.decoded.text}
                                 <span class="msg-short-text">{row.decoded.text}</span>
                                 {#if row.decoded.warnings && row.decoded.warnings.length > 0}
@@ -890,12 +1021,6 @@
                         </span>
                     </div>
                 {/each}
-
-                {#if hasMore}
-                    <button class="show-more-btn" on:click={loadMore}>
-                        Show {pageSize} more ({filteredMessages.length - showCount} remaining)
-                    </button>
-                {/if}
             {/if}
 
             {#if messagesLoading && messages.length > 0}
@@ -921,6 +1046,8 @@
             on:viewDetails={handleViewDetails}
             on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); }}
             on:manageTags={() => openManageTags()}
+            on:filterByUser={(e) => { filterByUser(e.detail.rootName); }}
+            on:addTag={(e) => { handleAddTag(e.detail); }}
         />
     </div>
 
@@ -951,11 +1078,18 @@
         muted={ctxUser ? mutedUsers.includes(ctxUser) : false}
         blocked={ctxUser ? blockedUsers.includes(ctxUser) : false}
         resolvedAddress={ctxUser ? resolvedAddresses[ctxUser] || "" : ""}
-        on:viewDetails={(e) => { showUserDetails(e.detail.rootName); closeCtx(); }}
-        on:mute={(e) => { toggleMute(e.detail.rootName); closeCtx(); }}
-        on:block={(e) => { toggleBlock(e.detail.rootName); closeCtx(); }}
-        on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); closeCtx(); }}
-        on:manageTags={(e) => { openManageTags(); closeCtx(); }}
+        channelAsset={ctxParticipant?.assetName || ""}
+        lastSeen={ctxParticipant?.lastSeen || 0}
+        messageCount={ctxParticipant?.messageCount || 0}
+        isSelf={ctxIsSelf}
+        on:viewDetails={(e) => { handleViewDetails(e); closeUserContext(); }}
+        on:mute={(e) => { handleMute(e); closeUserContext(); }}
+        on:block={(e) => { handleBlock(e); closeUserContext(); }}
+        on:blockAndUnsub={(e) => { blockAndUnsubscribe(e.detail.rootName); closeUserContext(); }}
+        on:manageTags={() => { openManageTags(); closeUserContext(); }}
+        on:filterByUser={(e) => { filterByUser(e.detail.rootName); closeUserContext(); }}
+        on:addTag={(e) => { handleAddTag(e.detail); closeUserContext(); }}
+        on:close={closeUserContext}
     />
 
     <WalletUnlockModal
@@ -969,6 +1103,78 @@
         on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; unlockCallback = null; }}
         on:confirm={doUnlockAndRetry}
     />
+
+    {#if msgDetail}
+        <div class="msg-detail-overlay" on:click={closeMsgDetail} on:keydown={(e) => e.key === "Escape" && closeMsgDetail()} role="dialog" aria-modal="true" tabindex="-1" transition:fade={{ duration: 80 }}>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div class="msg-detail-panel" on:click|stopPropagation on:keydown|stopPropagation role="document">
+                <div class="msg-detail-header">
+                    <span class="msg-detail-title">MESSAGE DETAILS</span>
+                    <button class="msg-detail-close" on:click={closeMsgDetail}>&times;</button>
+                </div>
+                <div class="msg-detail-body">
+                    <div class="msg-detail-row">
+                        <span class="msg-detail-label">TEXT</span>
+                        <span class="msg-detail-val">{msgDetail.decoded?.is_short_message && msgDetail.decoded.text ? msgDetail.decoded.text : "(not decoded)"}</span>
+                        {#if msgDetail.decoded?.is_short_message && msgDetail.decoded.text}
+                            <button class="msg-detail-copy" on:click={() => copyText(msgDetail.decoded.text)} title="Copy text">Copy</button>
+                        {/if}
+                    </div>
+                    <div class="msg-detail-row">
+                        <span class="msg-detail-label">RAW HEX</span>
+                        <span class="msg-detail-val mono">{msgDetail.msg.message}</span>
+                        <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.message)} title="Copy hex">Copy</button>
+                    </div>
+                    <div class="msg-detail-row">
+                        <span class="msg-detail-label">CHANNEL</span>
+                        <span class="msg-detail-val mono">{msgDetail.msg.asset_name}</span>
+                        <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.asset_name)} title="Copy channel">Copy</button>
+                        <button class="msg-detail-action" on:click={() => filterByChannel(msgDetail.msg.asset_name)} title="Filter by this channel">Filter</button>
+                    </div>
+                    <div class="msg-detail-row">
+                        <span class="msg-detail-label">SENDER</span>
+                        <span class="msg-detail-val">[{msgDetail.rootName.toUpperCase()}]</span>
+                        <button class="msg-detail-copy" on:click={() => copyText(msgDetail.rootName)} title="Copy sender">Copy</button>
+                        <button class="msg-detail-action" on:click={() => filterByUser(msgDetail.rootName)} title="Filter by this user">Filter</button>
+                    </div>
+                    {#if resolvedAddresses[msgDetail.rootName]}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">AUTHORITY</span>
+                            <span class="msg-detail-val mono">{resolvedAddresses[msgDetail.rootName]}</span>
+                            <button class="msg-detail-copy" on:click={() => copyText(resolvedAddresses[msgDetail.rootName])} title="Copy address">Copy</button>
+                        </div>
+                    {:else}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">AUTHORITY</span>
+                            <span class="msg-detail-val dim">Resolving...</span>
+                        </div>
+                    {/if}
+                    <div class="msg-detail-row">
+                        <span class="msg-detail-label">TIME</span>
+                        <span class="msg-detail-val">{msgDetail.time}</span>
+                    </div>
+                    {#if msgDetail.msg.block_height}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">BLOCK</span>
+                            <span class="msg-detail-val mono">{msgDetail.msg.block_height}</span>
+                        </div>
+                    {/if}
+                    {#if msgDetail.msg.expire_time}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">EXPIRES</span>
+                            <span class="msg-detail-val">{formatFullTime(msgDetail.msg.expire_time)}</span>
+                        </div>
+                    {/if}
+                    {#if msgDetail.msg.status}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">STATUS</span>
+                            <span class="msg-detail-val">{msgDetail.msg.status}</span>
+                        </div>
+                    {/if}
+                </div>
+            </div>
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -1307,6 +1513,8 @@
         border-color: var(--color-primary);
     }
     .search-input::placeholder { color: #444; }
+    .search-user { max-width: 7rem; }
+    .search-channel { max-width: 10rem; }
     .search-clear {
         background: none;
         border: none;
@@ -1333,5 +1541,127 @@
     }
     .show-more-btn:hover {
         background: rgba(0, 255, 65, 0.1);
+    }
+    .load-older {
+        border-color: rgba(0, 255, 65, 0.15);
+        margin-bottom: 0.3rem;
+    }
+
+    .msg-detail-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(4px);
+        padding: 0.5rem;
+    }
+    .msg-detail-panel {
+        width: 100%;
+        height: 100%;
+        background: rgba(10, 15, 12, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 8px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .msg-detail-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.85rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
+        background: rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
+    }
+    .msg-detail-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        letter-spacing: 1.2px;
+    }
+    .msg-detail-close {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+    }
+    .msg-detail-close:hover { color: #fff; }
+    .msg-detail-body {
+        padding: 0.6rem 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        overflow-y: auto;
+        flex: 1 1 0%;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
+    }
+    .msg-detail-body::-webkit-scrollbar { width: 6px; }
+    .msg-detail-body::-webkit-scrollbar-track { background: transparent; }
+    .msg-detail-body::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.35); border-radius: 3px; }
+    .msg-detail-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+        padding: 0.35rem 0.5rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 5px;
+    }
+    .msg-detail-label {
+        color: #555;
+        font-size: 0.5rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        min-width: 4.5rem;
+        flex-shrink: 0;
+        padding-top: 0.05rem;
+    }
+    .msg-detail-val {
+        color: #ccc;
+        font-size: 0.6rem;
+        line-height: 1.45;
+        flex: 1;
+        min-width: 0;
+        word-break: break-all;
+    }
+    .msg-detail-val.mono { font-family: var(--font-mono); }
+    .msg-detail-val.dim { color: #666; font-style: italic; }
+    .msg-detail-copy, .msg-detail-action {
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 4px;
+        color: var(--color-primary);
+        font-size: 0.45rem;
+        font-weight: 600;
+        padding: 0.12rem 0.3rem;
+        cursor: pointer;
+        flex-shrink: 0;
+        letter-spacing: 0.3px;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .msg-detail-copy:hover, .msg-detail-action:hover {
+        background: rgba(0, 255, 65, 0.15);
+    }
+    .msg-detail-action {
+        border-color: rgba(68, 136, 255, 0.2);
+        color: #6688cc;
+        background: rgba(68, 136, 255, 0.06);
+    }
+    .msg-detail-action:hover {
+        background: rgba(68, 136, 255, 0.15);
+    }
+    .chat-msg {
+        cursor: pointer;
     }
 </style>

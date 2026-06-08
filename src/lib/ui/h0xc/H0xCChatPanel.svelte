@@ -36,6 +36,7 @@
         discoveryEnabled: true,
         muteNotifications: false,
         discoveryScanLimit: 2000,
+        historyDays: 90,
     };
     let lastScanBlock = 0;
     let lastSeenMessageKey = "";
@@ -91,6 +92,7 @@
             discoveryEnabled: true,
             muteNotifications: false,
             discoveryScanLimit: 2000,
+            historyDays: 90,
         });
         if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
             settings.autoBlockTags = ["#SPAM"];

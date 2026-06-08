@@ -36,7 +36,6 @@
     function openContext(e, rootName) {
         e.preventDefault();
         e.stopPropagation();
-        if (isMe(rootName)) return;
         contextUser = rootName;
         contextX = e.clientX;
         contextY = e.clientY;
@@ -44,7 +43,8 @@
 
     /** @param {MouseEvent} e */
     function openContextClick(e, rootName) {
-        if (isMe(rootName)) return;
+        e.preventDefault();
+        e.stopPropagation();
         contextUser = rootName;
         contextX = e.clientX;
         contextY = e.clientY;
@@ -54,22 +54,29 @@
         contextUser = null;
     }
 
-    $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName) && !tagBlockedChannels.has(p.assetName));
-    $: recent = filteredParticipants.filter((p) => {
-        return (Date.now() - p.lastSeen) < 3600000;
-    });
-    $: older = filteredParticipants.filter((p) => {
-        return (Date.now() - p.lastSeen) >= 3600000;
-    });
-    $: sortedRecent = [...recent].sort((a, b) => a.rootName.localeCompare(b.rootName));
-    $: sortedOlder = [...older].sort((a, b) => a.rootName.localeCompare(b.rootName));
-
-    function handleWindowClick() {
-        if (contextUser) closeContext();
+    /**
+     * @param {number} lastSeen
+     * @returns {{ label: string, tier: number }}
+     */
+    function activityBucket(lastSeen) {
+        const age = Date.now() - lastSeen;
+        if (age < 0 || lastSeen === 0) return { label: "No activity", tier: 4 };
+        if (age < 3600000) return { label: "Active recently", tier: 0 };
+        if (age < 21600000) return { label: "Few hours ago", tier: 1 };
+        if (age < 604800000) return { label: "This week", tier: 2 };
+        if (age < 2592000000) return { label: "Older", tier: 3 };
+        return { label: "Long ago", tier: 4 };
     }
-</script>
 
-<svelte:window on:click={handleWindowClick} />
+    $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName) && !tagBlockedChannels.has(p.assetName));
+    $: sortedParticipants = [...filteredParticipants].sort((a, b) => {
+        const aBucket = activityBucket(a.lastSeen).tier;
+        const bBucket = activityBucket(b.lastSeen).tier;
+        if (aBucket !== bBucket) return aBucket - bBucket;
+        return a.rootName.localeCompare(b.rootName);
+    });
+    $: activeCount = sortedParticipants.filter((p) => activityBucket(p.lastSeen).tier === 0).length;
+</script>
 
 <div class="h0xc-user-list" transition:fade={{ duration: 100 }}>
     <div class="user-list-header">
@@ -80,48 +87,25 @@
         {#if filteredParticipants.length === 0}
             <div class="ul-empty">No participants discovered</div>
         {:else}
-            {#if sortedRecent.length > 0}
-                <div class="ul-section-label">RECENT</div>
-                {#each sortedRecent as p}
-                    <button
-                        class="ul-user"
-                        class:me={isMe(p.rootName)}
-                        class:muted={mutedUsers.includes(p.rootName)}
-                        on:click={(e) => openContextClick(e, p.rootName)}
-                        on:contextmenu={(e) => openContext(e, p.rootName)}
-                        title={`${p.assetName} — ${p.messageCount} msgs`}
-                    >
-                        <span class="ul-dot"></span>
-                        <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
-                        {#if mutedUsers.includes(p.rootName)}
-                            <span class="ul-badge muted">MUTED</span>
-                        {:else if blockedUsers.includes(p.rootName)}
-                            <span class="ul-badge blocked">BLOCKED</span>
-                        {/if}
-                    </button>
-                {/each}
-            {/if}
-            {#if sortedOlder.length > 0}
-                <div class="ul-section-label">EARLIER</div>
-                {#each sortedOlder as p}
-                    <button
-                        class="ul-user older"
-                        class:me={isMe(p.rootName)}
-                        class:muted={mutedUsers.includes(p.rootName)}
-                        on:click={(e) => openContextClick(e, p.rootName)}
-                        on:contextmenu={(e) => openContext(e, p.rootName)}
-                        title={`${p.assetName} — ${p.messageCount} msgs`}
-                    >
-                        <span class="ul-dot older"></span>
-                        <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
-                        {#if mutedUsers.includes(p.rootName)}
-                            <span class="ul-badge muted">MUTED</span>
-                        {:else if blockedUsers.includes(p.rootName)}
-                            <span class="ul-badge blocked">BLOCKED</span>
-                        {/if}
-                    </button>
-                {/each}
-            {/if}
+            {#each sortedParticipants as p}
+                {@const bucket = activityBucket(p.lastSeen)}
+                <button
+                    class="ul-user"
+                    class:me={isMe(p.rootName)}
+                    class:muted={mutedUsers.includes(p.rootName)}
+                    on:click={(e) => openContextClick(e, p.rootName)}
+                    on:contextmenu={(e) => openContext(e, p.rootName)}
+                    title={`${p.rootName.toUpperCase()} — ${p.messageCount} msgs — ${bucket.label}`}
+                >
+                    <span class="ul-dot dot-tier-{bucket.tier}"></span>
+                    <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
+                    {#if mutedUsers.includes(p.rootName)}
+                        <span class="ul-badge muted">M</span>
+                    {:else if blockedUsers.includes(p.rootName)}
+                        <span class="ul-badge blocked">B</span>
+                    {/if}
+                </button>
+            {/each}
         {/if}
     </div>
 
@@ -132,11 +116,20 @@
         muted={contextUser ? mutedUsers.includes(contextUser) : false}
         blocked={contextUser ? blockedUsers.includes(contextUser) : false}
         resolvedAddress={contextUser ? resolvedAddresses[contextUser] || "" : ""}
+        channelAsset={contextUser ? (participants.find((p) => p.rootName === contextUser)?.assetName || "") : ""}
+        lastSeen={contextUser ? (participants.find((p) => p.rootName === contextUser)?.lastSeen || 0) : 0}
+        messageCount={contextUser ? (participants.find((p) => p.rootName === contextUser)?.messageCount || 0) : 0}
+        isSelf={contextUser ? isMe(contextUser) : false}
         on:viewDetails={(e) => { dispatch("viewDetails", e.detail); closeContext(); }}
         on:mute={(e) => { dispatch("mute", e.detail); closeContext(); }}
         on:block={(e) => { dispatch("block", e.detail); closeContext(); }}
         on:blockAndUnsub={(e) => { dispatch("blockAndUnsub", e.detail); closeContext(); }}
         on:manageTags={(e) => { dispatch("manageTags", e.detail); closeContext(); }}
+        on:filterByUser={(e) => { dispatch("filterByUser", e.detail); closeContext(); }}
+        on:copyChannel={() => { closeContext(); }}
+        on:copyAddress={() => { closeContext(); }}
+        on:addTag={(e) => { dispatch("addTag", e.detail); closeContext(); }}
+        on:close={() => { closeContext(); }}
     />
 </div>
 
@@ -185,14 +178,6 @@
         text-align: center;
         padding: 1rem 0.5rem;
     }
-    .ul-section-label {
-        font-size: 0.45rem;
-        font-weight: 600;
-        color: #555;
-        letter-spacing: 0.5px;
-        padding: 0.2rem 0.5rem;
-        margin-top: 0.1rem;
-    }
     .ul-user {
         display: flex;
         align-items: center;
@@ -217,19 +202,37 @@
         text-decoration: line-through;
         opacity: 0.7;
     }
+    .ul-user.muted .ul-name {
+        color: #777;
+        text-decoration: line-through;
+        opacity: 0.7;
+    }
     .ul-dot {
-        width: 5px;
-        height: 5px;
+        width: 6px;
+        height: 6px;
         border-radius: 50%;
-        background: var(--color-primary);
         flex-shrink: 0;
+        transition: all 0.3s;
     }
-    .ul-dot.older {
-        opacity: 0.3;
+    .dot-tier-0 {
+        background: var(--color-primary);
+        box-shadow: 0 0 4px rgba(0, 255, 65, 0.5);
+    }
+    .dot-tier-1 {
+        background: #88cc44;
+        opacity: 0.7;
+    }
+    .dot-tier-2 {
+        background: #ccaa00;
+        opacity: 0.5;
+    }
+    .dot-tier-3 {
+        background: #886633;
+        opacity: 0.4;
+    }
+    .dot-tier-4 {
         background: #555;
-    }
-    .ul-user.older {
-        opacity: 0.6;
+        opacity: 0.3;
     }
     .ul-name {
         font-size: 0.52rem;
@@ -239,13 +242,17 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        flex: 1;
+        min-width: 0;
     }
     .ul-badge {
-        font-size: 0.36rem;
+        font-size: 0.38rem;
         font-weight: 700;
         letter-spacing: 0.5px;
-        padding: 0.05rem 0.2rem;
+        padding: 0.05rem 0.18rem;
         border-radius: 3px;
+        flex-shrink: 0;
+        line-height: 1;
     }
     .ul-badge.muted {
         color: #ffaa00;

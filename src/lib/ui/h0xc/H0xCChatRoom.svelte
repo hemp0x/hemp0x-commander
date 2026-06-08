@@ -64,6 +64,7 @@
     let composeBusy = false;
     let composeError = "";
     let searchFilter = "";
+    let searchOpen = false;
     let pageSize = 200;
     let showCount = pageSize;
     let tagBlockedChannels = new Set();
@@ -259,7 +260,7 @@
         if (toDecode.length === 0) return;
         const promises = toDecode.map(async (hex) => {
             try {
-                decodeCache[hex] = await core.invoke("short_message_decode", { hex });
+                decodeCache[hex] = await core.invoke("short_message_decode_built_in", { hex });
             } catch {
                 decodeCache[hex] = { is_short_message: false };
             } finally {
@@ -618,7 +619,7 @@
         composeBusy = true;
         composeError = "";
         try {
-            const channel = identity.endsWith("!") ? identity : `${identity}!`;
+            const channel = identity.replace(/!$/, "");
             const expiry = settings.messageExpiryDefault > 0
                 ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
                 : null;
@@ -772,11 +773,11 @@
                     ⇄
                 </button>
             {/if}
-            <button class="header-btn" on:click={refresh} disabled={messagesLoading} title="Refresh messages">
-                ↻
+            <button class="header-btn" on:click={() => { refresh(); discover(false, true); }} disabled={messagesLoading || discovering} title="Refresh messages & discover participants">
+                {discovering ? "..." : "↻"}
             </button>
-            <button class="header-btn" on:click={() => discover(false, true)} disabled={discovering || !settings.discoveryEnabled} title={settings.discoveryEnabled ? "Discover .H0XC participants" : "Discovery is disabled in settings"}>
-                {discovering ? "..." : "🔍"}
+            <button class="header-btn" class:active={searchOpen} on:click={() => { searchOpen = !searchOpen; if (!searchOpen) clearSearch(); }} title="Filter messages">
+                ⌕
             </button>
             <button class="header-btn" on:click={toggleSettings} title="Settings">
                 ⚙
@@ -819,19 +820,21 @@
         {/if}
     </div>
 
-    <div class="chat-search-bar">
-        <input
-            class="search-input"
-            type="text"
-            bind:value={searchFilter}
-            on:input={() => { showCount = pageSize; }}
-            placeholder="Filter messages..."
-            aria-label="Filter messages"
-        />
-        {#if searchFilter}
-            <button class="search-clear" on:click={clearSearch} title="Clear filter">✕</button>
-        {/if}
-    </div>
+    {#if searchOpen}
+        <div class="chat-search-bar" transition:fade={{ duration: 100 }}>
+            <input
+                class="search-input"
+                type="text"
+                bind:value={searchFilter}
+                on:input={() => { showCount = pageSize; }}
+                placeholder="Filter messages..."
+                aria-label="Filter messages"
+            />
+            {#if searchFilter}
+                <button class="search-clear" on:click={clearSearch} title="Clear filter">✕</button>
+            {/if}
+        </div>
+    {/if}
 
     {#if messagesWarn}
         <div class="chat-status warn">{messagesWarn}</div>
@@ -923,7 +926,6 @@
 
     <H0xCChatCompose
         bind:this={composeRef}
-        {identity}
         {isGuest}
         busy={composeBusy}
         error={composeError}
@@ -1040,6 +1042,7 @@
         color: var(--color-primary);
     }
     .header-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .header-btn.active { border-color: var(--color-primary); color: var(--color-primary); background: rgba(0, 255, 65, 0.08); }
     .header-btn.switch { font-size: 0.85rem; }
     .chat-status {
         font-size: 0.55rem;

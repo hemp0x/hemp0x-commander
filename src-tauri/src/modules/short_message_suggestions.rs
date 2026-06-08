@@ -1,5 +1,5 @@
 use super::short_message;
-use super::short_message_table_packs::active_pack;
+use super::short_message_table_packs::{active_pack, built_in_table_pack, ValidatedTablePack};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -47,6 +47,15 @@ fn emojis_cache_cell() -> &'static EmojiCache {
 
 fn current_suggester() -> Arc<Suggester> {
     let pack = active_pack();
+    current_suggester_for_pack(&pack)
+}
+
+fn built_in_suggester() -> Arc<Suggester> {
+    let pack = built_in_table_pack();
+    current_suggester_for_pack(&pack)
+}
+
+fn current_suggester_for_pack(pack: &ValidatedTablePack) -> Arc<Suggester> {
     let fingerprint = pack.fingerprint_sha256.clone();
     {
         let guard = suggester_cache_cell()
@@ -58,7 +67,7 @@ fn current_suggester() -> Arc<Suggester> {
             }
         }
     }
-    let built = Arc::new(build_suggester(&pack));
+    let built = Arc::new(build_suggester(pack));
     let mut guard = suggester_cache_cell()
         .lock()
         .expect("suggester cache poisoned");
@@ -68,6 +77,15 @@ fn current_suggester() -> Arc<Suggester> {
 
 fn current_emojis() -> Arc<Vec<String>> {
     let pack = active_pack();
+    current_emojis_for_pack(&pack)
+}
+
+fn built_in_emojis() -> Arc<Vec<String>> {
+    let pack = built_in_table_pack();
+    current_emojis_for_pack(&pack)
+}
+
+fn current_emojis_for_pack(pack: &ValidatedTablePack) -> Arc<Vec<String>> {
     let fingerprint = pack.fingerprint_sha256.clone();
     {
         let guard = emojis_cache_cell().lock().expect("emojis cache poisoned");
@@ -77,7 +95,7 @@ fn current_emojis() -> Arc<Vec<String>> {
             }
         }
     }
-    let built = Arc::new(build_emojis(&pack));
+    let built = Arc::new(build_emojis(pack));
     let mut guard = emojis_cache_cell().lock().expect("emojis cache poisoned");
     *guard = Some((fingerprint, Arc::clone(&built)));
     built
@@ -399,6 +417,15 @@ pub fn short_message_suggestions(
     context: Option<String>,
     preferred_dict: Option<u8>,
 ) -> Vec<String> {
+    suggestions_with_suggester(&current_suggester(), prefix, context, preferred_dict)
+}
+
+fn suggestions_with_suggester(
+    suggester: &Suggester,
+    prefix: String,
+    context: Option<String>,
+    preferred_dict: Option<u8>,
+) -> Vec<String> {
     if prefix.trim().is_empty() {
         return Vec::new();
     }
@@ -408,7 +435,6 @@ pub fn short_message_suggestions(
         return Vec::new();
     }
 
-    let suggester = current_suggester();
     let hint = domain_hint(&suggester, &context);
     let preferred_dict = preferred_dict.filter(|idx| (*idx as usize) < suggester.dict_count);
     let phrase_ids = if partial.is_empty() {
@@ -435,8 +461,22 @@ pub fn short_message_suggestions(
 }
 
 #[tauri::command]
+pub fn short_message_suggestions_built_in(
+    prefix: String,
+    context: Option<String>,
+    preferred_dict: Option<u8>,
+) -> Vec<String> {
+    suggestions_with_suggester(&built_in_suggester(), prefix, context, preferred_dict)
+}
+
+#[tauri::command]
 pub fn short_message_emojis() -> Vec<String> {
     current_emojis().as_ref().clone()
+}
+
+#[tauri::command]
+pub fn short_message_emojis_built_in() -> Vec<String> {
+    built_in_emojis().as_ref().clone()
 }
 
 #[tauri::command]
@@ -445,6 +485,17 @@ pub async fn short_message_prepare_active_table_pack() -> Result<(), String> {
         let _suggester = current_suggester();
         let _emojis = current_emojis();
         crate::modules::short_message::warm_runtime_cache();
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn short_message_prepare_built_in_table_pack() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _suggester = built_in_suggester();
+        let _emojis = built_in_emojis();
+        crate::modules::short_message::warm_built_in_runtime_cache();
     })
     .await
     .map_err(|e| e.to_string())

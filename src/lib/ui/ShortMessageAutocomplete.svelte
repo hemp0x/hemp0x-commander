@@ -11,6 +11,7 @@
     export let focused = false;
     /** @type {number|null} */
     export let preferredDict = null;
+    export let suggestionCommand = "short_message_suggestions";
 
     let open = false;
     let activeIndex = -1;
@@ -45,7 +46,7 @@
         }
         loading = true;
         try {
-            const result = await core.invoke("short_message_suggestions", {
+            const result = await core.invoke(suggestionCommand, {
                 prefix,
                 context: null,
                 preferredDict,
@@ -200,8 +201,8 @@
         position: absolute;
         left: 0;
         right: 0;
-        top: 100%;
-        margin-top: 4px;
+        bottom: 100%;
+        margin-bottom: 4px;
         background: rgba(10, 15, 12, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
         border-radius: 8px;

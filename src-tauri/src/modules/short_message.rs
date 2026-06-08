@@ -1,4 +1,6 @@
-use super::short_message_table_packs::{active_pack, fallback_alphabets, ValidatedTablePack};
+use super::short_message_table_packs::{
+    active_pack, built_in_table_pack, fallback_alphabets, ValidatedTablePack,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -87,6 +89,7 @@ pub(crate) struct ActiveRuntime {
 }
 
 static ACTIVE_RUNTIME: OnceLock<std::sync::Mutex<Option<Arc<ActiveRuntime>>>> = OnceLock::new();
+static BUILT_IN_RUNTIME: OnceLock<Arc<ActiveRuntime>> = OnceLock::new();
 
 fn runtime_cache_cell() -> &'static std::sync::Mutex<Option<Arc<ActiveRuntime>>> {
     ACTIVE_RUNTIME.get_or_init(|| std::sync::Mutex::new(None))
@@ -103,6 +106,12 @@ fn current_runtime() -> Arc<ActiveRuntime> {
         *guard = Some(Arc::new(view));
     }
     Arc::clone(guard.as_ref().expect("just set"))
+}
+
+fn built_in_runtime() -> Arc<ActiveRuntime> {
+    Arc::clone(
+        BUILT_IN_RUNTIME.get_or_init(|| Arc::new(runtime_view_for_pack(built_in_table_pack()))),
+    )
 }
 
 fn is_suffix_phrase(phrase: &str) -> bool {
@@ -158,8 +167,7 @@ fn build_dictionary_runtimes(pack: &ValidatedTablePack) -> Vec<DictionaryRuntime
         .collect()
 }
 
-fn active_runtime_view() -> ActiveRuntime {
-    let pack = active_pack();
+fn runtime_view_for_pack(pack: ValidatedTablePack) -> ActiveRuntime {
     let runtimes = build_dictionary_runtimes(&pack);
     let suffix_set: std::collections::HashSet<String> = pack.suffixes.iter().cloned().collect();
     let acronym_set: std::collections::HashSet<String> = pack.acronyms.iter().cloned().collect();
@@ -174,6 +182,10 @@ fn active_runtime_view() -> ActiveRuntime {
         pack_version: pack.version.clone(),
         pack_fingerprint: pack.fingerprint_sha256.clone(),
     }
+}
+
+fn active_runtime_view() -> ActiveRuntime {
+    runtime_view_for_pack(active_pack())
 }
 
 pub(crate) fn normalize_text_for_autocomplete(text: &str) -> String {
@@ -278,7 +290,7 @@ fn capitalize_word(word: &str) -> String {
     out
 }
 
-fn render_word(word: &str, sentence_start: bool) -> String {
+fn render_word_with_runtime(word: &str, sentence_start: bool, runtime: &ActiveRuntime) -> String {
     let lower = word.to_lowercase();
     if lower == "i" {
         "I".to_string()
@@ -288,7 +300,7 @@ fn render_word(word: &str, sentence_start: bool) -> String {
         format!("I{}", chars.as_str())
     } else if lower == "hemp0x" {
         lower
-    } else if current_runtime().acronym_set.contains(&lower) {
+    } else if runtime.acronym_set.contains(&lower) {
         lower.to_uppercase()
     } else if sentence_start {
         capitalize_word(&lower)
@@ -297,17 +309,22 @@ fn render_word(word: &str, sentence_start: bool) -> String {
     }
 }
 
-fn flush_word(word: &mut String, sentence_start: bool, out: &mut String) -> bool {
+fn flush_word_with_runtime(
+    word: &mut String,
+    sentence_start: bool,
+    out: &mut String,
+    runtime: &ActiveRuntime,
+) -> bool {
     if word.is_empty() {
         return sentence_start;
     }
 
-    out.push_str(&render_word(word, sentence_start));
+    out.push_str(&render_word_with_runtime(word, sentence_start, runtime));
     word.clear();
     false
 }
 
-fn restore_case(raw: &str) -> String {
+fn restore_case_with_runtime(raw: &str, runtime: &ActiveRuntime) -> String {
     if raw.is_empty() {
         return String::new();
     }
@@ -325,7 +342,7 @@ fn restore_case(raw: &str) -> String {
             continue;
         }
 
-        sentence_start = flush_word(&mut word, sentence_start, &mut out);
+        sentence_start = flush_word_with_runtime(&mut word, sentence_start, &mut out, runtime);
 
         out.push(ch);
         if is_sentence_boundary(ch) {
@@ -334,9 +351,14 @@ fn restore_case(raw: &str) -> String {
         prev_was_word = false;
     }
 
-    let _ = flush_word(&mut word, sentence_start, &mut out);
+    let _ = flush_word_with_runtime(&mut word, sentence_start, &mut out, runtime);
 
     out
+}
+
+fn restore_case(raw: &str) -> String {
+    let runtime = current_runtime();
+    restore_case_with_runtime(raw, &runtime)
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -877,9 +899,8 @@ fn mode_label(mode: u8) -> &'static str {
     }
 }
 
-fn select_candidate(text: &str) -> Option<Candidate> {
+fn select_candidate_with_runtime(text: &str, runtime: &ActiveRuntime) -> Option<Candidate> {
     let mut best: Option<Candidate> = None;
-    let runtime = current_runtime();
     let runtimes = runtime.runtimes.clone();
     let rev5 = alphabet_5bit_rev();
     let rev6 = alphabet_6bit_rev();
@@ -958,13 +979,17 @@ fn not_short_message() -> ShortMessageDecodeResult {
     }
 }
 
-fn decode_payload(header: u8, payload: &[u8]) -> Option<String> {
+fn decode_payload_with_runtime(
+    header: u8,
+    payload: &[u8],
+    runtime: &ActiveRuntime,
+) -> Option<String> {
     let mode = header & MODE_MASK;
     let dict_idx = (header >> DICT_SHIFT) as usize;
     let (a5, a6) = fallback_alphabets();
 
     match mode {
-        MODE_DICT => current_runtime()
+        MODE_DICT => runtime
             .runtimes
             .get(dict_idx)
             .and_then(|runtime| decode_dict(payload, runtime)),
@@ -981,7 +1006,10 @@ fn decode_payload(header: u8, payload: &[u8]) -> Option<String> {
     }
 }
 
-pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
+fn encode_with_runtime(
+    text: &str,
+    runtime: &ActiveRuntime,
+) -> Result<ShortMessageEncodeResult, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("Message is empty".to_string());
@@ -995,7 +1023,7 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
         return Err("Message is empty after normalization".to_string());
     }
 
-    let candidate = select_candidate(&normalized_text)
+    let candidate = select_candidate_with_runtime(&normalized_text, runtime)
         .ok_or_else(|| "Message too long for any encoding mode".to_string())?;
 
     if candidate.payload.len() > PAYLOAD_MAX {
@@ -1016,8 +1044,9 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
     frame[CRC_INDEX] = crc8(&frame[0..CRC_INDEX]);
 
     let hex = frame_hex(&frame);
-    let decoded_raw = decode_payload(frame[2], &candidate.payload).unwrap_or_default();
-    let decoded_preview = restore_case(&collapse(&decoded_raw));
+    let decoded_raw =
+        decode_payload_with_runtime(frame[2], &candidate.payload, runtime).unwrap_or_default();
+    let decoded_preview = restore_case_with_runtime(&collapse(&decoded_raw), runtime);
 
     Ok(ShortMessageEncodeResult {
         hex,
@@ -1028,7 +1057,6 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
         encoding_mode: mode_label(candidate.mode).to_string(),
         dictionary_index: (candidate.mode == MODE_DICT).then_some(candidate.dict_idx),
         dictionary_name: (candidate.mode == MODE_DICT).then(|| {
-            let runtime = current_runtime();
             runtime
                 .dict_names
                 .get(candidate.dict_idx as usize)
@@ -1046,11 +1074,25 @@ pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
     })
 }
 
+pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
+    let runtime = current_runtime();
+    encode_with_runtime(text, &runtime)
+}
+
+pub fn encode_built_in(text: &str) -> Result<ShortMessageEncodeResult, String> {
+    let runtime = built_in_runtime();
+    encode_with_runtime(text, &runtime)
+}
+
 pub(crate) fn warm_runtime_cache() {
     let _ = current_runtime();
 }
 
-pub fn decode(hex: &str) -> ShortMessageDecodeResult {
+pub(crate) fn warm_built_in_runtime_cache() {
+    let _ = built_in_runtime();
+}
+
+fn decode_with_runtime(hex: &str, runtime: &ActiveRuntime) -> ShortMessageDecodeResult {
     let trimmed = hex.trim();
     let trimmed = if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
         &trimmed[2..]
@@ -1101,17 +1143,27 @@ pub fn decode(hex: &str) -> ShortMessageDecodeResult {
     }
 
     let payload = &bytes[PAYLOAD_INDEX..PAYLOAD_INDEX + plen];
-    let raw = match decode_payload(header, payload) {
+    let raw = match decode_payload_with_runtime(header, payload, runtime) {
         Some(raw) => raw,
         None => return invalid_decode(Some(version), "Payload decode failed"),
     };
 
     ShortMessageDecodeResult {
         is_short_message: true,
-        text: Some(restore_case(&collapse(&raw))),
+        text: Some(restore_case_with_runtime(&collapse(&raw), runtime)),
         version: Some(version),
         warnings: vec![],
     }
+}
+
+pub fn decode(hex: &str) -> ShortMessageDecodeResult {
+    let runtime = current_runtime();
+    decode_with_runtime(hex, &runtime)
+}
+
+pub fn decode_built_in(hex: &str) -> ShortMessageDecodeResult {
+    let runtime = built_in_runtime();
+    decode_with_runtime(hex, &runtime)
 }
 
 #[tauri::command]
@@ -1120,8 +1172,18 @@ pub fn short_message_encode(text: String) -> Result<ShortMessageEncodeResult, St
 }
 
 #[tauri::command]
+pub fn short_message_encode_built_in(text: String) -> Result<ShortMessageEncodeResult, String> {
+    encode_built_in(&text)
+}
+
+#[tauri::command]
 pub fn short_message_decode(hex: String) -> ShortMessageDecodeResult {
     decode(&hex)
+}
+
+#[tauri::command]
+pub fn short_message_decode_built_in(hex: String) -> ShortMessageDecodeResult {
+    decode_built_in(&hex)
 }
 
 #[cfg(test)]

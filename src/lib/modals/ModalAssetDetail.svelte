@@ -4,6 +4,7 @@
     import { core } from "@tauri-apps/api";
     import "../../components.css";
     import { cidViewerTarget } from "../stores/contentLibrary.js";
+    import { isH0xCChannelAsset } from "../stores/h0xc.js";
     import AssetDetailDetailsTab from "../ui/asset-detail/AssetDetailDetailsTab.svelte";
     import AssetMessageCompose from "../ui/asset-messages/AssetMessageCompose.svelte";
     import AssetMessageInbox from "../ui/asset-messages/AssetMessageInbox.svelte";
@@ -34,6 +35,12 @@
      *   block_height?: string|number;
      *   status?: string;
      *   expire_time?: string|number|null;
+     *   txid?: string;
+     *   channel?: string;
+     *   authority_asset?: string;
+     *   authority_address?: string;
+     *   block_hash?: string;
+     *   sender_address?: string;
      * }} AssetMessage
      */
 
@@ -158,10 +165,18 @@
                 channels = [];
                 return;
             }
-            const [msgs, chans] = await Promise.all([
-                core.invoke("view_asset_messages"),
-                core.invoke("view_message_channels"),
-            ]);
+            const isH0xC = asset && isH0xCChannelAsset(asset.name);
+            let msgs;
+            if (isH0xC) {
+                try {
+                    msgs = await core.invoke("view_channel_messages", { channel: asset.name });
+                } catch {
+                    msgs = await core.invoke("view_asset_messages");
+                }
+            } else {
+                msgs = await core.invoke("view_asset_messages");
+            }
+            const chans = await core.invoke("view_message_channels");
             messages = msgs;
             channels = chans;
         } catch (err) {

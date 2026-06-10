@@ -5,7 +5,7 @@
     import H0xCUserContextMenu from "./H0xCUserContextMenu.svelte";
 
     /**
-     * @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number }} Participant
+     * @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number, joinedAt?: number }} Participant
      */
 
     /** @type {Participant[]} */
@@ -18,6 +18,8 @@
     export let tagBlockedChannels = new Set();
     /** @type {Record<string, string>} */
     export let resolvedAddresses = {};
+    export let hideStaleUsers = true;
+    export let staleUserDays = 90;
 
     const dispatch = createEventDispatcher();
 
@@ -68,7 +70,15 @@
         return { label: "Long ago", tier: 4 };
     }
 
-    $: filteredParticipants = participants.filter((p) => !blockedUsers.includes(p.rootName) && !tagBlockedChannels.has(p.assetName));
+    $: filteredParticipants = participants.filter((p) => {
+        if (blockedUsers.includes(p.rootName)) return false;
+        if (tagBlockedChannels.has(p.assetName)) return false;
+        if (hideStaleUsers && staleUserDays > 0 && p.lastSeen > 0) {
+            const age = Date.now() - p.lastSeen;
+            if (age > staleUserDays * 86400000) return false;
+        }
+        return true;
+    });
     $: sortedParticipants = [...filteredParticipants].sort((a, b) => {
         const aBucket = activityBucket(a.lastSeen).tier;
         const bBucket = activityBucket(b.lastSeen).tier;
@@ -118,6 +128,7 @@
         resolvedAddress={contextUser ? resolvedAddresses[contextUser] || "" : ""}
         channelAsset={contextUser ? (participants.find((p) => p.rootName === contextUser)?.assetName || "") : ""}
         lastSeen={contextUser ? (participants.find((p) => p.rootName === contextUser)?.lastSeen || 0) : 0}
+        joinedAt={contextUser ? (participants.find((p) => p.rootName === contextUser)?.joinedAt || 0) : 0}
         messageCount={contextUser ? (participants.find((p) => p.rootName === contextUser)?.messageCount || 0) : 0}
         isSelf={contextUser ? isMe(contextUser) : false}
         on:viewDetails={(e) => { dispatch("viewDetails", e.detail); closeContext(); }}
@@ -196,11 +207,6 @@
     .ul-user.me .ul-name {
         color: var(--color-primary);
         font-weight: 700;
-    }
-    .ul-user.muted .ul-name {
-        color: #777;
-        text-decoration: line-through;
-        opacity: 0.7;
     }
     .ul-user.muted .ul-name {
         color: #777;

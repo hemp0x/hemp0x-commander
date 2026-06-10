@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod content_library;
 pub mod files;
+pub mod h0xc_control_message;
 pub mod ipfs_cache;
 pub mod ipfs_publish;
 pub mod journal;

@@ -10,6 +10,12 @@
      *   block_height?: string|number;
      *   status?: string;
      *   expire_time?: string|number|null;
+     *   txid?: string;
+     *   channel?: string;
+     *   authority_asset?: string;
+     *   authority_address?: string;
+     *   block_hash?: string;
+     *   sender_address?: string;
      * }} AssetMessage
      * @typedef {{
      *   is_short_message?: boolean;
@@ -308,7 +314,7 @@
     .action-btn {
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 0.35rem 0.65rem;
         color: #aaa;
         font-size: 0.65rem;

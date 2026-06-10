@@ -129,6 +129,8 @@ pub struct BanEntry {
 pub struct NetworkInfo {
   pub version: u64,
   pub subversion: String,
+  pub build: String,
+  pub build_commit: String,
   pub protocolversion: u64,
   pub connections: u64,
   pub localaddresses: Vec<String>,
@@ -469,6 +471,12 @@ pub struct AssetMessageEntry {
   pub status: String,
   pub expire_time: Option<String>,
   pub expire_utc_time: Option<i64>,
+  pub txid: Option<String>,
+  pub channel: Option<String>,
+  pub authority_asset: Option<String>,
+  pub authority_address: Option<String>,
+  pub block_hash: Option<String>,
+  pub sender_address: Option<String>,
 }
 
 #[derive(Serialize)]

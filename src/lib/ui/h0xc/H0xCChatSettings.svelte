@@ -3,15 +3,19 @@
     import { fade } from "svelte/transition";
 
     export let show = false;
-    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number }} */
     export let settings = {
-        messageExpiryDefault: 0,
+        messageExpiryDefault: 30,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
         discoveryEnabled: true,
         muteNotifications: false,
         discoveryScanLimit: 2000,
+        historyDays: 90,
+        showExpired: false,
+        hideStaleUsers: true,
+        staleUserDays: 90,
     };
     /** @type {string[]} */
     export let blockedUsers = [];
@@ -54,13 +58,17 @@
 
     function resetDefaults() {
         draft = {
-            messageExpiryDefault: 0,
+            messageExpiryDefault: 30,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
             discoveryEnabled: true,
             muteNotifications: false,
             discoveryScanLimit: 2000,
+            historyDays: 90,
+            showExpired: false,
+            hideStaleUsers: true,
+            staleUserDays: 90,
         };
         draftTagsText = "#SPAM";
     }
@@ -108,6 +116,32 @@
                         <button class="sett-expiry-btn" class:active={draft.historyDays === 0} on:click={() => { draft.historyDays = 0; draft = draft; }}>All</button>
                     </div>
                     <p class="sett-hint">How far back to show messages in the chat feed. Older messages are filtered in the UI only — nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
+                </div>
+
+                <div class="sett-section">
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" bind:checked={draft.showExpired} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">SHOW EXPIRED MESSAGES</span>
+                    </label>
+                    <p class="sett-hint">Expired messages remain on-chain but are hidden by default. Enable this to see them in the chat feed.</p>
+                </div>
+
+                <div class="sett-section">
+                    <span class="sett-label">STALE USER FILTER</span>
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" bind:checked={draft.hideStaleUsers} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">HIDE STALE USERS</span>
+                    </label>
+                    {#if draft.hideStaleUsers}
+                        <div class="sett-expiry-row" style="margin-top: 0.3rem;">
+                            <button class="sett-expiry-btn" class:active={draft.staleUserDays === 30} on:click={() => { draft.staleUserDays = 30; draft = draft; }}>30 Days</button>
+                            <button class="sett-expiry-btn" class:active={draft.staleUserDays === 90} on:click={() => { draft.staleUserDays = 90; draft = draft; }}>90 Days</button>
+                            <button class="sett-expiry-btn" class:active={draft.staleUserDays === 180} on:click={() => { draft.staleUserDays = 180; draft = draft; }}>180 Days</button>
+                        </div>
+                    {/if}
+                    <p class="sett-hint">Users with no messages for this period are hidden from the user list. They reappear when they send again. No data is deleted.</p>
                 </div>
 
                 <div class="sett-section">
@@ -315,21 +349,21 @@
         display: flex;
         align-items: flex-start;
         gap: 0.35rem;
-        background: rgba(68, 136, 255, 0.05);
-        border: 1px solid rgba(68, 136, 255, 0.15);
+        background: rgba(0, 255, 65, 0.04);
+        border: 1px solid rgba(0, 255, 65, 0.12);
         border-radius: 5px;
         padding: 0.4rem 0.55rem;
         margin-top: 0.15rem;
     }
     .sett-discovery-note-icon {
-        color: #4488ff;
+        color: var(--color-primary);
         font-size: 0.6rem;
         flex-shrink: 0;
         margin-top: 0.05rem;
     }
     .sett-discovery-note span {
         font-size: 0.55rem;
-        color: #8899bb;
+        color: #888;
         line-height: 1.4;
     }
     .sett-discovery-state {
@@ -500,7 +534,7 @@
         background: rgba(0, 255, 65, 0.06);
         color: var(--color-primary);
         font-family: var(--font-mono);
-        font-size: 0.48rem;
+        font-size: 0.52rem;
         cursor: pointer;
         padding: 0.18rem 0.35rem;
         text-transform: uppercase;

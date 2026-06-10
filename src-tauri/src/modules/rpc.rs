@@ -248,6 +248,8 @@ const ALLOWED_METHODS: &[&str] = &[
     "estimatesmartfee",
     "viewallmessages",
     "viewallmessagechannels",
+    "viewchannelmessages",
+    "getmessagetxid",
 ];
 
 #[tauri::command]

@@ -12,7 +12,7 @@ use crate::modules::rpc::RpcContext;
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
 use crate::modules::files::load_app_settings_impl;
 
-const REQUIRED_CORE_NEXT_COMMIT: &str = "192c6b5ce";
+const REQUIRED_CORE_NEXT_COMMIT: &str = "fbbf578d6";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.7.0.0";
 const DEFAULT_RPC_PORT: u16 = 42068;
 const DEFAULT_P2P_PORT: u16 = 42069;
@@ -387,6 +387,8 @@ pub struct RunningDaemonIdentity {
     pub rpc_authenticated: bool,
     pub base_version: Option<String>,
     pub subversion: Option<String>,
+    pub build: Option<String>,
+    pub build_commit: Option<String>,
     pub protocol_version: Option<u64>,
     pub numeric_version: Option<u64>,
     pub is_required_core_next: bool,
@@ -405,6 +407,8 @@ pub struct CoreNextCapabilities {
     pub qualifiers: bool,
     pub rewards: bool,
     pub snapshots: bool,
+    pub has_view_channel_messages: bool,
+    pub has_message_txid_lookup: bool,
     pub detected_rpc_names: Vec<String>,
 }
 
@@ -418,6 +422,8 @@ impl Default for CoreNextCapabilities {
             qualifiers: false,
             rewards: false,
             snapshots: false,
+            has_view_channel_messages: false,
+            has_message_txid_lookup: false,
             detected_rpc_names: Vec::new(),
         }
     }
@@ -449,6 +455,9 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
     let snapshots = lower.contains("requestsnapshot")
         && lower.contains("getsnapshot");
 
+    let has_view_channel_messages = lower.contains("viewchannelmessages");
+    let has_message_txid_lookup = lower.contains("getmessagetxid");
+
     let rpc_names: Vec<String> = lower
         .lines()
         .filter(|line| {
@@ -458,6 +467,8 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
                 || line.contains("getmessaginginfo")
                 || line.contains("viewallmessages")
                 || line.contains("viewallmessagechannels")
+                || line.contains("viewchannelmessages")
+                || line.contains("getmessagetxid")
                 || line.contains("listrestrictedassets")
                 || line.contains("issuerestrictedasset")
                 || line.contains("listqualifiers")
@@ -480,6 +491,8 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
         qualifiers,
         rewards,
         snapshots,
+        has_view_channel_messages,
+        has_message_txid_lookup,
         detected_rpc_names: rpc_names,
     }
 }
@@ -511,6 +524,8 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 rpc_authenticated: false,
                 base_version: None,
                 subversion: None,
+                build: None,
+                build_commit: None,
                 protocol_version: None,
                 numeric_version: None,
                 is_required_core_next: false,
@@ -528,12 +543,27 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 .as_str()
                 .unwrap_or("")
                 .to_string();
+            let build_str = data["build"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let build_commit_str = data["build_commit"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             let numeric_version = data["version"].as_u64();
 
             let base_version = numeric_version.map(parse_numeric_version);
             let is_required = base_version.as_deref() == Some(REQUIRED_CORE_BASE_VERSION);
-            let commit_match = subver_str.contains(REQUIRED_CORE_NEXT_COMMIT);
-            let commit_available = parse_commit_hash(&subver_str).is_some();
+
+            let effective_commit = if !build_commit_str.is_empty() {
+                build_commit_str.clone()
+            } else {
+                subver_str.clone()
+            };
+            let commit_match = effective_commit.contains(REQUIRED_CORE_NEXT_COMMIT);
+            let commit_available = !build_commit_str.is_empty()
+                || parse_commit_hash(&subver_str).is_some();
             let is_exact = is_required && numeric_version.is_some() && commit_match;
 
             let capabilities = probe_capabilities(&ctx);
@@ -542,9 +572,9 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 "A verified Core Next daemon is already running.".to_string()
             } else if allow_override {
                 format!(
-                    "A daemon is running (non-bundled override active). Version: {} / Subversion: {}",
+                    "A daemon is running (non-bundled override active). Version: {} / Build: {}",
                     base_version.as_deref().unwrap_or("?"),
-                    subver_str
+                    if build_str.is_empty() { subver_str.as_str() } else { build_str.as_str() }
                 )
             } else if is_required && commit_available {
                 format!(
@@ -570,6 +600,8 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
                 rpc_authenticated: true,
                 base_version,
                 subversion: if subver_str.is_empty() { None } else { Some(subver_str) },
+                build: if build_str.is_empty() { None } else { Some(build_str) },
+                build_commit: if build_commit_str.is_empty() { None } else { Some(build_commit_str) },
                 protocol_version: data["protocolversion"].as_u64(),
                 numeric_version,
                 is_required_core_next: is_exact || (allow_override && is_required),
@@ -583,6 +615,8 @@ pub fn identify_running_daemon(allow_non_bundled: Option<bool>) -> RunningDaemon
             rpc_authenticated: false,
             base_version: None,
             subversion: None,
+            build: None,
+            build_commit: None,
             protocol_version: None,
             numeric_version: None,
             is_required_core_next: false,
@@ -946,7 +980,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_matches_required_hash() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-fbbf578d6";
         let result = parse_commit_hash(raw);
         assert_eq!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }
@@ -960,7 +994,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_does_not_match_required_hash_as_substring() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-00192c6b5ceff";
+        let raw = "Hemp0x Core Daemon version v4.7.0.0-00fbbf578d6ff";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }

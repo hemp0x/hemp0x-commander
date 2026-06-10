@@ -1370,7 +1370,7 @@
     .compose-preview {
         background: rgba(0, 0, 0, 0.4);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 0.5rem;
     }
     .preview-label { font-size: 0.62rem; color: #6f766f; letter-spacing: 1px; margin-bottom: 0.35rem; }
@@ -1426,7 +1426,7 @@
         flex: 1;
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 0.6rem;
         color: #aaa;
         font-size: 0.65rem;

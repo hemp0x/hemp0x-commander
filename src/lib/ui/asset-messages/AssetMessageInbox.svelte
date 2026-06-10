@@ -4,6 +4,7 @@
     import { open } from "@tauri-apps/plugin-dialog";
     import TablePackPanel from "./TablePackPanel.svelte";
     import AssetMessageDetail from "./AssetMessageDetail.svelte";
+    import CommanderLoader from "../CommanderLoader.svelte";
 
     /**
      * @typedef {{
@@ -23,6 +24,12 @@
      *   block_height?: string|number;
      *   status?: string;
      *   expire_time?: string|number|null;
+     *   txid?: string;
+     *   channel?: string;
+     *   authority_asset?: string;
+     *   authority_address?: string;
+     *   block_hash?: string;
+     *   sender_address?: string;
      * }} AssetMessage
      * @typedef {{
      *   is_short_message?: boolean;
@@ -787,14 +794,20 @@
     {/if}
 
     {#if messagesLoading}
-        <div class="messages-loading">Loading messages...</div>
+        <div class="messages-loading">
+            <CommanderLoader label="Loading messages" compact={true} />
+        </div>
     {:else if displayedMessages.length === 0}
         <div class="messages-empty">
-            {#if messageExplorerMode}
-                No messages across all channels.
-            {:else}
-                No messages for this asset channel.
-            {/if}
+            <div class="empty-big">◈</div>
+            <div class="empty-line">
+                {#if messageExplorerMode}
+                    No messages across all channels.
+                {:else}
+                    No messages for this asset channel.
+                {/if}
+            </div>
+            <div class="empty-line sub">Messages load from Core message RPCs. Subscribe to the channel to receive updates.</div>
         </div>
     {:else}
         <div class="messages-list">
@@ -919,9 +932,9 @@
         background: rgba(0, 255, 65, 0.04);
         border: 1px solid rgba(0, 255, 65, 0.15);
         border-radius: 5px;
-        padding: 0.25rem 0.5rem;
+        padding: 0.35rem 0.55rem;
         color: #8cff9f;
-        font-size: 0.55rem;
+        font-size: 0.58rem;
         font-weight: 600;
         letter-spacing: 0.5px;
         cursor: pointer;
@@ -1107,12 +1120,34 @@
         color: #ff5555;
         border-color: rgba(255, 85, 85, 0.3);
     }
-    .messages-loading,
-    .messages-empty {
-        font-size: 0.65rem;
-        color: #555;
-        text-align: center;
+    .messages-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
         padding: 1.5rem 0;
+    }
+    .messages-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 1rem;
+        gap: 0.3rem;
+        text-align: center;
+    }
+    .empty-big {
+        font-size: 1.5rem;
+        color: var(--color-primary);
+        opacity: 0.3;
+        margin-bottom: 0.3rem;
+    }
+    .empty-line {
+        color: #777;
+        font-size: 0.68rem;
+    }
+    .empty-line.sub {
+        font-size: 0.6rem;
+        color: #555;
     }
     .messages-list {
         display: flex;

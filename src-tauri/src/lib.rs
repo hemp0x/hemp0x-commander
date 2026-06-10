@@ -5,6 +5,7 @@ pub mod modules;
 use modules::commands;
 use modules::content_library;
 use modules::files;
+use modules::h0xc_control_message;
 use modules::ipfs_cache;
 use modules::ipfs_publish;
 use modules::journal;
@@ -111,6 +112,7 @@ pub fn run() {
             // Messaging Commands
             commands::get_messaging_info,
             commands::view_asset_messages,
+            commands::view_channel_messages,
             commands::view_message_channels,
             commands::subscribe_to_channel,
             commands::unsubscribe_from_channel,
@@ -119,6 +121,9 @@ pub fn run() {
             // H0XC Channel Authority Commands
             commands::h0xc_resolve_authority_addresses,
             commands::h0xc_filter_tagged_channels,
+            // H0XC Control Frame Commands
+            h0xc_control_message::h0xc_control_encode_delete,
+            h0xc_control_message::h0xc_control_decode,
             // IPFS Commands
             commands::ipfs_validate,
             commands::ipfs_gateway_url,

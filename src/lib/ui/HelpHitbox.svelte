@@ -2,11 +2,18 @@
     import { fly, fade } from "svelte/transition";
 
     export let title = "";
+    export let right = false;
     let open = false;
+    let btnEl = null;
+    let popLeft = 0;
+    let popTop = 0;
 
     function toggle(e) {
         e.stopPropagation();
         open = !open;
+        if (open) {
+            positionPopover();
+        }
     }
 
     function close() {
@@ -17,32 +24,76 @@
     function handleKeydown(e) {
         if (e.key === "Escape") close();
     }
+
+    function positionPopover() {
+        if (!btnEl || typeof window === "undefined") return;
+        const rect = btnEl.getBoundingClientRect();
+        const pad = 8;
+        const width = 280;
+        const maxHeight = Math.min(420, window.innerHeight * 0.7);
+        const gap = 48;
+        let left = rect.left;
+        let top = rect.bottom + gap;
+        if (right) {
+            left = rect.right - width - 24;
+        }
+        if (left + width > window.innerWidth - pad) {
+            left = window.innerWidth - width - pad;
+        }
+        if (left < pad) {
+            left = pad;
+        }
+        if (top + maxHeight > window.innerHeight - pad) {
+            top = Math.max(pad, rect.top - maxHeight - gap);
+        }
+        if (top < 120) {
+            top = 120;
+        }
+        popLeft = left;
+        popTop = top;
+    }
+
+    function portal(node) {
+        if (typeof document !== "undefined" && node.parentNode !== document.body) {
+            document.body.appendChild(node);
+        }
+        return {
+            destroy() {
+                if (node.parentNode === document.body) {
+                    document.body.removeChild(node);
+                }
+            },
+        };
+    }
 </script>
 
 <svelte:window on:click={open ? close : undefined} on:keydown={handleKeydown} />
 
 <div class="help-hitbox">
-    <button class="help-btn" on:click={toggle} type="button" aria-label={title || "Help"}>
+    <button class="help-btn" bind:this={btnEl} on:click={toggle} type="button" aria-label={title || "Help"}>
         ?
     </button>
-
-    {#if open}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div
-            class="help-popover"
-            transition:fly={{ y: 4, duration: 150 }}
-            on:click|stopPropagation
-        >
-            {#if title}
-                <div class="help-title">{title}</div>
-            {/if}
-            <div class="help-body">
-                <slot />
-            </div>
-        </div>
-    {/if}
 </div>
+
+{#if open}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div
+        class="help-popover"
+        class:right={right}
+        use:portal
+        transition:fly={{ y: 4, duration: 150 }}
+        on:click|stopPropagation
+        style="left: {popLeft}px; top: {popTop}px;"
+    >
+        {#if title}
+            <div class="help-title">{title}</div>
+        {/if}
+        <div class="help-body">
+            <slot />
+        </div>
+    </div>
+{/if}
 
 <style>
     .help-hitbox {
@@ -78,12 +129,11 @@
     }
 
     .help-popover {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        margin-top: 6px;
+        position: fixed;
         width: 280px;
         max-width: 90vw;
+        max-height: 70vh;
+        overflow-y: auto;
         background: rgba(8, 14, 10, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
         border-radius: 8px;
@@ -92,8 +142,13 @@
             0 0 40px rgba(0, 0, 0, 0.7),
             0 0 20px rgba(0, 255, 65, 0.08);
         backdrop-filter: blur(6px);
-        z-index: 40;
+        z-index: 1000;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 255, 65, 0.35) transparent;
     }
+    .help-popover::-webkit-scrollbar { width: 5px; }
+    .help-popover::-webkit-scrollbar-track { background: transparent; }
+    .help-popover::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.35); border-radius: 3px; }
 
     .help-title {
         font-size: 0.7rem;

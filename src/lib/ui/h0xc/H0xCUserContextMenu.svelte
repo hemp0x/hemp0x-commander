@@ -10,6 +10,7 @@
     export let resolvedAddress = "";
     export let channelAsset = "";
     export let lastSeen = 0;
+    export let joinedAt = 0;
     export let messageCount = 0;
     export let isSelf = false;
 
@@ -127,6 +128,10 @@
             <div class="ctx-info-row">
                 <span class="ctx-info-label">Messages</span>
                 <span class="ctx-info-val">{messageCount}</span>
+            </div>
+            <div class="ctx-info-row">
+                <span class="ctx-info-label">Joined</span>
+                <span class="ctx-info-val">{joinedAt ? new Date(joinedAt).toLocaleDateString() : "Unknown"}</span>
             </div>
             {#if channelAsset}
                 <div class="ctx-info-row">
@@ -290,7 +295,7 @@
         min-width: 0;
         padding: 0.2rem 0.35rem;
         background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 65, 0.2);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 4px;
         color: #ddd;
         font-size: 0.52rem;

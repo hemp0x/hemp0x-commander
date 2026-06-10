@@ -366,7 +366,7 @@
         left: 0;
         margin-bottom: 4px;
         background: rgba(10, 15, 12, 0.98);
-        border: 1px solid rgba(255, 255, 65, 0.2);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 6px;
         padding: 0.3rem;
         display: grid;
@@ -390,7 +390,7 @@
         font-size: 0.8rem;
         transition: all 0.1s;
     }
-    .emoji-btn:hover { background: rgba(255, 255, 65, 0.1); border-color: rgba(255, 255, 65, 0.2); }
+    .emoji-btn:hover { background: rgba(0, 255, 65, 0.1); border-color: rgba(0, 255, 65, 0.2); }
     .emoji-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
     .dict-chip {

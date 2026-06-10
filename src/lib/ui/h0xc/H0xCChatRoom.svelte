@@ -7,8 +7,16 @@
     import H0xCChatSettings from "./H0xCChatSettings.svelte";
     import H0xCUserContextMenu from "./H0xCUserContextMenu.svelte";
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
+    import HelpHitbox from "../HelpHitbox.svelte";
     import { addNotification } from "../../stores/notifications.js";
     import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
+    import {
+        interpretControlMessages,
+        isMessageHidden,
+        isControlCommandMessage,
+        buildDeleteCommandHex,
+        canonicalMessageChannel,
+    } from "../../stores/h0xc-control.js";
 
     const dispatch = createEventDispatcher();
 
@@ -20,11 +28,26 @@
      *   block_height?: string|number;
      *   status?: string;
      *   expire_time?: string|number|null;
+     *   expire_utc_time?: string|number|null;
+     *   txid?: string;
+     *   channel?: string;
+     *   authority_asset?: string;
+     *   authority_address?: string;
+     *   block_hash?: string;
+     *   sender_address?: string;
      * }} AssetMessage
-     * @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number }} Participant
+     * @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number, joinedAt?: number }} Participant
      * @typedef {{ is_short_message?: boolean, text?: string, warnings?: string[] }} DecodeResult
      */
 
+    /**
+     * H0XC identity is channel/authority based, not a permanent person account.
+     * The selected identity is the channel asset (e.g., ROOT/H0XC) that this
+     * user broadcasts under. If the authority asset is transferred to another
+     * wallet, the new holder can speak under the same channel name. If the
+     * authority is burned or no spendable authority remains, no new messages
+     * can be sent from that channel. Old messages remain historical records.
+     */
     export let identity = "";
     export let isGuest = false;
     export let onSwitchIdentity = null;
@@ -34,7 +57,7 @@
     export let participants = [];
     export let mutedUsers = [];
     export let blockedUsers = [];
-    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number }} */
     export let settings = {};
     export let lastScanBlock = 0;
     export let lastSeenMessageKey = "";
@@ -45,11 +68,17 @@
     let messagesLoading = false;
     let messagesError = "";
     let messagesWarn = "";
+    let showRefreshIndicator = false;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let refreshIndicatorTimer = null;
 
     /** @type {Record<string, DecodeResult>} */
     let decodeCache = {};
     /** @type {Set<string>} */
     let decodePending = new Set();
+
+    /** @type {Set<string>} */
+    let hiddenTxids = new Set();
 
     let discovering = false;
     let discoveryError = "";
@@ -133,8 +162,47 @@
     $: ctxParticipant = ctxUser ? participants.find((p) => p.rootName === ctxUser) : null;
     $: ctxIsSelf = ctxUser ? ctxUser.toUpperCase() === rootName().toUpperCase() : false;
 
+    $: {
+        if (messagesLoading && messages.length > 0 && !showRefreshIndicator) {
+            if (refreshIndicatorTimer) clearTimeout(refreshIndicatorTimer);
+            refreshIndicatorTimer = setTimeout(() => {
+                showRefreshIndicator = true;
+            }, 600);
+        } else if (!messagesLoading) {
+            showRefreshIndicator = false;
+            if (refreshIndicatorTimer) {
+                clearTimeout(refreshIndicatorTimer);
+                refreshIndicatorTimer = null;
+            }
+        }
+    }
+
     function rootName() {
         return deriveRootNameFn(identity);
+    }
+
+    function uniqueH0xCChannels() {
+        const seen = new Set();
+        const result = [];
+        const add = (ch) => {
+            const norm = ch.replace(/!$/, "").trim();
+            if (!norm || seen.has(norm.toUpperCase())) return;
+            seen.add(norm.toUpperCase());
+            result.push(norm);
+        };
+        if (identity) add(identity);
+        for (const p of participants) {
+            if (p.assetName) add(p.assetName);
+        }
+        return result;
+    }
+
+    async function loadChannelMessages(channel) {
+        try {
+            return await core.invoke("view_channel_messages", { channel });
+        } catch {
+            return null;
+        }
     }
 
     async function loadMessages() {
@@ -149,12 +217,47 @@
                 messagesError = "Messaging is not enabled on this node.";
                 return;
             }
-            const msgs = await core.invoke("view_asset_messages");
+            const channels = uniqueH0xCChannels();
+            let allMsgs = [];
+            let anyChannelLoaded = false;
+            if (channels.length > 0) {
+                const MAX_CONCURRENT = 4;
+                for (let i = 0; i < channels.length; i += MAX_CONCURRENT) {
+                    const batch = channels.slice(i, i + MAX_CONCURRENT);
+                    const results = await Promise.allSettled(
+                        batch.map((ch) => loadChannelMessages(ch))
+                    );
+                    for (const r of results) {
+                        if (r.status === "fulfilled" && Array.isArray(r.value)) {
+                            allMsgs.push(...r.value);
+                            anyChannelLoaded = true;
+                        }
+                    }
+                }
+            }
+            if (!anyChannelLoaded) {
+                try {
+                    allMsgs = await core.invoke("view_asset_messages");
+                } catch {
+                    allMsgs = [];
+                }
+            }
             const prevMessages = messages;
-            messages = (Array.isArray(msgs) ? msgs : [])
+            messages = (Array.isArray(allMsgs) ? allMsgs : [])
                 .filter((/** @type {AssetMessage} */ m) => isH0xCAsset(m.asset_name));
+            const seenKeys = new Set();
+            messages = messages.filter((/** @type {AssetMessage} */ m) => {
+                const key = m.txid
+                    ? `txid:${m.txid}`
+                    : `${m.asset_name}|${m.message}|${m.time}|${m.block_height}`;
+                if (seenKeys.has(key)) return false;
+                seenKeys.add(key);
+                return true;
+            });
             updateParticipantsFromMessages(messages);
-            decodeVisible(messages);
+            await decodeVisible(messages);
+
+            hiddenTxids = await interpretControlMessages(messages);
 
             if (!initialLoadDone) {
                 for (const msg of messages) seenMessageKeys.add(messageKey(msg));
@@ -220,38 +323,68 @@
 
     /** @param {AssetMessage[]} msgs */
     function updateParticipantsFromMessages(msgs) {
-        const seen = new Map();
+        const byAsset = new Map();
         for (const p of participants) {
-            seen.set(p.assetName, p);
+            byAsset.set(p.assetName, {
+                rootName: p.rootName,
+                assetName: p.assetName,
+                lastSeen: p.lastSeen,
+                messageCount: 0,
+                joinedAt: p.joinedAt,
+            });
         }
         for (const msg of msgs) {
+            if (isControlCommandMessage(msg)) continue;
             const rn = deriveRootNameFn(msg.asset_name);
             if (!rn) continue;
-            const existing = seen.get(msg.asset_name);
-            if (existing) {
-                existing.lastSeen = Math.max(existing.lastSeen, parseTime(msg.time));
-                existing.messageCount = Math.max(existing.messageCount, (existing.messageCount || 0) + 1);
+            const t = parseTime(msg.time);
+            const entry = byAsset.get(msg.asset_name);
+            if (entry) {
+                entry.messageCount += 1;
+                if (t > entry.lastSeen) entry.lastSeen = t;
+                if (!entry.joinedAt || t < entry.joinedAt) entry.joinedAt = t;
             } else {
-                seen.set(msg.asset_name, {
+                byAsset.set(msg.asset_name, {
                     rootName: rn,
                     assetName: msg.asset_name,
-                    lastSeen: parseTime(msg.time),
+                    lastSeen: t,
                     messageCount: 1,
+                    joinedAt: t,
                 });
             }
         }
-        const list = Array.from(seen.values());
+        const list = Array.from(byAsset.values());
         list.sort((a, b) => a.rootName.localeCompare(b.rootName));
         participants = list;
     }
 
-    /** @param {string|number|undefined} time */
-    function parseTime(time) {
-        if (!time) return Date.now();
-        let d = new Date(time);
-        if (!isNaN(d.getTime())) return d.getTime();
-        const n = Number(time);
-        if (!Number.isNaN(n) && n > 1000000000) return n * 1000;
+    /**
+     * Parse a message timestamp to milliseconds since epoch.
+     * Handles: numeric Unix seconds, numeric Unix milliseconds, Core-style
+     * "YYYY-MM-DD HH:MM:SS" (interpreted as UTC), ISO 8601 strings, and
+     * browser-native Date-parseable strings.
+     * @param {string|number|undefined|null} raw
+     * @returns {number}
+     */
+    function parseTime(raw) {
+        if (raw == null || raw === "") return Date.now();
+        if (typeof raw === "number" || (typeof raw === "string" && /^\d{10,}$/.test(raw.trim()))) {
+            const n = typeof raw === "number" ? raw : parseInt(raw, 10);
+            if (Number.isNaN(n)) return Date.now();
+            if (n > 1e12) return n;
+            if (n > 1e9) return n * 1000;
+            return Date.now();
+        }
+        if (typeof raw === "string") {
+            const coreMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+            if (coreMatch) {
+                const [, y, mo, d, h, mi, s] = coreMatch;
+                const ms = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s);
+                return Number.isNaN(ms) ? Date.now() : ms;
+            }
+            const d = new Date(raw);
+            if (!isNaN(d.getTime())) return d.getTime();
+        }
         return Date.now();
     }
 
@@ -328,6 +461,10 @@
         }).filter((msg) => {
             const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
             return !mu.has(rn);
+        }).filter((msg) => {
+            return !isMessageHidden(msg, hiddenTxids);
+        }).filter((msg) => {
+            return !isControlCommandMessage(msg);
         });
         if (tagBlockedChannels.size > 0) {
             msgs = msgs.filter((msg) => {
@@ -357,6 +494,14 @@
                 return rn.includes(q) || body.includes(q) || msg.message.toLowerCase().includes(q) || assetMatch;
             });
         }
+        if (!settings.showExpired) {
+            const now = Date.now();
+            msgs = msgs.filter((msg) => {
+                if (msg.expire_time == null && msg.expire_utc_time == null) return true;
+                const exp = parseTime(msg.expire_utc_time ?? msg.expire_time);
+                return exp > now;
+            });
+        }
         if (!historyOverride && settings.historyDays > 0) {
             const cutoff = Date.now() - settings.historyDays * 86400000;
             msgs = msgs.filter((msg) => parseTime(msg.time) >= cutoff);
@@ -381,27 +526,18 @@
 
     /** @param {string|number|undefined} raw */
     function formatTime(raw) {
-        if (!raw) return "";
-        let d = new Date(raw);
-        if (isNaN(d.getTime())) {
-            const n = Number(raw);
-            if (!Number.isNaN(n) && n > 1000000000) d = new Date(n * 1000);
-        }
-        if (isNaN(d.getTime())) return String(raw);
+        const ms = parseTime(raw);
+        if (ms === Date.now() && (raw == null || raw === "")) return "";
+        const d = new Date(ms);
         const pad = (/** @type {number} */ n) => String(n).padStart(2, "0");
         return `[${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}]`;
     }
 
     /** @param {string|number|undefined|null} raw */
     function formatFullTime(raw) {
-        if (!raw) return "";
-        let d = new Date(raw);
-        if (isNaN(d.getTime())) {
-            const n = Number(raw);
-            if (!Number.isNaN(n) && n > 1000000000) d = new Date(n * 1000);
-        }
-        if (isNaN(d.getTime())) return String(raw);
-        return d.toLocaleString();
+        const ms = parseTime(raw);
+        if (ms === Date.now() && (raw == null || raw === "")) return "";
+        return new Date(ms).toLocaleString();
     }
 
     function refresh() {
@@ -737,6 +873,10 @@
 
     onDestroy(() => {
         document.removeEventListener("visibilitychange", onVisibilityChange);
+        if (refreshIndicatorTimer) {
+            clearTimeout(refreshIndicatorTimer);
+            refreshIndicatorTimer = null;
+        }
         stopPolling();
         stopBackgroundDiscovery();
         discoveryAbort = true;
@@ -836,6 +976,62 @@
         try { await navigator.clipboard.writeText(text); } catch {}
     }
 
+    function isOwnMessage(msg) {
+        const msgRoot = deriveRootNameFn(msg.asset_name);
+        return msgRoot.toUpperCase() === rootName().toUpperCase();
+    }
+
+    function canDeleteMessage(msg) {
+        if (isGuest || !msg.txid) return false;
+        const identityChannel = canonicalMessageChannel({
+            asset_name: identity,
+        });
+        const msgChannel = canonicalMessageChannel(msg);
+        return identityChannel !== "" && msgChannel !== "" && identityChannel === msgChannel;
+    }
+
+    async function handleDeleteMessage() {
+        if (!msgDetail?.msg || !canDeleteMessage(msgDetail.msg)) return;
+        const hex = await buildDeleteCommandHex(msgDetail.msg.txid);
+        const channel = identity.replace(/!$/, "");
+        await core.invoke("preview_send_announcement", {
+            channelName: channel,
+            ipfsHash: hex,
+            expireTime: null,
+        });
+        const txid = await core.invoke("send_announcement", {
+            channelName: channel,
+            ipfsHash: hex,
+            expireTime: null,
+        });
+        addNotification({
+            type: "message",
+            severity: "success",
+            title: "Delete Command Sent",
+            body: `Delete broadcast on ${channel}`,
+        });
+        msgDetail = null;
+        setTimeout(() => loadMessages(), 2000);
+    }
+
+    function requestDeleteMessage() {
+        if (!msgDetail?.msg?.txid) return;
+        const doDelete = () => handleDeleteMessage().catch((err) => {
+            const text = String(err);
+            if (/wallet.*locked|passphrase|unlock/i.test(text)) {
+                requestWalletUnlock(doDelete);
+                return;
+            }
+            addNotification({
+                type: "message",
+                severity: "error",
+                title: "Delete Failed",
+                body: text,
+            });
+        });
+        doDelete();
+    }
+
     /** @param {{ rootName: string, address: string, tag: string }} detail */
     function handleAddTag(detail) {
         const tag = detail.tag.startsWith("#") ? detail.tag : `#${detail.tag}`;
@@ -866,6 +1062,18 @@
             {/if}
         </div>
         <div class="header-right">
+            <HelpHitbox title="H0XC Community Chat" right={true}>
+                <p><strong>H0XC</strong> is a public, on-chain community chat system. Every message is broadcast as an asset message on the Hemp0x blockchain.</p>
+                <p><strong>How it works:</strong></p>
+                <ul>
+                    <li>Each participant owns a <code>YOURROOT/H0XC</code> sub-asset. The wallet holding this asset's authority can broadcast messages.</li>
+                    <li>Messages are stored <strong>permanently</strong> on-chain. They are <strong>not encrypted</strong> and are visible to anyone.</li>
+                    <li>Control frames (e.g., delete commands) are hidden from chat. Expired messages are hidden by default but can be shown in settings.</li>
+                    <li>User moderation is local-only: mute, block, or auto-block by tags. These affect your view only.</li>
+                    <li>Discovery scans the network for <code>*.H0XC</code> assets. Background discovery keeps the participant list up to date.</li>
+                </ul>
+                <p><strong>For private messaging, visit <a href="https://hemp0x.social" target="_blank" rel="noopener" style="color:var(--color-primary)">hemp0x.social</a>.</strong></p>
+            </HelpHitbox>
             {#if onSwitchIdentity || (isGuest && onBackToSetup)}
                 <button class="header-btn switch" on:click={() => isGuest ? onBackToSetup?.() : onSwitchIdentity?.()} title={isGuest ? "Choose identity" : "Switch identity"}>
                     ⇄
@@ -888,14 +1096,14 @@
         </div>
     </div>
     <div class="chat-status-bar">
-        {#if messagesLoading}
-            <span class="status-pill">Loading...</span>
-        {/if}
         {#if tagLookupPending}
             <span class="status-pill">Tags...</span>
         {/if}
         {#if discovering}
-            <span class="status-pill">Scanning...{discoveryProgress ? ` ${discoveryProgress}` : ""}</span>
+            <span class="status-pill">
+                <span class="inline-spinner"></span>
+                Scanning{discoveryProgress ? ` ${discoveryProgress}` : ""}
+            </span>
             <button class="status-cancel" on:click={cancelDiscovery} title="Cancel scan">✕</button>
         {/if}
         {#if !discovering && discoveryState === "idle" && lastScanTime}
@@ -1023,8 +1231,11 @@
                 {/each}
             {/if}
 
-            {#if messagesLoading && messages.length > 0}
-                <div class="chat-loading-more">Refreshing...</div>
+            {#if showRefreshIndicator}
+                <div class="chat-loading-more">
+                    <span class="inline-spinner"></span>
+                    <span>Refreshing messages...</span>
+                </div>
             {/if}
 
             {#if showJumpToBottom}
@@ -1041,6 +1252,8 @@
             selectedIdentity={identity}
             tagBlockedChannels={tagBlockedChannels}
             {resolvedAddresses}
+            hideStaleUsers={settings.hideStaleUsers !== false}
+            staleUserDays={settings.staleUserDays || 90}
             on:mute={handleMute}
             on:block={handleBlock}
             on:viewDetails={handleViewDetails}
@@ -1080,6 +1293,7 @@
         resolvedAddress={ctxUser ? resolvedAddresses[ctxUser] || "" : ""}
         channelAsset={ctxParticipant?.assetName || ""}
         lastSeen={ctxParticipant?.lastSeen || 0}
+        joinedAt={ctxParticipant?.joinedAt || 0}
         messageCount={ctxParticipant?.messageCount || 0}
         isSelf={ctxIsSelf}
         on:viewDetails={(e) => { handleViewDetails(e); closeUserContext(); }}
@@ -1125,6 +1339,20 @@
                         <span class="msg-detail-val mono">{msgDetail.msg.message}</span>
                         <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.message)} title="Copy hex">Copy</button>
                     </div>
+                    {#if msgDetail.msg.txid}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">TXID</span>
+                            <span class="msg-detail-val mono">{msgDetail.msg.txid}</span>
+                            <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.txid)} title="Copy txid">Copy</button>
+                        </div>
+                    {/if}
+                    {#if msgDetail.msg.block_hash}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">BLOCK HASH</span>
+                            <span class="msg-detail-val mono">{msgDetail.msg.block_hash}</span>
+                            <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.block_hash)} title="Copy block hash">Copy</button>
+                        </div>
+                    {/if}
                     <div class="msg-detail-row">
                         <span class="msg-detail-label">CHANNEL</span>
                         <span class="msg-detail-val mono">{msgDetail.msg.asset_name}</span>
@@ -1159,16 +1387,21 @@
                             <span class="msg-detail-val mono">{msgDetail.msg.block_height}</span>
                         </div>
                     {/if}
-                    {#if msgDetail.msg.expire_time}
+                    {#if msgDetail.msg.expire_time || msgDetail.msg.expire_utc_time}
                         <div class="msg-detail-row">
                             <span class="msg-detail-label">EXPIRES</span>
-                            <span class="msg-detail-val">{formatFullTime(msgDetail.msg.expire_time)}</span>
+                            <span class="msg-detail-val">{formatFullTime(msgDetail.msg.expire_utc_time ?? msgDetail.msg.expire_time)}</span>
                         </div>
                     {/if}
                     {#if msgDetail.msg.status}
                         <div class="msg-detail-row">
                             <span class="msg-detail-label">STATUS</span>
                             <span class="msg-detail-val">{msgDetail.msg.status}</span>
+                        </div>
+                    {/if}
+                    {#if canDeleteMessage(msgDetail.msg)}
+                        <div class="msg-detail-row msg-detail-actions">
+                            <button class="msg-detail-delete" on:click={requestDeleteMessage} title="Send a local delete command for this message">Delete message</button>
                         </div>
                     {/if}
                 </div>
@@ -1285,6 +1518,9 @@
         border-radius: 999px;
         padding: 0.1rem 0.4rem;
         white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
     }
     .status-pill.ok {
         color: #8cff9f;
@@ -1340,7 +1576,19 @@
     .chat-messages::-webkit-scrollbar { width: 5px; }
     .chat-messages::-webkit-scrollbar-track { background: transparent; }
     .chat-messages::-webkit-scrollbar-thumb { background: rgba(0, 255, 65, 0.25); border-radius: 3px; }
-    .chat-messages.loading { opacity: 0.6; }
+    .chat-messages.loading { /* messages stay visible during refresh */ }
+    .inline-spinner {
+        width: 10px;
+        height: 10px;
+        border: 2px solid rgba(0, 255, 65, 0.15);
+        border-top-color: var(--color-primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 0.3rem;
+        flex-shrink: 0;
+    }
     .chat-empty {
         display: flex;
         flex-direction: column;
@@ -1383,9 +1631,13 @@
     }
     .chat-loading-more {
         text-align: center;
-        font-size: 0.5rem;
-        color: #555;
+        font-size: 0.55rem;
+        color: #777;
         padding: 0.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
     }
     .chat-msg {
         display: flex;
@@ -1408,7 +1660,7 @@
         color: var(--color-primary-dim);
         flex-shrink: 0;
         font-size: 0.52rem;
-        min-width: 4.5rem;
+        min-width: 5.5rem;
     }
     .msg-user {
         color: var(--color-primary);
@@ -1429,6 +1681,7 @@
         color: #ccc;
         word-break: break-word;
         min-width: 0;
+        cursor: pointer;
     }
     .msg-short-text {
         color: #ddd;
@@ -1531,7 +1784,7 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 4px;
         color: var(--color-primary);
-        font-size: 0.52rem;
+        font-size: 0.55rem;
         font-weight: 600;
         padding: 0.25rem;
         cursor: pointer;
@@ -1616,6 +1869,7 @@
         background: rgba(0, 0, 0, 0.2);
         border: 1px solid rgba(255, 255, 255, 0.04);
         border-radius: 5px;
+        flex-wrap: wrap;
     }
     .msg-detail-label {
         color: #555;
@@ -1641,9 +1895,9 @@
         border: 1px solid rgba(0, 255, 65, 0.18);
         border-radius: 4px;
         color: var(--color-primary);
-        font-size: 0.45rem;
+        font-size: 0.52rem;
         font-weight: 600;
-        padding: 0.12rem 0.3rem;
+        padding: 0.15rem 0.35rem;
         cursor: pointer;
         flex-shrink: 0;
         letter-spacing: 0.3px;
@@ -1661,7 +1915,27 @@
     .msg-detail-action:hover {
         background: rgba(68, 136, 255, 0.15);
     }
-    .chat-msg {
+    .msg-detail-actions {
+        justify-content: flex-end;
+        padding-top: 0.3rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        margin-top: 0.15rem;
+    }
+    .msg-detail-delete {
+        background: rgba(255, 60, 60, 0.08);
+        border: 1px solid rgba(255, 60, 60, 0.25);
+        border-radius: 4px;
+        color: #cc4444;
+        font-size: 0.52rem;
+        font-weight: 600;
+        padding: 0.15rem 0.5rem;
         cursor: pointer;
+        letter-spacing: 0.3px;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .msg-detail-delete:hover {
+        background: rgba(255, 60, 60, 0.18);
+        border-color: rgba(255, 60, 60, 0.4);
     }
 </style>

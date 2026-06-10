@@ -7,15 +7,16 @@
     import H0xCChatRoom from "./H0xCChatRoom.svelte";
     import { deriveRootNameFn, isH0xCChannelAsset } from "../../stores/h0xc.js";
 
-    /** @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number }} Participant */
+    /** @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number, joinedAt?: number }} Participant */
 
     const dispatch = createEventDispatcher();
 
     export let show = false;
     export let inline = false;
 
-    /** @type {"loading"|"onboarding"|"identity-picker"|"chat"} */
+    /** @type {"loading"|"onboarding"|"identity-picker"|"disclaimer"|"chat"} */
     let view = "loading";
+    let disclaimerAccepted = false;
     let selectedIdentity = "";
     let isGuest = false;
     let ownIdentities = [];
@@ -29,7 +30,7 @@
     /** @type {string[]} */
     let blockedUsers = [];
     let settings = {
-        messageExpiryDefault: 0,
+        messageExpiryDefault: 30,
         autoDiscovery: true,
         pollingIntervalSeconds: 30,
         autoBlockTags: ["#SPAM"],
@@ -37,6 +38,9 @@
         muteNotifications: false,
         discoveryScanLimit: 2000,
         historyDays: 90,
+        showExpired: false,
+        hideStaleUsers: true,
+        staleUserDays: 90,
     };
     let lastScanBlock = 0;
     let lastSeenMessageKey = "";
@@ -49,6 +53,7 @@
     const IDENTITY_KEY = "h0xc_selectedIdentity";
     const LAST_SEEN_KEY = "h0xc_lastSeenMessageKey";
     const LAST_SCAN_TIME_KEY = "h0xc_lastScanTime";
+    const DISCLAIMER_KEY = "h0xc_disclaimerAccepted";
 
     function loadJson(key, fallback) {
         try {
@@ -85,7 +90,7 @@
         blockedUsers = loadJson(BLOCKED_KEY, []);
         participants = loadJson(PARTICIPANTS_KEY, []);
         settings = loadJson(SETTINGS_KEY, {
-            messageExpiryDefault: 0,
+            messageExpiryDefault: 30,
             autoDiscovery: true,
             pollingIntervalSeconds: 30,
             autoBlockTags: ["#SPAM"],
@@ -93,6 +98,9 @@
             muteNotifications: false,
             discoveryScanLimit: 2000,
             historyDays: 90,
+            showExpired: false,
+            hideStaleUsers: true,
+            staleUserDays: 90,
         });
         if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
             settings.autoBlockTags = ["#SPAM"];
@@ -101,8 +109,13 @@
         if (typeof settings.muteNotifications !== "boolean") settings.muteNotifications = false;
         if (typeof settings.discoveryScanLimit !== "number" || settings.discoveryScanLimit < 100) settings.discoveryScanLimit = 2000;
         settings.discoveryScanLimit = Math.min(settings.discoveryScanLimit, 2000);
+        if (typeof settings.historyDays !== "number") settings.historyDays = 90;
+        if (typeof settings.showExpired !== "boolean") settings.showExpired = false;
+        if (typeof settings.hideStaleUsers !== "boolean") settings.hideStaleUsers = true;
+        if (typeof settings.staleUserDays !== "number" || settings.staleUserDays < 1) settings.staleUserDays = 90;
         lastSeenMessageKey = loadJson(LAST_SEEN_KEY, "");
         lastScanTime = loadJson(LAST_SCAN_TIME_KEY, "");
+        disclaimerAccepted = loadJson(DISCLAIMER_KEY, false) === true;
         const savedId = loadJson(IDENTITY_KEY, null);
 
         // Load identities
@@ -126,7 +139,7 @@
         } else if (savedId && typeof savedId === "string" && ownIdentities.includes(savedId)) {
             selectedIdentity = savedId;
             isGuest = false;
-            view = "chat";
+            view = disclaimerAccepted ? "chat" : "disclaimer";
         } else {
             view = "identity-picker";
         }
@@ -136,7 +149,11 @@
     function handleSelectIdentity(e) {
         selectedIdentity = e.detail.identity;
         saveJson(IDENTITY_KEY, selectedIdentity);
-        view = "chat";
+        if (disclaimerAccepted) {
+            view = "chat";
+        } else {
+            view = "disclaimer";
+        }
     }
 
     function handleSwitchIdentity() {
@@ -147,7 +164,11 @@
         if (ownIdentities.length > 0) {
             selectedIdentity = ownIdentities[0];
             saveJson(IDENTITY_KEY, selectedIdentity);
-            view = "chat";
+            if (disclaimerAccepted) {
+                view = "chat";
+            } else {
+                view = "disclaimer";
+            }
         } else {
             view = "onboarding";
         }
@@ -164,7 +185,21 @@
 
     function enterAsGuest() {
         isGuest = true;
+        if (disclaimerAccepted) {
+            view = "chat";
+        } else {
+            view = "disclaimer";
+        }
+    }
+
+    function acceptDisclaimer() {
+        disclaimerAccepted = true;
+        saveJson(DISCLAIMER_KEY, true);
         view = "chat";
+    }
+
+    function declineDisclaimer() {
+        view = "onboarding";
     }
 
     function backToSetup() {
@@ -298,6 +333,44 @@
                         on:guest={handleGuestFromPicker}
                     />
                 </div>
+            {:else if view === "disclaimer"}
+                <div class="panel-disclaimer" transition:fade={{ duration: 100 }}>
+                    <div class="disclaimer-header">
+                        <span class="disclaimer-title">H0XC COMMUNITY CHAT</span>
+                        <button class="disclaimer-close" on:click={closeAndSave}>&times;</button>
+                    </div>
+                    <div class="disclaimer-body">
+                        <div class="disclaimer-hero">
+                            <span class="disclaimer-icon">◈</span>
+                            <span class="disclaimer-hero-text">Before You Enter</span>
+                        </div>
+                        <div class="disclaimer-warning">
+                            <span class="warn-icon">⚠</span>
+                            <span class="warn-text">
+                                H0XC is a <strong>fully public</strong>, <strong>on-chain</strong> chat system. Every message is written to the Hemp0x blockchain <strong>permanently</strong> and is <strong>not encrypted</strong>.
+                            </span>
+                        </div>
+                        <div class="disclaimer-section">
+                            <span class="disclaimer-label">HOW IT WORKS</span>
+                            <ul class="disclaimer-list">
+                                <li>Messages are broadcast as asset messages using your <code>YOURROOT/H0XC</code> sub-asset authority.</li>
+                                <li>All messages are stored on-chain forever. Delete commands only hide messages in Commander; they do not remove anything from the chain.</li>
+                                <li>Anyone can read every message. There is no privacy or encryption.</li>
+                                <li>User moderation (mute, block, tag filtering) is local-only and affects your view only.</li>
+                                <li>Discovery scans the network for <code>*.H0XC</code> assets. Background scans keep the participant list updated.</li>
+                                <li>Expired messages are hidden by default but can be shown in settings. They still remain on-chain.</li>
+                            </ul>
+                        </div>
+                        <div class="disclaimer-section">
+                            <span class="disclaimer-label">YOUR RESPONSIBILITY</span>
+                            <p class="disclaimer-text">You are responsible for what you broadcast. Do not share sensitive information, private keys, or anything you would not want permanently public.</p>
+                        </div>
+                        <div class="disclaimer-actions">
+                            <button class="disclaimer-btn accept" on:click={acceptDisclaimer}>I Understand and Enter</button>
+                            <button class="disclaimer-btn decline" on:click={declineDisclaimer}>Go Back</button>
+                        </div>
+                    </div>
+                </div>
             {:else if view === "chat"}
                 <div class="h0xc-panel-inner">
                         <H0xCChatRoom
@@ -414,6 +487,44 @@
                             on:create={handleCreateIdentity}
                             on:guest={handleGuestFromPicker}
                         />
+                    </div>
+                {:else if view === "disclaimer"}
+                    <div class="panel-disclaimer" transition:fade={{ duration: 120 }}>
+                        <div class="disclaimer-header">
+                            <span class="disclaimer-title">H0XC COMMUNITY CHAT</span>
+                            <button class="disclaimer-close" on:click={closeAndSave}>&times;</button>
+                        </div>
+                        <div class="disclaimer-body">
+                            <div class="disclaimer-hero">
+                                <span class="disclaimer-icon">◈</span>
+                                <span class="disclaimer-hero-text">Before You Enter</span>
+                            </div>
+                            <div class="disclaimer-warning">
+                                <span class="warn-icon">⚠</span>
+                                <span class="warn-text">
+                                    H0XC is a <strong>fully public</strong>, <strong>on-chain</strong> chat system. Every message is written to the Hemp0x blockchain <strong>permanently</strong> and is <strong>not encrypted</strong>.
+                                </span>
+                            </div>
+                            <div class="disclaimer-section">
+                                <span class="disclaimer-label">HOW IT WORKS</span>
+                                <ul class="disclaimer-list">
+                                    <li>Messages are broadcast as asset messages using your <code>YOURROOT/H0XC</code> sub-asset authority.</li>
+                                    <li>All messages are stored on-chain forever. Delete commands only hide messages in Commander; they do not remove anything from the chain.</li>
+                                    <li>Anyone can read every message. There is no privacy or encryption.</li>
+                                    <li>User moderation (mute, block, tag filtering) is local-only and affects your view only.</li>
+                                    <li>Discovery scans the network for <code>*.H0XC</code> assets. Background scans keep the participant list updated.</li>
+                                    <li>Expired messages are hidden by default but can be shown in settings. They still remain on-chain.</li>
+                                </ul>
+                            </div>
+                            <div class="disclaimer-section">
+                                <span class="disclaimer-label">YOUR RESPONSIBILITY</span>
+                                <p class="disclaimer-text">You are responsible for what you broadcast. Do not share sensitive information, private keys, or anything you would not want permanently public.</p>
+                            </div>
+                            <div class="disclaimer-actions">
+                                <button class="disclaimer-btn accept" on:click={acceptDisclaimer}>I Understand and Enter</button>
+                                <button class="disclaimer-btn decline" on:click={declineDisclaimer}>Go Back</button>
+                            </div>
+                        </div>
                     </div>
                 {:else if view === "chat"}
                     <div class="h0xc-panel-inner">
@@ -731,5 +842,153 @@
     .onboard-btn.guest:hover {
         border-color: rgba(255, 255, 255, 0.25);
         color: #fff;
+    }
+
+    /* Disclaimer */
+    .panel-disclaimer {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+    }
+    .disclaimer-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0.6rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
+        background: rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
+    }
+    .disclaimer-title {
+        font-size: 0.62rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        letter-spacing: 1px;
+    }
+    .disclaimer-close {
+        background: none;
+        border: none;
+        color: #666;
+        font-size: 1.1rem;
+        cursor: pointer;
+        line-height: 1;
+        transition: color 0.15s;
+    }
+    .disclaimer-close:hover { color: #fff; }
+    .disclaimer-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 0.7rem 1rem 1rem;
+        overflow-y: auto;
+        gap: 0.6rem;
+        text-align: center;
+        min-height: 0;
+    }
+    .disclaimer-hero {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+    .disclaimer-icon {
+        font-size: 1.2rem;
+        color: var(--color-primary);
+        opacity: 0.7;
+    }
+    .disclaimer-hero-text {
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: #ddd;
+        letter-spacing: 0.5px;
+    }
+    .disclaimer-warning {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.4rem;
+        background: rgba(255, 170, 0, 0.04);
+        border: 1px solid rgba(255, 170, 0, 0.12);
+        border-radius: 6px;
+        padding: 0.55rem 0.7rem;
+        text-align: left;
+    }
+    .disclaimer-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        text-align: left;
+        background: rgba(0, 0, 0, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 6px;
+        padding: 0.55rem 0.7rem;
+    }
+    .disclaimer-label {
+        font-size: 0.6rem;
+        font-weight: 700;
+        color: #888;
+        letter-spacing: 0.5px;
+    }
+    .disclaimer-list {
+        margin: 0.3rem 0 0;
+        padding-left: 1rem;
+        font-size: 0.62rem;
+        color: #aaa;
+        line-height: 1.55;
+    }
+    .disclaimer-list li {
+        margin-bottom: 0.3rem;
+    }
+    .disclaimer-list code {
+        font-family: var(--font-mono);
+        background: rgba(0, 255, 65, 0.08);
+        padding: 0.05rem 0.25rem;
+        border-radius: 3px;
+        color: #ccc;
+        font-size: 0.58rem;
+    }
+    .disclaimer-text {
+        font-size: 0.62rem;
+        color: #999;
+        line-height: 1.55;
+        margin: 0;
+    }
+    .disclaimer-actions {
+        display: flex;
+        gap: 0.45rem;
+        margin-top: 0.3rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        justify-content: center;
+        width: 100%;
+        flex-shrink: 0;
+    }
+    .disclaimer-btn {
+        padding: 0.45rem 0.8rem;
+        border-radius: 5px;
+        font-size: 0.62rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .disclaimer-btn.accept {
+        background: rgba(0, 255, 65, 0.1);
+        border: 1px solid var(--color-primary);
+        color: var(--color-primary);
+    }
+    .disclaimer-btn.accept:hover {
+        background: var(--color-primary);
+        color: #000;
+    }
+    .disclaimer-btn.decline {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .disclaimer-btn.decline:hover {
+        border-color: rgba(255, 85, 85, 0.3);
+        color: #ff8888;
     }
 </style>

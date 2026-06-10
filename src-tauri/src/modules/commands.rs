@@ -1134,6 +1134,8 @@ pub fn get_net_info() -> Result<NetworkInfo, String> {
 
   let version = info.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
   let subversion = info.get("subversion").and_then(|v| v.as_str()).unwrap_or("").to_string();
+  let build = info.get("build").and_then(|v| v.as_str()).unwrap_or("").to_string();
+  let build_commit = info.get("build_commit").and_then(|v| v.as_str()).unwrap_or("").to_string();
   let protocolversion = info.get("protocolversion").and_then(|v| v.as_u64()).unwrap_or(0);
   let connections = info.get("connections").and_then(|v| v.as_u64()).unwrap_or(0);
   
@@ -1152,6 +1154,8 @@ pub fn get_net_info() -> Result<NetworkInfo, String> {
   Ok(NetworkInfo {
       version,
       subversion,
+      build,
+      build_commit,
       protocolversion,
       connections,
       localaddresses,
@@ -4159,6 +4163,12 @@ fn get_i64_ci(value: &serde_json::Value, key: &str) -> Option<i64> {
 fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
   let expire_time = get_str_ci(value, "Expire Time").map(|s| s.to_string());
   let expire_utc_time = get_i64_ci(value, "Expire UTC Time");
+  let txid = get_str_ci(value, "txid").map(|s| s.to_string()).filter(|s| !s.is_empty());
+  let channel = get_str_ci(value, "channel").map(|s| s.to_string()).filter(|s| !s.is_empty());
+  let authority_asset = get_str_ci(value, "authority_asset").map(|s| s.to_string()).filter(|s| !s.is_empty());
+  let authority_address = get_str_ci(value, "authority_address").map(|s| s.to_string()).filter(|s| !s.is_empty());
+  let block_hash = get_str_ci(value, "block_hash").map(|s| s.to_string()).filter(|s| !s.is_empty());
+  let sender_address = get_str_ci(value, "sender_address").map(|s| s.to_string()).filter(|s| !s.is_empty());
   AssetMessageEntry {
     asset_name: get_str_ci(value, "Asset Name").unwrap_or("").to_string(),
     message: get_str_ci(value, "Message").unwrap_or("").to_string(),
@@ -4167,6 +4177,12 @@ fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
     status: get_str_ci(value, "Status").unwrap_or("UNKNOWN").to_string(),
     expire_time,
     expire_utc_time,
+    txid,
+    channel,
+    authority_asset,
+    authority_address,
+    block_hash,
+    sender_address,
   }
 }
 
@@ -4331,6 +4347,19 @@ pub fn view_asset_messages() -> Result<Vec<AssetMessageEntry>, String> {
   }
   let value: serde_json::Value = serde_json::from_str(trimmed)
     .map_err(|e| format!("Core returned an unexpected response for viewallmessages. JSON parse error: {e}. Raw (truncated): {}", trimmed.chars().take(200).collect::<String>()))?;
+  Ok(parse_message_list(&value))
+}
+
+#[tauri::command]
+pub fn view_channel_messages(channel: String) -> Result<Vec<AssetMessageEntry>, String> {
+  ensure_config()?;
+  let raw = run_cli(&[String::from("viewchannelmessages"), channel])?;
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Ok(Vec::new());
+  }
+  let value: serde_json::Value = serde_json::from_str(trimmed)
+    .map_err(|e| format!("Core returned an unexpected response for viewchannelmessages. JSON parse error: {e}. Raw (truncated): {}", trimmed.chars().take(200).collect::<String>()))?;
   Ok(parse_message_list(&value))
 }
 

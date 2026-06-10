@@ -121,6 +121,8 @@
         conflictCapabilities.qualifiers ? "qualifiers" : null,
         conflictCapabilities.rewards ? "rewards" : null,
         conflictCapabilities.snapshots ? "snapshots" : null,
+        conflictCapabilities.has_view_channel_messages ? "channel messages" : null,
+        conflictCapabilities.has_message_txid_lookup ? "txid lookup" : null,
       ].filter(Boolean)
     : [];
 
@@ -1407,7 +1409,9 @@
               {#if conflictRuntimeStatus.identity.base_version}
                 <p class="welcome-text" style="font-size: 0.85rem; color: #aaa;">
                   Version: {conflictRuntimeStatus.identity.base_version}
-                  {#if conflictRuntimeStatus.identity.subversion}
+                  {#if conflictRuntimeStatus.identity.build}
+                    / {conflictRuntimeStatus.identity.build}
+                  {:else if conflictRuntimeStatus.identity.subversion}
                     / {conflictRuntimeStatus.identity.subversion}
                   {/if}
                   (Protocol: {conflictRuntimeStatus.identity.protocol_version})

@@ -41,7 +41,10 @@
     </div>
     <div class="pick-body">
         {#if loading}
-            <div class="pick-status">Loading identities...</div>
+            <div class="pick-status">
+                <span class="inline-spinner"></span>
+                Loading identities...
+            </div>
         {:else if error}
             <div class="pick-status error">{error}</div>
         {:else if identities.length === 0}
@@ -135,7 +138,22 @@
         color: #888;
         text-align: center;
         padding: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
     }
+    .inline-spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(0, 255, 65, 0.15);
+        border-top-color: var(--color-primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        display: inline-block;
+        flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .pick-status.error {
         color: #ff5555;
     }

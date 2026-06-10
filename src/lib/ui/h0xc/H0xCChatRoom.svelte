@@ -14,7 +14,9 @@
         interpretControlMessages,
         isMessageHidden,
         isControlCommandMessage,
+        isDecodedLeaveCommandMessage,
         buildDeleteCommandHex,
+        buildLeaveCommandHex,
         canonicalMessageChannel,
     } from "../../stores/h0xc-control.js";
 
@@ -79,6 +81,8 @@
 
     /** @type {Set<string>} */
     let hiddenTxids = new Set();
+    /** @type {Set<string>} */
+    export let leftChannels = new Set();
 
     let discovering = false;
     let discoveryError = "";
@@ -254,10 +258,40 @@
                 seenKeys.add(key);
                 return true;
             });
+            const controlResult = await interpretControlMessages(messages);
+            hiddenTxids = controlResult.hiddenTxids;
+            const leaveMessageKeys = controlResult.leaveMessageKeys || new Set();
+            // Rejoin: the most recent message per channel wins.
+            // If a channel's latest loaded message is a leave command, it is left.
+            // If the latest loaded message is a normal message, it is not left.
+            const lastMessageType = new Map(); // canonical channel -> { time: number, isLeave: boolean }
+            for (const msg of messages) {
+                const ch = canonicalMessageChannel(msg);
+                if (!ch) continue;
+                const t = parseTime(msg.time);
+                const existing = lastMessageType.get(ch);
+                if (!existing || t > existing.time) {
+                    const isLeave = isDecodedLeaveCommandMessage(msg, leaveMessageKeys);
+                    if (isControlCommandMessage(msg) && !isLeave) {
+                        // Delete and other non-leave control commands do not affect leave state.
+                        // Preserve whatever entry is already stored for this channel.
+                        continue;
+                    }
+                    lastMessageType.set(ch, { time: t, isLeave });
+                }
+            }
+            const nextLeft = new Set();
+            for (const [ch, info] of lastMessageType) {
+                if (info.isLeave) nextLeft.add(ch);
+            }
+            // Preserve channels that were left but have no messages in the current load
+            for (const ch of leftChannels) {
+                if (!lastMessageType.has(ch)) nextLeft.add(ch);
+            }
+            leftChannels = nextLeft;
+
             updateParticipantsFromMessages(messages);
             await decodeVisible(messages);
-
-            hiddenTxids = await interpretControlMessages(messages);
 
             if (!initialLoadDone) {
                 for (const msg of messages) seenMessageKeys.add(messageKey(msg));
@@ -1032,6 +1066,67 @@
         doDelete();
     }
 
+    // Leave / Rejoin
+    let showLeaveConfirm = false;
+    let leaveBusy = false;
+    let leaveError = "";
+
+    function openLeaveConfirm() {
+        showLeaveConfirm = true;
+        leaveError = "";
+    }
+
+    function closeLeaveConfirm() {
+        showLeaveConfirm = false;
+        leaveError = "";
+    }
+
+    async function handleLeaveChat() {
+        if (isGuest || !identity) {
+            leaveError = "Cannot leave as guest.";
+            return;
+        }
+        leaveBusy = true;
+        leaveError = "";
+        try {
+            const hex = await buildLeaveCommandHex();
+            const channel = identity.replace(/!$/, "");
+            await core.invoke("preview_send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+            const txid = await core.invoke("send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+            addNotification({
+                type: "message",
+                severity: "success",
+                title: "Leave Command Sent",
+                body: `Leave broadcast on ${channel}`,
+            });
+            showLeaveConfirm = false;
+            setTimeout(() => loadMessages(), 2000);
+        } catch (err) {
+            const text = String(err);
+            if (/wallet.*locked|passphrase|unlock/i.test(text)) {
+                requestWalletUnlock(() => handleLeaveChat());
+                return;
+            }
+            leaveError = text;
+            addNotification({
+                type: "message",
+                severity: "error",
+                title: "Leave Failed",
+                body: text,
+            });
+        } finally {
+            leaveBusy = false;
+        }
+    }
+
     /** @param {{ rootName: string, address: string, tag: string }} detail */
     function handleAddTag(detail) {
         const tag = detail.tag.startsWith("#") ? detail.tag : `#${detail.tag}`;
@@ -1254,6 +1349,7 @@
             {resolvedAddresses}
             hideStaleUsers={settings.hideStaleUsers !== false}
             staleUserDays={settings.staleUserDays || 90}
+            {leftChannels}
             on:mute={handleMute}
             on:block={handleBlock}
             on:viewDetails={handleViewDetails}
@@ -1261,8 +1357,30 @@
             on:manageTags={() => openManageTags()}
             on:filterByUser={(e) => { filterByUser(e.detail.rootName); }}
             on:addTag={(e) => { handleAddTag(e.detail); }}
+            on:leave={openLeaveConfirm}
         />
     </div>
+
+    {#if showLeaveConfirm}
+        <div class="leave-confirm-bar" transition:fade={{ duration: 100 }}>
+            <div class="leave-confirm-body">
+                <span class="leave-confirm-title">LEAVE H0XC CHAT</span>
+                <p class="leave-confirm-text">
+                    This broadcasts an on-chain control message. It only hides you from Commander user lists.
+                    Old messages remain on-chain. You can rejoin by sending a new normal message later.
+                </p>
+                {#if leaveError}
+                    <span class="leave-confirm-error">{leaveError}</span>
+                {/if}
+                <div class="leave-confirm-actions">
+                    <button class="leave-btn cancel" on:click={closeLeaveConfirm} disabled={leaveBusy}>Cancel</button>
+                    <button class="leave-btn confirm" on:click={handleLeaveChat} disabled={leaveBusy}>
+                        {leaveBusy ? "Broadcasting..." : "Leave chat"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 
     <H0xCChatCompose
         bind:this={composeRef}
@@ -1296,6 +1414,7 @@
         joinedAt={ctxParticipant?.joinedAt || 0}
         messageCount={ctxParticipant?.messageCount || 0}
         isSelf={ctxIsSelf}
+        isLeft={ctxIsSelf && leftChannels.has(identity?.replace(/!$/, "").trim().toUpperCase())}
         on:viewDetails={(e) => { handleViewDetails(e); closeUserContext(); }}
         on:mute={(e) => { handleMute(e); closeUserContext(); }}
         on:block={(e) => { handleBlock(e); closeUserContext(); }}
@@ -1303,6 +1422,7 @@
         on:manageTags={() => { openManageTags(); closeUserContext(); }}
         on:filterByUser={(e) => { filterByUser(e.detail.rootName); closeUserContext(); }}
         on:addTag={(e) => { handleAddTag(e.detail); closeUserContext(); }}
+        on:leave={() => { openLeaveConfirm(); closeUserContext(); }}
         on:close={closeUserContext}
     />
 
@@ -1937,5 +2057,72 @@
     .msg-detail-delete:hover {
         background: rgba(255, 60, 60, 0.18);
         border-color: rgba(255, 60, 60, 0.4);
+    }
+
+    .leave-confirm-bar {
+        flex-shrink: 0;
+        padding: 0.4rem 0.5rem;
+        background: rgba(255, 60, 60, 0.04);
+        border-top: 1px solid rgba(255, 60, 60, 0.15);
+        border-bottom: 1px solid rgba(255, 60, 60, 0.15);
+    }
+    .leave-confirm-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    .leave-confirm-title {
+        font-size: 0.55rem;
+        font-weight: 700;
+        color: #ff8888;
+        letter-spacing: 0.5px;
+    }
+    .leave-confirm-text {
+        margin: 0;
+        font-size: 0.52rem;
+        color: #aaa;
+        line-height: 1.45;
+    }
+    .leave-confirm-error {
+        font-size: 0.52rem;
+        color: #ff5555;
+    }
+    .leave-confirm-actions {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: flex-end;
+        margin-top: 0.2rem;
+    }
+    .leave-btn {
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.52rem;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .leave-btn.cancel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .leave-btn.cancel:hover:not(:disabled) {
+        border-color: #ff5555;
+        color: #ff5555;
+    }
+    .leave-btn.confirm {
+        background: rgba(255, 60, 60, 0.08);
+        border: 1px solid rgba(255, 60, 60, 0.25);
+        color: #cc4444;
+    }
+    .leave-btn.confirm:hover:not(:disabled) {
+        background: rgba(255, 60, 60, 0.18);
+        border-color: rgba(255, 60, 60, 0.4);
+    }
+    .leave-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
 </style>

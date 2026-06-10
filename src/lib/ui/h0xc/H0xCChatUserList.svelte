@@ -20,6 +20,8 @@
     export let resolvedAddresses = {};
     export let hideStaleUsers = true;
     export let staleUserDays = 90;
+    /** @type {Set<string>} */
+    export let leftChannels = new Set();
 
     const dispatch = createEventDispatcher();
 
@@ -56,6 +58,11 @@
         contextUser = null;
     }
 
+    /** @param {string} channel */
+    function normalizeChannel(channel) {
+        return (channel || "").replace(/!$/, "").trim().toUpperCase();
+    }
+
     /**
      * @param {number} lastSeen
      * @returns {{ label: string, tier: number }}
@@ -73,6 +80,7 @@
     $: filteredParticipants = participants.filter((p) => {
         if (blockedUsers.includes(p.rootName)) return false;
         if (tagBlockedChannels.has(p.assetName)) return false;
+        if (leftChannels.has(normalizeChannel(p.assetName))) return false;
         if (hideStaleUsers && staleUserDays > 0 && p.lastSeen > 0) {
             const age = Date.now() - p.lastSeen;
             if (age > staleUserDays * 86400000) return false;
@@ -131,6 +139,7 @@
         joinedAt={contextUser ? (participants.find((p) => p.rootName === contextUser)?.joinedAt || 0) : 0}
         messageCount={contextUser ? (participants.find((p) => p.rootName === contextUser)?.messageCount || 0) : 0}
         isSelf={contextUser ? isMe(contextUser) : false}
+        isLeft={contextUser ? leftChannels.has(normalizeChannel(participants.find((p) => p.rootName === contextUser)?.assetName || "")) : false}
         on:viewDetails={(e) => { dispatch("viewDetails", e.detail); closeContext(); }}
         on:mute={(e) => { dispatch("mute", e.detail); closeContext(); }}
         on:block={(e) => { dispatch("block", e.detail); closeContext(); }}
@@ -140,6 +149,7 @@
         on:copyChannel={() => { closeContext(); }}
         on:copyAddress={() => { closeContext(); }}
         on:addTag={(e) => { dispatch("addTag", e.detail); closeContext(); }}
+        on:leave={() => { dispatch("leave"); closeContext(); }}
         on:close={() => { closeContext(); }}
     />
 </div>

@@ -123,6 +123,7 @@ pub fn run() {
             commands::h0xc_filter_tagged_channels,
             // H0XC Control Frame Commands
             h0xc_control_message::h0xc_control_encode_delete,
+            h0xc_control_message::h0xc_control_encode_leave,
             h0xc_control_message::h0xc_control_decode,
             // IPFS Commands
             commands::ipfs_validate,

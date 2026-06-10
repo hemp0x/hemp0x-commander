@@ -13,6 +13,7 @@
     export let joinedAt = 0;
     export let messageCount = 0;
     export let isSelf = false;
+    export let isLeft = false;
 
     const dispatch = createEventDispatcher();
 
@@ -153,7 +154,11 @@
         </div>
         <div class="ctx-divider"></div>
         <button class="ctx-item" on:click={filterByUser}>Filter Messages</button>
-        {#if !isSelf}
+        {#if isSelf}
+            <button class="ctx-item danger" on:click={() => dispatch("leave")} disabled={isLeft}>
+                {isLeft ? "Already left" : "Leave chat"}
+            </button>
+        {:else}
             <button class="ctx-item" on:click={mute}>{muted ? "Unmute" : "Mute"}</button>
             <button class="ctx-item danger" on:click={block}>{blocked ? "Unblock" : "Block Locally"}</button>
             <button class="ctx-item danger" on:click={blockAndUnsub}>Block &amp; Unsubscribe</button>

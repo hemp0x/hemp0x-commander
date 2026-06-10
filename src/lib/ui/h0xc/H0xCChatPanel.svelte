@@ -29,6 +29,8 @@
     let mutedUsers = [];
     /** @type {string[]} */
     let blockedUsers = [];
+    /** @type {Set<string>} */
+    let leftChannels = new Set();
     let settings = {
         messageExpiryDefault: 30,
         autoDiscovery: true,
@@ -50,6 +52,7 @@
     const PARTICIPANTS_KEY = "h0xc_cachedParticipants";
     const MUTED_KEY = "h0xc_mutedUsers";
     const BLOCKED_KEY = "h0xc_blockedUsers";
+    const LEFT_KEY = "h0xc_leftChannels";
     const IDENTITY_KEY = "h0xc_selectedIdentity";
     const LAST_SEEN_KEY = "h0xc_lastSeenMessageKey";
     const LAST_SCAN_TIME_KEY = "h0xc_lastScanTime";
@@ -88,6 +91,8 @@
         // Load persisted state
         mutedUsers = loadJson(MUTED_KEY, []);
         blockedUsers = loadJson(BLOCKED_KEY, []);
+        const loadedLeft = loadJson(LEFT_KEY, []);
+        leftChannels = new Set(Array.isArray(loadedLeft) ? loadedLeft : []);
         participants = loadJson(PARTICIPANTS_KEY, []);
         settings = loadJson(SETTINGS_KEY, {
             messageExpiryDefault: 30,
@@ -220,6 +225,7 @@
     function closeAndSave() {
         saveJson(MUTED_KEY, mutedUsers);
         saveJson(BLOCKED_KEY, blockedUsers);
+        saveJson(LEFT_KEY, Array.from(leftChannels));
         saveJson(PARTICIPANTS_KEY, participants);
         saveJson(SETTINGS_KEY, settings);
         saveJson(IDENTITY_KEY, selectedIdentity);
@@ -231,6 +237,7 @@
     function persistState() {
         saveJson(MUTED_KEY, mutedUsers);
         saveJson(BLOCKED_KEY, blockedUsers);
+        saveJson(LEFT_KEY, Array.from(leftChannels));
         saveJson(PARTICIPANTS_KEY, participants);
         saveJson(SETTINGS_KEY, settings);
         saveJson(LAST_SEEN_KEY, lastSeenMessageKey);
@@ -240,6 +247,7 @@
     $: if (participants) persistState();
     $: if (mutedUsers) saveJson(MUTED_KEY, mutedUsers);
     $: if (blockedUsers) saveJson(BLOCKED_KEY, blockedUsers);
+    $: if (leftChannels) saveJson(LEFT_KEY, Array.from(leftChannels));
     $: if (settings) saveJson(SETTINGS_KEY, settings);
     $: if (selectedIdentity) saveJson(IDENTITY_KEY, selectedIdentity);
     $: if (lastSeenMessageKey !== undefined) saveJson(LAST_SEEN_KEY, lastSeenMessageKey);
@@ -383,6 +391,7 @@
                             bind:participants
                             bind:mutedUsers
                             bind:blockedUsers
+                            bind:leftChannels
                             bind:settings
                             bind:lastScanBlock
                             bind:lastSeenMessageKey
@@ -538,6 +547,7 @@
                             bind:participants
                             bind:mutedUsers
                             bind:blockedUsers
+                            bind:leftChannels
                             bind:settings
                             bind:lastScanBlock
                             bind:lastSeenMessageKey

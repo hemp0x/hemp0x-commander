@@ -20,6 +20,16 @@ function matchTxid(txid, prefix, suffix) {
     return lower.startsWith(prefix) && lower.endsWith(suffix);
 }
 
+export function controlMessageKey(msg) {
+    return [
+        canonicalMessageChannel(msg),
+        msg.txid || "",
+        msg.time || "",
+        msg.block_height || "",
+        msg.message || "",
+    ].join("|");
+}
+
 export function isHcControlFrame(hex) {
     if (!hex || hex.length < 4) return false;
     return hex.slice(0, 4).toLowerCase() === HC_MAGIC_HEX;
@@ -29,8 +39,21 @@ export async function buildDeleteCommandHex(txid) {
     return await core.invoke("h0xc_control_encode_delete", { txid });
 }
 
+export async function buildLeaveCommandHex() {
+    return await core.invoke("h0xc_control_encode_leave");
+}
+
+/**
+ * Interpret HC control messages from a loaded message set.
+ * Returns hidden txids (delete commands) and left channels (leave commands).
+ * Both are derived from the currently loaded messages only.
+ * @param {Array<{message: string, txid?: string, asset_name?: string, channel?: string, authority_asset?: string}>} messages
+ * @returns {{hiddenTxids: Set<string>, leftChannels: Set<string>, leaveMessageKeys: Set<string>}}
+ */
 export async function interpretControlMessages(messages) {
     const derivedHidden = new Set();
+    const leftChannels = new Set();
+    const leaveMessageKeys = new Set();
 
     for (const msg of messages) {
         const hex = msg.message;
@@ -38,36 +61,39 @@ export async function interpretControlMessages(messages) {
 
         let parsed = null;
         try {
-            const result = await core.invoke("h0xc_control_decode", { hex });
-            if (result.is_control && result.command === "delete" && result.txid_prefix && result.txid_suffix) {
-                parsed = { prefix: result.txid_prefix, suffix: result.txid_suffix };
-            }
+            parsed = await core.invoke("h0xc_control_decode", { hex });
         } catch {
             continue;
         }
 
-        if (!parsed) continue;
+        if (!parsed || !parsed.is_control) continue;
+        if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) continue;
 
         const cmdChannel = canonicalMessageChannel(msg);
         if (!cmdChannel) continue;
 
-        const { prefix, suffix } = parsed;
-        const matches = messages.filter((m) => {
-            if (!m.txid) return false;
-            if (!matchTxid(m.txid, prefix, suffix)) return false;
-            const targetChannel = canonicalMessageChannel(m);
-            return targetChannel && targetChannel === cmdChannel;
-        });
+        if (parsed.command === "delete" && parsed.txid_prefix && parsed.txid_suffix) {
+            const { txid_prefix: prefix, txid_suffix: suffix } = parsed;
+            const matches = messages.filter((m) => {
+                if (!m.txid) return false;
+                if (!matchTxid(m.txid, prefix, suffix)) return false;
+                const targetChannel = canonicalMessageChannel(m);
+                return targetChannel && targetChannel === cmdChannel;
+            });
 
-        if (matches.length === 1) {
-            const targetTxid = matches[0].txid;
-            if (targetTxid) {
-                derivedHidden.add(targetTxid);
+            if (matches.length === 1) {
+                const targetTxid = matches[0].txid;
+                if (targetTxid) {
+                    derivedHidden.add(targetTxid);
+                }
             }
+        } else if (parsed.command === "leave") {
+            leftChannels.add(cmdChannel);
+            leaveMessageKeys.add(controlMessageKey(msg));
         }
     }
 
-    return derivedHidden;
+    return { hiddenTxids: derivedHidden, leftChannels, leaveMessageKeys };
 }
 
 export function isMessageHidden(msg, hiddenTxids) {
@@ -79,4 +105,8 @@ export function isControlCommandMessage(msg) {
     const hex = msg.message;
     if (!hex) return false;
     return isHcControlFrame(hex);
+}
+
+export function isDecodedLeaveCommandMessage(msg, leaveMessageKeys) {
+    return leaveMessageKeys.has(controlMessageKey(msg));
 }

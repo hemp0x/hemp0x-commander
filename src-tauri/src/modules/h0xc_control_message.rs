@@ -31,6 +31,7 @@ const HC_FLAGS_RESERVED: u8 = 0x00;
 const HC_PAYLOAD_MAX: usize = 25;
 
 const CMD_DELETE: u8 = 0x01;
+const CMD_LEAVE: u8 = 0x07;
 
 const PAYLOAD_LEN_INDEX: usize = 5;
 const PAYLOAD_INDEX: usize = 6;
@@ -222,6 +223,13 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
             result.txid_prefix = Some(bytes_to_hex(&bytes[prefix_start..prefix_end]));
             result.txid_suffix = Some(bytes_to_hex(&bytes[suffix_start..suffix_end]));
         }
+        CMD_LEAVE => {
+            result.command = Some("leave".to_string());
+            if payload_len != 0 {
+                result.warnings.push(format!("Leave payload must be 0 bytes, got {payload_len}"));
+                return result;
+            }
+        }
         0x00 => {
             result
                 .warnings
@@ -237,9 +245,27 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
     result
 }
 
+pub fn encode_control_leave() -> Result<String, String> {
+    let payload_len = 0;
+    let mut frame = [0u8; FRAME_SIZE];
+    frame[0] = HC_MAGIC_0;
+    frame[1] = HC_MAGIC_1;
+    frame[2] = HC_FORMAT_VERSION;
+    frame[3] = CMD_LEAVE;
+    frame[4] = 0x00;
+    frame[PAYLOAD_LEN_INDEX] = payload_len;
+    frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
+    Ok(bytes_to_hex(&frame))
+}
+
 #[tauri::command]
 pub fn h0xc_control_encode_delete(txid: String) -> Result<String, String> {
     encode_control_delete(&txid)
+}
+
+#[tauri::command]
+pub fn h0xc_control_encode_leave() -> Result<String, String> {
+    encode_control_leave()
 }
 
 #[tauri::command]
@@ -626,5 +652,117 @@ mod tests {
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
         assert!(result.warnings.iter().any(|w| w.contains("flags")));
+    }
+
+    // --- Leave command tests ---
+
+    #[test]
+    fn encode_leave_produces_64_char_hex() {
+        let hex = encode_control_leave().expect("encode leave");
+        assert_eq!(hex.len(), HEX_FRAME_LEN);
+    }
+
+    #[test]
+    fn encode_leave_frame_starts_with_hc_magic() {
+        let hex = encode_control_leave().expect("encode leave");
+        let bytes = hex_to_bytes(&hex).unwrap();
+        assert_eq!(bytes[0], HC_MAGIC_0);
+        assert_eq!(bytes[1], HC_MAGIC_1);
+    }
+
+    #[test]
+    fn encode_leave_frame_has_correct_version_and_cmd() {
+        let hex = encode_control_leave().expect("encode leave");
+        let bytes = hex_to_bytes(&hex).unwrap();
+        assert_eq!(bytes[2], HC_FORMAT_VERSION);
+        assert_eq!(bytes[3], CMD_LEAVE);
+        assert_eq!(bytes[4], 0x00);
+        assert_eq!(bytes[PAYLOAD_LEN_INDEX], 0);
+    }
+
+    #[test]
+    fn encode_leave_roundtrips() {
+        let hex = encode_control_leave().expect("encode leave");
+        let result = decode_control_frame(&hex);
+        assert!(result.is_control);
+        assert_eq!(result.version, Some(1));
+        assert_eq!(result.command.as_deref(), Some("leave"));
+        assert!(result.txid_prefix.is_none());
+        assert!(result.txid_suffix.is_none());
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn decode_leave_warns_on_nonzero_payload() {
+        let mut frame = [0u8; 32];
+        frame[0] = HC_MAGIC_0;
+        frame[1] = HC_MAGIC_1;
+        frame[2] = HC_FORMAT_VERSION;
+        frame[3] = CMD_LEAVE;
+        frame[4] = 0x00;
+        frame[PAYLOAD_LEN_INDEX] = 5; // nonzero payload
+        frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
+        let hex = frame_from_bytes(&frame);
+        let result = decode_control_frame(&hex);
+        assert!(result.is_control);
+        assert_eq!(result.command.as_deref(), Some("leave"));
+        assert!(result.warnings.iter().any(|w| w.contains("Leave payload")));
+    }
+
+    #[test]
+    fn decode_leave_rejects_nonzero_flags() {
+        let mut frame = [0u8; 32];
+        frame[0] = HC_MAGIC_0;
+        frame[1] = HC_MAGIC_1;
+        frame[2] = HC_FORMAT_VERSION;
+        frame[3] = CMD_LEAVE;
+        frame[4] = 0x01; // nonzero flags
+        frame[PAYLOAD_LEN_INDEX] = 0;
+        frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
+        let hex = frame_from_bytes(&frame);
+        let result = decode_control_frame(&hex);
+        assert!(result.is_control);
+        assert!(result.warnings.iter().any(|w| w.contains("flags")));
+    }
+
+    #[test]
+    fn decode_leave_rejects_unknown_version() {
+        let mut frame = [0u8; 32];
+        frame[0] = HC_MAGIC_0;
+        frame[1] = HC_MAGIC_1;
+        frame[2] = 0x99; // unknown version
+        frame[3] = CMD_LEAVE;
+        frame[4] = 0x00;
+        frame[PAYLOAD_LEN_INDEX] = 0;
+        frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
+        let hex = frame_from_bytes(&frame);
+        let result = decode_control_frame(&hex);
+        assert!(result.is_control);
+        assert!(result.warnings.iter().any(|w| w.contains("Unknown HC version")));
+    }
+
+    #[test]
+    fn decode_leave_malformed_frame_does_not_panic() {
+        let hex = "00".repeat(32);
+        let result = decode_control_frame(&hex);
+        assert!(!result.is_control);
+    }
+
+    #[test]
+    fn leave_frame_mutation_fuzz() {
+        let base_hex = encode_control_leave().expect("encode leave");
+        let base_bytes = hex_to_bytes(&base_hex).unwrap();
+        for byte_idx in 0..FRAME_SIZE {
+            for bit in 0..8 {
+                let mut mutated = base_bytes.clone();
+                mutated[byte_idx] ^= 1 << bit;
+                let hex = bytes_to_hex(&mutated);
+                let result = decode_control_frame(&hex);
+                let _ = &result.warnings;
+                let _ = &result.command;
+                let _ = result.txid_prefix;
+                let _ = result.txid_suffix;
+            }
+        }
     }
 }

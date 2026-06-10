@@ -43,6 +43,10 @@
         showExpired: false,
         hideStaleUsers: true,
         staleUserDays: 90,
+        communityReportAutoHide: false,
+        communityReportMinReports: 3,
+        communityReportMinRatio: 0.4,
+        communityReportWindowDays: 30,
     };
     let lastScanBlock = 0;
     let lastSeenMessageKey = "";
@@ -106,6 +110,10 @@
             showExpired: false,
             hideStaleUsers: true,
             staleUserDays: 90,
+            communityReportAutoHide: false,
+            communityReportMinReports: 3,
+            communityReportMinRatio: 0.4,
+            communityReportWindowDays: 30,
         });
         if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
             settings.autoBlockTags = ["#SPAM"];
@@ -118,6 +126,10 @@
         if (typeof settings.showExpired !== "boolean") settings.showExpired = false;
         if (typeof settings.hideStaleUsers !== "boolean") settings.hideStaleUsers = true;
         if (typeof settings.staleUserDays !== "number" || settings.staleUserDays < 1) settings.staleUserDays = 90;
+        if (typeof settings.communityReportAutoHide !== "boolean") settings.communityReportAutoHide = false;
+        if (typeof settings.communityReportMinReports !== "number" || settings.communityReportMinReports < 1) settings.communityReportMinReports = 3;
+        if (typeof settings.communityReportMinRatio !== "number" || settings.communityReportMinRatio < 0.1) settings.communityReportMinRatio = 0.4;
+        if (typeof settings.communityReportWindowDays !== "number" || settings.communityReportWindowDays < 1) settings.communityReportWindowDays = 30;
         lastSeenMessageKey = loadJson(LAST_SEEN_KEY, "");
         lastScanTime = loadJson(LAST_SCAN_TIME_KEY, "");
         disclaimerAccepted = loadJson(DISCLAIMER_KEY, false) === true;

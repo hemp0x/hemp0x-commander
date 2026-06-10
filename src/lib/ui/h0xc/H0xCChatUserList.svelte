@@ -2,6 +2,7 @@
     import { createEventDispatcher } from "svelte";
     import { fade } from "svelte/transition";
     import { deriveRootNameFn } from "../../stores/h0xc.js";
+    import { STATUS_ICONS, STATUS_LABELS, isChannelModerationHidden } from "../../stores/h0xc-control.js";
     import H0xCUserContextMenu from "./H0xCUserContextMenu.svelte";
 
     /**
@@ -22,6 +23,8 @@
     export let staleUserDays = 90;
     /** @type {Set<string>} */
     export let leftChannels = new Set();
+    /** @type {Map<string, {value: number, expiryMode: number, expiryValue: number, expiryTs: number}>} */
+    export let statusByChannel = new Map();
 
     const dispatch = createEventDispatcher();
 
@@ -78,9 +81,8 @@
     }
 
     $: filteredParticipants = participants.filter((p) => {
-        if (blockedUsers.includes(p.rootName)) return false;
-        if (tagBlockedChannels.has(p.assetName)) return false;
-        if (leftChannels.has(normalizeChannel(p.assetName))) return false;
+        const blocked = new Set(blockedUsers.map((u) => u.toUpperCase()));
+        if (isChannelModerationHidden(p.assetName, leftChannels, blocked, tagBlockedChannels).hidden) return false;
         if (hideStaleUsers && staleUserDays > 0 && p.lastSeen > 0) {
             const age = Date.now() - p.lastSeen;
             if (age > staleUserDays * 86400000) return false;
@@ -117,6 +119,10 @@
                 >
                     <span class="ul-dot dot-tier-{bucket.tier}"></span>
                     <span class="ul-name">[{p.rootName.toUpperCase()}]</span>
+                    {#if statusByChannel.has(p.assetName) && statusByChannel.get(p.assetName).value !== 4}
+                        {@const st = statusByChannel.get(p.assetName)}
+                        <span class="ul-badge status" title={STATUS_LABELS[st.value] || "Unknown"}>{STATUS_ICONS[st.value] || "●"}</span>
+                    {/if}
                     {#if mutedUsers.includes(p.rootName)}
                         <span class="ul-badge muted">M</span>
                     {:else if blockedUsers.includes(p.rootName)}
@@ -279,5 +285,10 @@
         color: #ff5555;
         background: rgba(255, 85, 85, 0.1);
         border: 1px solid rgba(255, 85, 85, 0.2);
+    }
+    .ul-badge.status {
+        color: #8cff9f;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.15);
     }
 </style>

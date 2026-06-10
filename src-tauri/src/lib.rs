@@ -124,6 +124,9 @@ pub fn run() {
             // H0XC Control Frame Commands
             h0xc_control_message::h0xc_control_encode_delete,
             h0xc_control_message::h0xc_control_encode_leave,
+            h0xc_control_message::h0xc_control_encode_status,
+            h0xc_control_message::h0xc_control_encode_report_message,
+            h0xc_control_message::h0xc_control_encode_report_channel,
             h0xc_control_message::h0xc_control_decode,
             // IPFS Commands
             commands::ipfs_validate,

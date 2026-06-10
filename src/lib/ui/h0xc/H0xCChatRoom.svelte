@@ -12,12 +12,29 @@
     import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
     import {
         interpretControlMessages,
-        isMessageHidden,
         isControlCommandMessage,
         isDecodedLeaveCommandMessage,
         buildDeleteCommandHex,
         buildLeaveCommandHex,
+        buildStatusCommandHex,
+        buildReportMessageCommandHex,
+        buildReportChannelCommandHex,
         canonicalMessageChannel,
+        STATUS_LABELS,
+        STATUS_ICONS,
+        REASON_LABELS,
+        SEVERITY_LABELS,
+        hideMessageLocally,
+        hideChannelLocally,
+        unhideMessageLocally,
+        unhideChannelLocally,
+        isMessageModerationHidden,
+        isChannelModerationHidden,
+        aggregateReports,
+        shouldAutoHide,
+        setCommunityHidden,
+        getCommunityHidden,
+        addOverrideHidden,
     } from "../../stores/h0xc-control.js";
 
     const dispatch = createEventDispatcher();
@@ -83,6 +100,38 @@
     let hiddenTxids = new Set();
     /** @type {Set<string>} */
     export let leftChannels = new Set();
+
+    // Status
+    /** @type {Map<string, {value: number, expiryMode: number, expiryValue: number, expiryTs: number, commandTime: number, commandKey: string}>} */
+    let statusByChannel = new Map();
+    let statusOpen = false;
+    let statusBusy = false;
+    let statusError = "";
+
+    // Reports
+    /** @type {Array<{target: string, targetType: number, reason: number, severity: number, durationDays: number, channel: string, timeSec: number, commandKey: string}>} */
+    let reportCommands = [];
+    let reportOpen = false;
+    let reportBusy = false;
+    let reportError = "";
+    let reportTargetType = 0;
+    let reportTargetId = "";
+    let reportTargetLabel = "";
+    let reportReason = 1;
+    let reportSeverity = 2;
+    let reportDurationDays = 30;
+
+    // Status picker state
+    let selectedStatus = 0;
+    let selectedExpiryMode = 0;
+    let selectedExpiryHours = 4;
+    let selectedExpiryDateTime = "";
+
+    // Moderation lists for settings view
+    import { getLocalHiddenMessages, getLocalHiddenChannels } from "../../stores/h0xc-control.js";
+    $: localHiddenMessagesList = getLocalHiddenMessages();
+    $: localHiddenChannelsList = getLocalHiddenChannels();
+    $: communityHiddenList = getCommunityHidden();
 
     let discovering = false;
     let discoveryError = "";
@@ -165,6 +214,12 @@
 
     $: ctxParticipant = ctxUser ? participants.find((p) => p.rootName === ctxUser) : null;
     $: ctxIsSelf = ctxUser ? ctxUser.toUpperCase() === rootName().toUpperCase() : false;
+
+    $: myStatusEntry = (() => {
+        const myChannel = identity ? canonicalMessageChannel({ asset_name: identity }) : "";
+        return myChannel ? statusByChannel.get(myChannel) : null;
+    })();
+    $: myStatusValue = myStatusEntry ? myStatusEntry.value : undefined;
 
     $: {
         if (messagesLoading && messages.length > 0 && !showRefreshIndicator) {
@@ -290,6 +345,10 @@
             }
             leftChannels = nextLeft;
 
+            statusByChannel = controlResult.statusByChannel || new Map();
+            reportCommands = controlResult.reportCommands || [];
+            updateCommunityHiddenFromReports();
+
             updateParticipantsFromMessages(messages);
             await decodeVisible(messages);
 
@@ -390,6 +449,56 @@
         const list = Array.from(byAsset.values());
         list.sort((a, b) => a.rootName.localeCompare(b.rootName));
         participants = list;
+    }
+
+    function updateCommunityHiddenFromReports() {
+        if (!settings.communityReportAutoHide) {
+            setCommunityHidden([]);
+            communityHiddenList = [];
+            return;
+        }
+
+        const blockedReporters = new Set();
+        const blockedRoots = new Set(blockedUsers.map((u) => u.toUpperCase()));
+        const mutedRoots = new Set(mutedUsers.map((u) => u.toUpperCase()));
+        for (const p of participants) {
+            const root = (p.rootName || "").toUpperCase();
+            const channel = canonicalMessageChannel({ asset_name: p.assetName });
+            if (!channel) continue;
+            if (blockedRoots.has(root) || mutedRoots.has(root) || leftChannels.has(channel) || tagBlockedChannels.has(p.assetName) || tagBlockedChannels.has(channel)) {
+                blockedReporters.add(channel);
+            }
+        }
+
+        const windowDays = Math.max(1, Math.min(365, Number(settings.communityReportWindowDays) || 30));
+        const minReports = Math.max(1, Math.min(20, Number(settings.communityReportMinReports) || 3));
+        const minRatio = Math.max(0.1, Math.min(1, Number(settings.communityReportMinRatio) || 0.4));
+        const recentParticipants = Math.max(1, participants.filter((p) => {
+            const channel = canonicalMessageChannel({ asset_name: p.assetName });
+            return channel && !blockedReporters.has(channel);
+        }).length);
+        const aggregated = aggregateReports(reportCommands, blockedReporters, windowDays);
+        const now = Math.floor(Date.now() / 1000);
+        const next = [];
+
+        for (const [key, entry] of aggregated) {
+            if (!shouldAutoHide(entry, minReports, minRatio, recentParticipants)) continue;
+            const sep = key.indexOf(":");
+            const targetType = Number(key.slice(0, sep));
+            const target = key.slice(sep + 1);
+            const durationDays = entry.maxDuration || 30;
+            next.push({
+                target,
+                targetType,
+                count: entry.channels.size,
+                channels: Array.from(entry.channels),
+                maxSeverity: entry.maxSeverity,
+                expiryTs: Math.max(entry.latestTime, now) + durationDays * 86400,
+            });
+        }
+
+        setCommunityHidden(next);
+        communityHiddenList = next;
     }
 
     /**
@@ -496,7 +605,14 @@
             const rn = deriveRootNameFn(msg.asset_name).toUpperCase();
             return !mu.has(rn);
         }).filter((msg) => {
-            return !isMessageHidden(msg, hiddenTxids);
+            return !isMessageModerationHidden(msg, hiddenTxids).hidden;
+        }).filter((msg) => {
+            return !isChannelModerationHidden(
+                msg.asset_name,
+                leftChannels,
+                bl,
+                tagBlockedChannels
+            ).hidden;
         }).filter((msg) => {
             return !isControlCommandMessage(msg);
         });
@@ -1127,6 +1243,198 @@
         }
     }
 
+    // --- Status control ---
+
+    function toggleStatus() {
+        statusOpen = !statusOpen;
+        statusError = "";
+    }
+
+    function closeStatus() {
+        statusOpen = false;
+        statusError = "";
+    }
+
+    async function sendStatus(status, expiryMode, expiryValue) {
+        if (isGuest || !identity) {
+            statusError = "Cannot set status as guest.";
+            return;
+        }
+        statusBusy = true;
+        statusError = "";
+        try {
+            const hex = await buildStatusCommandHex(status, expiryMode, expiryValue);
+            const channel = identity.replace(/!$/, "");
+            await core.invoke("preview_send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+            await core.invoke("send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+            addNotification({
+                type: "message",
+                severity: "success",
+                title: "Status Updated",
+                body: `Status broadcast on ${channel}`,
+            });
+            statusOpen = false;
+            setTimeout(() => loadMessages(), 2000);
+        } catch (err) {
+            const text = String(err);
+            if (/wallet.*locked|passphrase|unlock/i.test(text)) {
+                requestWalletUnlock(() => sendStatus(status, expiryMode, expiryValue));
+                return;
+            }
+            statusError = text;
+        } finally {
+            statusBusy = false;
+        }
+    }
+
+    function selectedStatusExpiryValue() {
+        if (selectedExpiryMode === 1) {
+            return Math.max(1, Math.min(2160, Number(selectedExpiryHours) || 4));
+        }
+        if (selectedExpiryMode === 2) {
+            const selectedMs = selectedExpiryDateTime ? new Date(selectedExpiryDateTime).getTime() : NaN;
+            if (!Number.isFinite(selectedMs)) {
+                statusError = "Choose a valid status expiry date and time.";
+                return null;
+            }
+            const now = Date.now();
+            const max = now + 90 * 86400000;
+            if (selectedMs <= now) {
+                statusError = "Status expiry must be in the future.";
+                return null;
+            }
+            if (selectedMs > max) {
+                statusError = "Status expiry cannot be more than 90 days out.";
+                return null;
+            }
+            return Math.floor(selectedMs / 1000);
+        }
+        return 0;
+    }
+
+    function defaultStatusDateTime() {
+        const d = new Date(Date.now() + 24 * 3600000);
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // --- Report control ---
+
+    function openReportMessage(txid, label) {
+        reportTargetType = 1;
+        reportTargetId = txid;
+        reportTargetLabel = label || txid?.slice(0, 16) + "...";
+        reportReason = 1;
+        reportSeverity = 2;
+        reportDurationDays = 30;
+        reportOpen = true;
+        reportError = "";
+    }
+
+    function openReportChannel(channel, label) {
+        reportTargetType = 2;
+        reportTargetId = channel;
+        reportTargetLabel = label || channel;
+        reportReason = 1;
+        reportSeverity = 2;
+        reportDurationDays = 30;
+        reportOpen = true;
+        reportError = "";
+    }
+
+    function closeReport() {
+        reportOpen = false;
+        reportError = "";
+    }
+
+    async function sendReport() {
+        if (isGuest || !identity) {
+            reportError = "Cannot report as guest.";
+            return;
+        }
+        if (!reportTargetId) {
+            reportError = "No target selected.";
+            return;
+        }
+        reportBusy = true;
+        reportError = "";
+        try {
+            let hex;
+            if (reportTargetType === 1) {
+                hex = await buildReportMessageCommandHex(
+                    reportTargetId,
+                    reportReason,
+                    reportSeverity,
+                    reportDurationDays
+                );
+            } else {
+                hex = await buildReportChannelCommandHex(
+                    reportTargetId,
+                    reportReason,
+                    reportSeverity,
+                    reportDurationDays
+                );
+            }
+            const channel = identity.replace(/!$/, "");
+            await core.invoke("preview_send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+            await core.invoke("send_announcement", {
+                channelName: channel,
+                ipfsHash: hex,
+                expireTime: null,
+            });
+
+            // Hide locally immediately
+            if (reportTargetType === 1) {
+                hideMessageLocally(reportTargetId, reportReason);
+            } else {
+                hideChannelLocally(reportTargetId, reportReason);
+            }
+
+            addNotification({
+                type: "message",
+                severity: "success",
+                title: "Report Sent",
+                body: `Report broadcast on ${channel}`,
+            });
+            reportOpen = false;
+            setTimeout(() => loadMessages(), 2000);
+        } catch (err) {
+            const text = String(err);
+            if (/wallet.*locked|passphrase|unlock/i.test(text)) {
+                requestWalletUnlock(() => sendReport());
+                return;
+            }
+            reportError = text;
+        } finally {
+            reportBusy = false;
+        }
+    }
+
+    function handleUnhideMessage(txid) {
+        unhideMessageLocally(txid);
+    }
+
+    function handleUnhideChannel(channel) {
+        unhideChannelLocally(channel);
+    }
+
+    function handleAllowCommunityHidden(target) {
+        addOverrideHidden(target);
+        updateCommunityHiddenFromReports();
+    }
+
     /** @param {{ rootName: string, address: string, tag: string }} detail */
     function handleAddTag(detail) {
         const tag = detail.tag.startsWith("#") ? detail.tag : `#${detail.tag}`;
@@ -1179,6 +1487,13 @@
             </button>
             <button class="header-btn" class:active={searchOpen} on:click={() => { searchOpen = !searchOpen; if (!searchOpen) clearSearch(); }} title="Filter messages">
                 ⌕
+            </button>
+            <button class="header-btn" class:active={statusOpen} on:click={toggleStatus} title="Set status">
+                {#if myStatusValue !== undefined && myStatusValue !== 4}
+                    <span class="status-active-icon">{STATUS_ICONS[myStatusValue] || "●"}</span>
+                {:else}
+                    ◉
+                {/if}
             </button>
             <button class="header-btn" on:click={toggleSettings} title="Settings">
                 ⚙
@@ -1350,6 +1665,7 @@
             hideStaleUsers={settings.hideStaleUsers !== false}
             staleUserDays={settings.staleUserDays || 90}
             {leftChannels}
+            {statusByChannel}
             on:mute={handleMute}
             on:block={handleBlock}
             on:viewDetails={handleViewDetails}
@@ -1397,10 +1713,143 @@
         {blockedUsers}
         {discoveryState}
         {lastScanTime}
+        localHiddenMessages={localHiddenMessagesList}
+        localHiddenChannels={localHiddenChannelsList}
+        communityHidden={communityHiddenList}
         on:close={() => (settingsOpen = false)}
         on:save={handleSaveSettings}
         on:unblock={(e) => { blockedUsers = blockedUsers.filter((u) => u !== e.detail.rootName); }}
+        on:unhideMessage={(e) => handleUnhideMessage(e.detail.txid)}
+        on:unhideChannel={(e) => handleUnhideChannel(e.detail.channel)}
+        on:allowCommunityHidden={(e) => handleAllowCommunityHidden(e.detail.target)}
     />
+
+    {#if statusOpen}
+        <div class="status-overlay" role="dialog" aria-modal="true" on:click={closeStatus} on:keydown={(e) => e.key === "Escape" && closeStatus()} tabindex="0" transition:fade={{ duration: 80 }}>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div class="status-panel" on:click|stopPropagation on:keydown|stopPropagation role="document">
+                <div class="status-header">
+                    <span class="status-title">SET STATUS</span>
+                    <button class="status-close" on:click={closeStatus}>&times;</button>
+                </div>
+                <div class="status-body">
+                    {#if statusError}
+                        <div class="status-error">{statusError}</div>
+                    {/if}
+                    <div class="status-options">
+                        {#each Object.entries(STATUS_LABELS) as [val, label]}
+                            {@const v = parseInt(val)}
+                            {#if v !== 4}
+                                <button
+                                    class="status-opt"
+                                    class:active={selectedStatus === v}
+                                    on:click={() => { selectedStatus = v; }}
+                                    disabled={statusBusy}
+                                >
+                                    <span class="status-opt-icon">{STATUS_ICONS[v]}</span>
+                                    <span class="status-opt-label">{label}</span>
+                                </button>
+                            {/if}
+                        {/each}
+                    </div>
+                    <div class="status-expiry-section">
+                        <span class="status-section-label">EXPIRY</span>
+                        <div class="status-expiry-row">
+                            <button class="status-expiry-btn" class:active={selectedExpiryMode === 0} on:click={() => { selectedExpiryMode = 0; }} disabled={statusBusy}>24 Hours</button>
+                            <button class="status-expiry-btn" class:active={selectedExpiryMode === 1} on:click={() => { selectedExpiryMode = 1; selectedExpiryHours = 4; }} disabled={statusBusy}>Custom</button>
+                            <button class="status-expiry-btn" class:active={selectedExpiryMode === 2} on:click={() => { selectedExpiryMode = 2; if (!selectedExpiryDateTime) selectedExpiryDateTime = defaultStatusDateTime(); }} disabled={statusBusy}>Until Date</button>
+                            <button class="status-expiry-btn" class:active={selectedExpiryMode === 3} on:click={() => { selectedExpiryMode = 3; }} disabled={statusBusy}>Until Changed</button>
+                        </div>
+                        {#if selectedExpiryMode === 1}
+                            <div class="status-hours-row">
+                                <span class="status-hours-label">Hours:</span>
+                                <input type="number" class="cyber-input" bind:value={selectedExpiryHours} min="1" max="2160" disabled={statusBusy} />
+                            </div>
+                        {:else if selectedExpiryMode === 2}
+                            <div class="status-hours-row">
+                                <span class="status-hours-label">Until:</span>
+                                <input type="datetime-local" class="cyber-input" bind:value={selectedExpiryDateTime} disabled={statusBusy} />
+                            </div>
+                        {/if}
+                    </div>
+                    <div class="status-actions">
+                        <button class="status-btn cancel" on:click={closeStatus} disabled={statusBusy}>Cancel</button>
+                        <button class="status-btn clear" on:click={() => sendStatus(4, 0, 0)} disabled={statusBusy}>Clear Status</button>
+                        <button class="status-btn set" on:click={() => {
+                            const expiryValue = selectedStatusExpiryValue();
+                            if (expiryValue !== null) sendStatus(selectedStatus, selectedExpiryMode, expiryValue);
+                        }} disabled={statusBusy}>
+                            {statusBusy ? "Sending..." : "Set Status"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {/if}
+
+    {#if reportOpen}
+        <div class="report-overlay" role="dialog" aria-modal="true" on:click={closeReport} on:keydown={(e) => e.key === "Escape" && closeReport()} tabindex="0" transition:fade={{ duration: 80 }}>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div class="report-panel" on:click|stopPropagation on:keydown|stopPropagation role="document">
+                <div class="report-header">
+                    <span class="report-title">REPORT {reportTargetType === 1 ? "MESSAGE" : "CHANNEL"}</span>
+                    <button class="report-close" on:click={closeReport}>&times;</button>
+                </div>
+                <div class="report-body">
+                    {#if reportError}
+                        <div class="report-error">{reportError}</div>
+                    {/if}
+                    <div class="report-target">
+                        <span class="report-target-label">Target:</span>
+                        <span class="report-target-val">{reportTargetLabel}</span>
+                    </div>
+                    <div class="report-section">
+                        <span class="report-section-label">REASON</span>
+                        <div class="report-options">
+                            {#each Object.entries(REASON_LABELS) as [val, label]}
+                                {@const v = parseInt(val)}
+                                <button
+                                    class="report-opt"
+                                    class:active={reportReason === v}
+                                    on:click={() => { reportReason = v; }}
+                                    disabled={reportBusy}
+                                >{label}</button>
+                            {/each}
+                        </div>
+                    </div>
+                    <div class="report-section">
+                        <span class="report-section-label">SEVERITY</span>
+                        <div class="report-options">
+                            {#each Object.entries(SEVERITY_LABELS) as [val, label]}
+                                {@const v = parseInt(val)}
+                                <button
+                                    class="report-opt"
+                                    class:active={reportSeverity === v}
+                                    on:click={() => { reportSeverity = v; }}
+                                    disabled={reportBusy}
+                                >{label}</button>
+                            {/each}
+                        </div>
+                    </div>
+                    <div class="report-section">
+                        <span class="report-section-label">DURATION</span>
+                        <div class="report-options">
+                            <button class="report-opt" class:active={reportDurationDays === 7} on:click={() => { reportDurationDays = 7; }} disabled={reportBusy}>7 Days</button>
+                            <button class="report-opt" class:active={reportDurationDays === 30} on:click={() => { reportDurationDays = 30; }} disabled={reportBusy}>30 Days</button>
+                            <button class="report-opt" class:active={reportDurationDays === 90} on:click={() => { reportDurationDays = 90; }} disabled={reportBusy}>90 Days</button>
+                            <button class="report-opt" class:active={reportDurationDays === 180} on:click={() => { reportDurationDays = 180; }} disabled={reportBusy}>180 Days</button>
+                        </div>
+                    </div>
+                    <div class="report-actions">
+                        <button class="report-btn cancel" on:click={closeReport} disabled={reportBusy}>Cancel</button>
+                        <button class="report-btn send" on:click={sendReport} disabled={reportBusy}>
+                            {reportBusy ? "Sending..." : "Send Report"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {/if}
 
     <H0xCUserContextMenu
         x={ctxX}
@@ -1423,6 +1872,7 @@
         on:filterByUser={(e) => { filterByUser(e.detail.rootName); closeUserContext(); }}
         on:addTag={(e) => { handleAddTag(e.detail); closeUserContext(); }}
         on:leave={() => { openLeaveConfirm(); closeUserContext(); }}
+        on:reportChannel={(e) => { openReportChannel(e.detail.channel, e.detail.rootName); closeUserContext(); }}
         on:close={closeUserContext}
     />
 
@@ -1519,9 +1969,12 @@
                             <span class="msg-detail-val">{msgDetail.msg.status}</span>
                         </div>
                     {/if}
-                    {#if canDeleteMessage(msgDetail.msg)}
+                    {#if !isGuest && msgDetail.msg.txid}
                         <div class="msg-detail-row msg-detail-actions">
-                            <button class="msg-detail-delete" on:click={requestDeleteMessage} title="Send a local delete command for this message">Delete message</button>
+                            {#if canDeleteMessage(msgDetail.msg)}
+                                <button class="msg-detail-delete" on:click={requestDeleteMessage} title="Send a local delete command for this message">Delete message</button>
+                            {/if}
+                            <button class="msg-detail-action" on:click={() => openReportMessage(msgDetail.msg.txid, msgDetail.msg.asset_name)} title="Report this message">Report message</button>
                         </div>
                     {/if}
                 </div>
@@ -2124,5 +2577,353 @@
     .leave-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+    }
+
+    .status-active-icon {
+        font-size: 0.65rem;
+    }
+
+    /* Status overlay */
+    .status-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(4px);
+        padding: 0.5rem;
+    }
+    .status-panel {
+        width: 100%;
+        height: 100%;
+        background: rgba(10, 15, 12, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 8px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .status-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.85rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
+        background: rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
+    }
+    .status-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        letter-spacing: 1.2px;
+    }
+    .status-close {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+    }
+    .status-close:hover { color: #fff; }
+    .status-body {
+        padding: 0.8rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        overflow-y: auto;
+        flex: 1;
+    }
+    .status-error {
+        font-size: 0.55rem;
+        color: #ff5555;
+        padding: 0.3rem 0.5rem;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.2);
+        border-radius: 5px;
+    }
+    .status-options {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 0.35rem;
+    }
+    .status-opt {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.4rem 0.55rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        color: #888;
+        font-size: 0.58rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .status-opt:hover { border-color: rgba(255, 255, 255, 0.2); color: #aaa; }
+    .status-opt.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.35);
+        color: var(--color-primary);
+    }
+    .status-opt:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-opt-icon { font-size: 0.7rem; }
+    .status-opt-label { font-size: 0.55rem; }
+    .status-section-label {
+        font-size: 0.55rem;
+        font-weight: 600;
+        color: #888;
+        letter-spacing: 0.5px;
+    }
+    .status-expiry-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+    .status-expiry-row {
+        display: flex;
+        gap: 0.3rem;
+    }
+    .status-expiry-btn {
+        flex: 1;
+        padding: 0.3rem 0.25rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        color: #888;
+        font-size: 0.55rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .status-expiry-btn:hover { border-color: rgba(255, 255, 255, 0.2); color: #aaa; }
+    .status-expiry-btn.active {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: rgba(0, 255, 65, 0.35);
+        color: var(--color-primary);
+    }
+    .status-expiry-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-hours-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin-top: 0.2rem;
+    }
+    .status-hours-label {
+        font-size: 0.52rem;
+        color: #888;
+    }
+    .cyber-input {
+        width: 80px;
+        padding: 0.25rem 0.4rem;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 5px;
+        color: #ddd;
+        font-family: var(--font-mono);
+        font-size: 0.55rem;
+        outline: none;
+    }
+    .cyber-input:focus { border-color: var(--color-primary); }
+    .status-actions {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .status-btn {
+        padding: 0.35rem 0.65rem;
+        border-radius: 5px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .status-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-btn.cancel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .status-btn.cancel:hover:not(:disabled) { border-color: #ff5555; color: #ff5555; }
+    .status-btn.clear {
+        background: rgba(255, 170, 0, 0.06);
+        border: 1px solid rgba(255, 170, 0, 0.2);
+        color: #ffaa00;
+    }
+    .status-btn.clear:hover:not(:disabled) {
+        background: rgba(255, 170, 0, 0.12);
+    }
+    .status-btn.set {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        color: var(--color-primary);
+    }
+    .status-btn.set:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.15);
+    }
+
+    /* Report overlay */
+    .report-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(4px);
+        padding: 0.5rem;
+    }
+    .report-panel {
+        width: 100%;
+        height: 100%;
+        background: rgba(10, 15, 12, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 8px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .report-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.85rem;
+        border-bottom: 1px solid rgba(255, 85, 85, 0.15);
+        background: rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
+    }
+    .report-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #ff8888;
+        letter-spacing: 1.2px;
+    }
+    .report-close {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 1.3rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        padding: 0.15rem 0.4rem;
+        line-height: 1;
+    }
+    .report-close:hover { color: #fff; }
+    .report-body {
+        padding: 0.8rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        overflow-y: auto;
+        flex: 1;
+    }
+    .report-error {
+        font-size: 0.55rem;
+        color: #ff5555;
+        padding: 0.3rem 0.5rem;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.2);
+        border-radius: 5px;
+    }
+    .report-target {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.4rem 0.55rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 5px;
+    }
+    .report-target-label {
+        font-size: 0.5rem;
+        color: #888;
+        font-weight: 600;
+    }
+    .report-target-val {
+        font-size: 0.55rem;
+        color: #ccc;
+        font-family: var(--font-mono);
+    }
+    .report-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+    .report-section-label {
+        font-size: 0.55rem;
+        font-weight: 600;
+        color: #888;
+        letter-spacing: 0.5px;
+    }
+    .report-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+    }
+    .report-opt {
+        padding: 0.3rem 0.5rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        color: #888;
+        font-size: 0.52rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .report-opt:hover { border-color: rgba(255, 255, 255, 0.2); color: #aaa; }
+    .report-opt.active {
+        background: rgba(255, 85, 85, 0.1);
+        border-color: rgba(255, 85, 85, 0.35);
+        color: #ff8888;
+    }
+    .report-opt:disabled { opacity: 0.5; cursor: not-allowed; }
+    .report-actions {
+        display: flex;
+        gap: 0.4rem;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .report-btn {
+        padding: 0.35rem 0.65rem;
+        border-radius: 5px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .report-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .report-btn.cancel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .report-btn.cancel:hover:not(:disabled) { border-color: #ff5555; color: #ff5555; }
+    .report-btn.send {
+        background: rgba(255, 60, 60, 0.08);
+        border: 1px solid rgba(255, 60, 60, 0.25);
+        color: #cc4444;
+    }
+    .report-btn.send:hover:not(:disabled) {
+        background: rgba(255, 60, 60, 0.18);
+        border-color: rgba(255, 60, 60, 0.4);
     }
 </style>

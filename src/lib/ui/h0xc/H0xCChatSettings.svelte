@@ -3,7 +3,7 @@
     import { fade } from "svelte/transition";
 
     export let show = false;
-    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number, communityReportAutoHide: boolean, communityReportMinReports: number, communityReportMinRatio: number, communityReportWindowDays: number }} */
     export let settings = {
         messageExpiryDefault: 30,
         autoDiscovery: true,
@@ -16,6 +16,10 @@
         showExpired: false,
         hideStaleUsers: true,
         staleUserDays: 90,
+        communityReportAutoHide: false,
+        communityReportMinReports: 3,
+        communityReportMinRatio: 0.4,
+        communityReportWindowDays: 30,
     };
     /** @type {string[]} */
     export let blockedUsers = [];
@@ -23,6 +27,12 @@
     export let discoveryState = "idle";
     /** @type {string} */
     export let lastScanTime = "";
+    /** @type {Array<{txid: string, timeSec: number, reason?: number}>} */
+    export let localHiddenMessages = [];
+    /** @type {Array<{channel: string, timeSec: number, reason?: number, rootName?: string}>} */
+    export let localHiddenChannels = [];
+    /** @type {Array<{target: string, targetType: number, count: number, channels: string[], maxSeverity: number, expiryTs: number}>} */
+    export let communityHidden = [];
 
     const dispatch = createEventDispatcher();
 
@@ -69,6 +79,10 @@
             showExpired: false,
             hideStaleUsers: true,
             staleUserDays: 90,
+            communityReportAutoHide: false,
+            communityReportMinReports: 3,
+            communityReportMinRatio: 0.4,
+            communityReportWindowDays: 30,
         };
         draftTagsText = "#SPAM";
     }
@@ -243,6 +257,87 @@
                         </div>
                     {/if}
                     <p class="sett-hint">Local blocks are private to this Commander install and can be changed at any time.</p>
+                </div>
+
+                <div class="sett-section">
+                    <span class="sett-label">COMMUNITY REPORTS</span>
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" bind:checked={draft.communityReportAutoHide} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">AUTO-HIDE BY COMMUNITY REPORTS</span>
+                    </label>
+                    <p class="sett-hint">When enabled, messages/channels with enough community reports are automatically hidden locally. Reports from blocked/muted users are ignored.</p>
+                    {#if draft.communityReportAutoHide}
+                        <div class="field-row" style="margin-top: 0.3rem;">
+                            <div class="field-group narrow-inline">
+                                <span class="sett-label">MIN REPORTS</span>
+                                <input type="number" class="cyber-input" bind:value={draft.communityReportMinReports} min="1" max="20" />
+                            </div>
+                            <div class="field-group narrow-inline">
+                                <span class="sett-label">MIN RATIO</span>
+                                <input type="number" class="cyber-input" bind:value={draft.communityReportMinRatio} min="0.1" max="1.0" step="0.1" />
+                            </div>
+                            <div class="field-group narrow-inline">
+                                <span class="sett-label">WINDOW (DAYS)</span>
+                                <input type="number" class="cyber-input" bind:value={draft.communityReportWindowDays} min="1" max="365" />
+                            </div>
+                        </div>
+                        <p class="sett-hint">Auto-hide triggers when unique reporting channels ≥ min reports AND ratio of reporting channels / recent participants ≥ min ratio.</p>
+                    {/if}
+                </div>
+
+                <div class="sett-section">
+                    <span class="sett-label">LOCALLY HIDDEN MESSAGES</span>
+                    {#if localHiddenMessages.length === 0}
+                        <p class="sett-hint">No locally hidden messages.</p>
+                    {:else}
+                        <div class="blocked-list">
+                            {#each localHiddenMessages as entry}
+                                <div class="blocked-row">
+                                    <span class="blocked-name" title={entry.txid}>{entry.txid.slice(0, 12)}...</span>
+                                    <button class="blocked-unblock" on:click={() => dispatch("unhideMessage", { txid: entry.txid })}>Unhide</button>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                    <p class="sett-hint">Messages you have reported or hidden locally. Unhiding removes the local override.</p>
+                </div>
+
+                <div class="sett-section">
+                    <span class="sett-label">LOCALLY HIDDEN CHANNELS</span>
+                    {#if localHiddenChannels.length === 0}
+                        <p class="sett-hint">No locally hidden channels.</p>
+                    {:else}
+                        <div class="blocked-list">
+                            {#each localHiddenChannels as entry}
+                                <div class="blocked-row">
+                                    <span class="blocked-name">[{entry.channel}]</span>
+                                    <button class="blocked-unblock" on:click={() => dispatch("unhideChannel", { channel: entry.channel })}>Unhide</button>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                    <p class="sett-hint">Channels/users you have reported or hidden locally. Unhiding removes the local override.</p>
+                </div>
+
+                <div class="sett-section">
+                    <span class="sett-label">COMMUNITY HIDDEN</span>
+                    {#if communityHidden.length === 0}
+                        <p class="sett-hint">No entries are hidden by community reports.</p>
+                    {:else}
+                        <div class="blocked-list">
+                            {#each communityHidden as entry}
+                                <div class="blocked-row">
+                                    <span class="blocked-name" title={entry.target}>
+                                        {entry.targetType === 1 ? entry.target.slice(0, 12) + "..." : "Channel fingerprint " + entry.target.slice(0, 12) + "..."}
+                                        · {entry.count} reports
+                                    </span>
+                                    <button class="blocked-unblock" on:click={() => dispatch("allowCommunityHidden", { target: entry.target })}>Allow</button>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                    <p class="sett-hint">Allow keeps a community-hidden item visible for this Commander install.</p>
                 </div>
             </div>
 

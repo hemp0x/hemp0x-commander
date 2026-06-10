@@ -31,6 +31,7 @@
     function filterByUser() { dispatch("filterByUser", { rootName: user }); }
     function copyChannel() { dispatch("copyChannel", { assetName: channelAsset }); }
     function copyAddress() { dispatch("copyAddress", { address: resolvedAddress }); }
+    function reportChannel() { dispatch("reportChannel", { channel: channelAsset, rootName: user }); }
 
     function submitAddTag() {
         const tag = addTagText.trim();
@@ -172,20 +173,10 @@
         {/if}
         <div class="ctx-divider"></div>
         {#if !isSelf}
-            {#if addTagMode}
-                <div class="ctx-tag-input-row">
-                    <input
-                        class="ctx-tag-input"
-                        type="text"
-                        bind:value={addTagText}
-                        placeholder="#SPAM"
-                        on:keydown={(e) => e.key === "Enter" && submitAddTag()}
-                    />
-                    <button class="ctx-tag-submit" on:click={submitAddTag} disabled={!addTagText.trim()}>Add</button>
-                </div>
-            {:else}
-                <button class="ctx-item tag" on:click={() => { addTagMode = true; addTagText = ""; }}>Add Tag for Address</button>
-            {/if}
+            <button class="ctx-item" on:click={mute}>{muted ? "Unmute" : "Mute"}</button>
+            <button class="ctx-item danger" on:click={block}>{blocked ? "Unblock" : "Block Locally"}</button>
+            <button class="ctx-item danger" on:click={blockAndUnsub}>Block &amp; Unsubscribe</button>
+            <button class="ctx-item report" on:click={reportChannel}>Report Channel</button>
         {/if}
         {#if resolvedAddress}
             <button class="ctx-item tag" on:click={manageTags}>Manage Tags</button>
@@ -270,6 +261,13 @@
         background: rgba(255, 85, 85, 0.1);
         color: #ff8888;
     }
+    .ctx-item.report {
+        color: #ff8888;
+    }
+    .ctx-item.report:hover {
+        background: rgba(255, 85, 85, 0.08);
+        color: #ff8888;
+    }
     .ctx-item.tag {
         color: var(--color-primary);
     }
@@ -288,47 +286,5 @@
         height: 1px;
         background: rgba(255, 255, 255, 0.06);
         margin: 0.15rem 0;
-    }
-    .ctx-tag-input-row {
-        display: flex;
-        gap: 0.25rem;
-        padding: 0.25rem 0.6rem;
-        align-items: center;
-    }
-    .ctx-tag-input {
-        flex: 1;
-        min-width: 0;
-        padding: 0.2rem 0.35rem;
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        border-radius: 4px;
-        color: #ddd;
-        font-size: 0.52rem;
-        font-family: var(--font-mono);
-        outline: none;
-    }
-    .ctx-tag-input:focus {
-        border-color: var(--color-primary);
-    }
-    .ctx-tag-input::placeholder { color: #555; }
-    .ctx-tag-submit {
-        padding: 0.18rem 0.35rem;
-        background: rgba(0, 255, 65, 0.08);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        border-radius: 4px;
-        color: var(--color-primary);
-        font-size: 0.48rem;
-        font-weight: 600;
-        cursor: pointer;
-        font-family: var(--font-mono);
-        transition: all 0.15s;
-        flex-shrink: 0;
-    }
-    .ctx-tag-submit:hover:not(:disabled) {
-        background: rgba(0, 255, 65, 0.15);
-    }
-    .ctx-tag-submit:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
     }
 </style>

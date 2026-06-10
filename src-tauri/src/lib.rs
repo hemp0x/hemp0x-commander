@@ -250,6 +250,8 @@ pub fn run() {
             // Short Message Commands
             short_message::short_message_encode,
             short_message::short_message_encode_built_in,
+            short_message::short_message_encode_chat,
+            short_message::short_message_encode_chat_built_in,
             short_message::short_message_decode,
             short_message::short_message_decode_built_in,
             short_message_suggestions::short_message_suggestions,

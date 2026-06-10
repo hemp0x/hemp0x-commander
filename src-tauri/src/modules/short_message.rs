@@ -11,8 +11,10 @@ const HEX_FRAME_LEN: usize = FRAME_SIZE * 2;
 const MAX_TEXT_CHARS: usize = 512;
 const PAYLOAD_MAX: usize = 27;
 
-const MAGIC_0: u8 = 0x48;
-const MAGIC_1: u8 = 0x53;
+const MAGIC_0: u8 = 0x48; // H
+const MAGIC_1: u8 = 0x53; // S
+const MAGIC_CHAT_0: u8 = 0x48; // H
+const MAGIC_CHAT_1: u8 = 0x58; // X
 const FORMAT_VERSION: u8 = 0x07;
 
 const DICT_SHIFT: u8 = 5;
@@ -381,6 +383,7 @@ pub struct ShortMessageDecodeResult {
     pub text: Option<String>,
     pub version: Option<u8>,
     pub warnings: Vec<String>,
+    pub is_h0xc_chat_message: bool,
 }
 
 fn find_dict_match(
@@ -967,6 +970,7 @@ fn invalid_decode(version: Option<u8>, warning: impl Into<String>) -> ShortMessa
         text: None,
         version,
         warnings: vec![warning.into()],
+        is_h0xc_chat_message: false,
     }
 }
 
@@ -976,6 +980,7 @@ fn not_short_message() -> ShortMessageDecodeResult {
         text: None,
         version: None,
         warnings: vec![],
+        is_h0xc_chat_message: false,
     }
 }
 
@@ -1009,6 +1014,7 @@ fn decode_payload_with_runtime(
 fn encode_with_runtime(
     text: &str,
     runtime: &ActiveRuntime,
+    is_chat: bool,
 ) -> Result<ShortMessageEncodeResult, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1035,8 +1041,13 @@ fn encode_with_runtime(
     }
 
     let mut frame = [0u8; FRAME_SIZE];
-    frame[0] = MAGIC_0;
-    frame[1] = MAGIC_1;
+    if is_chat {
+        frame[0] = MAGIC_CHAT_0;
+        frame[1] = MAGIC_CHAT_1;
+    } else {
+        frame[0] = MAGIC_0;
+        frame[1] = MAGIC_1;
+    }
     frame[2] = build_header(candidate.dict_idx, candidate.mode);
     frame[PAYLOAD_LEN_INDEX] = candidate.payload.len() as u8;
     frame[PAYLOAD_INDEX..PAYLOAD_INDEX + candidate.payload.len()]
@@ -1076,12 +1087,22 @@ fn encode_with_runtime(
 
 pub fn encode(text: &str) -> Result<ShortMessageEncodeResult, String> {
     let runtime = current_runtime();
-    encode_with_runtime(text, &runtime)
+    encode_with_runtime(text, &runtime, false)
 }
 
 pub fn encode_built_in(text: &str) -> Result<ShortMessageEncodeResult, String> {
     let runtime = built_in_runtime();
-    encode_with_runtime(text, &runtime)
+    encode_with_runtime(text, &runtime, false)
+}
+
+pub fn encode_chat(text: &str) -> Result<ShortMessageEncodeResult, String> {
+    let runtime = current_runtime();
+    encode_with_runtime(text, &runtime, true)
+}
+
+pub fn encode_chat_built_in(text: &str) -> Result<ShortMessageEncodeResult, String> {
+    let runtime = built_in_runtime();
+    encode_with_runtime(text, &runtime, true)
 }
 
 pub(crate) fn warm_runtime_cache() {
@@ -1112,9 +1133,13 @@ fn decode_with_runtime(hex: &str, runtime: &ActiveRuntime) -> ShortMessageDecode
         _ => return invalid_decode(None, "Invalid hex input"),
     };
 
-    if bytes[0] != MAGIC_0 || bytes[1] != MAGIC_1 {
+    let is_chat = if bytes[0] == MAGIC_0 && bytes[1] == MAGIC_1 {
+        false
+    } else if bytes[0] == MAGIC_CHAT_0 && bytes[1] == MAGIC_CHAT_1 {
+        true
+    } else {
         return not_short_message();
-    }
+    };
 
     let header = bytes[2];
     let version = header & VERSION_MASK;
@@ -1153,6 +1178,7 @@ fn decode_with_runtime(hex: &str, runtime: &ActiveRuntime) -> ShortMessageDecode
         text: Some(restore_case_with_runtime(&collapse(&raw), runtime)),
         version: Some(version),
         warnings: vec![],
+        is_h0xc_chat_message: is_chat,
     }
 }
 
@@ -1174,6 +1200,16 @@ pub fn short_message_encode(text: String) -> Result<ShortMessageEncodeResult, St
 #[tauri::command]
 pub fn short_message_encode_built_in(text: String) -> Result<ShortMessageEncodeResult, String> {
     encode_built_in(&text)
+}
+
+#[tauri::command]
+pub fn short_message_encode_chat(text: String) -> Result<ShortMessageEncodeResult, String> {
+    encode_chat(&text)
+}
+
+#[tauri::command]
+pub fn short_message_encode_chat_built_in(text: String) -> Result<ShortMessageEncodeResult, String> {
+    encode_chat_built_in(&text)
 }
 
 #[tauri::command]
@@ -1813,5 +1849,176 @@ mod tests {
 
         let enc = encode("thank you payment sent").expect("encode after reset");
         assert!(enc.fits);
+    }
+
+    // --- HX chat frame tests ---
+
+    #[test]
+    fn chat_encode_produces_hx_magic() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("hello world").expect("chat encode");
+        assert_eq!(enc.hex.len(), 64);
+        let bytes = hex::decode(&enc.hex).expect("hex decode");
+        assert_eq!(bytes[0], MAGIC_CHAT_0);
+        assert_eq!(bytes[1], MAGIC_CHAT_1);
+    }
+
+    #[test]
+    fn chat_encode_produces_valid_crc() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("hello world").expect("chat encode");
+        let bytes = hex::decode(&enc.hex).expect("hex decode");
+        let expected_crc = crc8(&bytes[0..CRC_INDEX]);
+        assert_eq!(bytes[CRC_INDEX], expected_crc);
+    }
+
+    #[test]
+    fn chat_decode_sets_is_h0xc_chat_message_true() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("hello world").expect("chat encode");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(dec.is_h0xc_chat_message);
+    }
+
+    #[test]
+    fn normal_decode_sets_is_h0xc_chat_message_false() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("hello world").expect("normal encode");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(!dec.is_h0xc_chat_message);
+    }
+
+    #[test]
+    fn chat_and_normal_same_text_different_magic() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let text = "hello world";
+        let enc_normal = encode(text).expect("normal encode");
+        let enc_chat = encode_chat(text).expect("chat encode");
+
+        // Different hex (different magic)
+        assert_ne!(enc_normal.hex, enc_chat.hex);
+
+        // Same decoded text
+        let dec_normal = decode(&enc_normal.hex);
+        let dec_chat = decode(&enc_chat.hex);
+        assert_eq!(dec_normal.text, dec_chat.text);
+        assert!(!dec_normal.is_h0xc_chat_message);
+        assert!(dec_chat.is_h0xc_chat_message);
+    }
+
+    #[test]
+    fn chat_mutate_magic_without_crc_warns() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("hello world").expect("chat encode");
+        let mut bytes = hex::decode(&enc.hex).expect("hex decode");
+
+        // Mutate HX -> HS without updating CRC
+        bytes[1] = MAGIC_1;
+        let mutated_hex = hex::encode(&bytes);
+        let dec = decode(&mutated_hex);
+        // Should either reject (CRC mismatch) or not be a chat message
+        if dec.is_short_message {
+            assert!(!dec.is_h0xc_chat_message, "mutated magic should not be chat");
+        }
+    }
+
+    #[test]
+    fn chat_frame_mutation_fuzz() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("gm anon").expect("chat encode");
+        let base_bytes = hex::decode(&enc.hex).expect("hex decode");
+
+        for byte_idx in 0..FRAME_SIZE {
+            for bit in 0..8 {
+                let mut mutated = base_bytes.clone();
+                mutated[byte_idx] ^= 1 << bit;
+                let hex_str = hex::encode(&mutated);
+                let result = decode(&hex_str);
+                // Must never panic
+                let _ = &result.warnings;
+                let _ = &result.text;
+            }
+        }
+    }
+
+    #[test]
+    fn chat_encode_built_in_works() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat_built_in("hello world").expect("chat encode built-in");
+        let bytes = hex::decode(&enc.hex).expect("hex decode");
+        assert_eq!(bytes[0], MAGIC_CHAT_0);
+        assert_eq!(bytes[1], MAGIC_CHAT_1);
+        let dec = decode(&enc.hex);
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn chat_encode_dictionary_roundtrips() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let text = "i think the hemp token launch is soon";
+        let enc = encode_chat(text).expect("chat encode");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(
+            dec.text.as_deref(),
+            Some("I think the HEMP token launch is soon")
+        );
+    }
+
+    #[test]
+    fn normal_encode_never_produces_hx() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let texts = ["hello world", "gm anon", "payment sent", "thank you"];
+        for text in texts {
+            let enc = encode(text).expect("encode");
+            let bytes = hex::decode(&enc.hex).expect("hex");
+            assert_eq!(bytes[0], MAGIC_0);
+            assert_eq!(bytes[1], MAGIC_1);
+            assert_ne!(bytes[1], MAGIC_CHAT_1);
+        }
+    }
+
+    #[test]
+    fn hx_mixed_with_hs_both_decode() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        // Encode same text as both HS and HX
+        let enc_hs = encode("hello world").expect("hs encode");
+        let enc_hx = encode_chat("hello world").expect("hx encode");
+
+        let dec_hs = decode(&enc_hs.hex);
+        let dec_hx = decode(&enc_hx.hex);
+
+        assert!(dec_hs.is_short_message);
+        assert!(!dec_hs.is_h0xc_chat_message);
+        assert_eq!(dec_hs.text.as_deref(), Some("Hello world"));
+
+        assert!(dec_hx.is_short_message);
+        assert!(dec_hx.is_h0xc_chat_message);
+        assert_eq!(dec_hx.text.as_deref(), Some("Hello world"));
     }
 }

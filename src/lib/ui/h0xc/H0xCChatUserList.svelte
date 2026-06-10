@@ -81,6 +81,7 @@
     }
 
     $: filteredParticipants = participants.filter((p) => {
+        if (!p.messageCount || p.messageCount <= 0) return false;
         const blocked = new Set(blockedUsers.map((u) => u.toUpperCase()));
         if (isChannelModerationHidden(p.assetName, leftChannels, blocked, tagBlockedChannels).hidden) return false;
         if (hideStaleUsers && staleUserDays > 0 && p.lastSeen > 0) {

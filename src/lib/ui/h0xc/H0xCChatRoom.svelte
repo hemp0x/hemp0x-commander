@@ -56,7 +56,7 @@
      *   sender_address?: string;
      * }} AssetMessage
      * @typedef {{ rootName: string, assetName: string, lastSeen: number, messageCount: number, joinedAt?: number }} Participant
-     * @typedef {{ is_short_message?: boolean, text?: string, warnings?: string[] }} DecodeResult
+     * @typedef {{ is_short_message?: boolean, text?: string, warnings?: string[], is_h0xc_chat_message?: boolean }} DecodeResult
      */
 
     /**
@@ -349,8 +349,8 @@
             reportCommands = controlResult.reportCommands || [];
             updateCommunityHiddenFromReports();
 
-            updateParticipantsFromMessages(messages);
             await decodeVisible(messages);
+            updateParticipantsFromMessages(messages);
 
             if (!initialLoadDone) {
                 for (const msg of messages) seenMessageKeys.add(messageKey(msg));
@@ -428,6 +428,8 @@
         }
         for (const msg of msgs) {
             if (isControlCommandMessage(msg)) continue;
+            const decoded = decodeCache[msg.message];
+            if (!decoded?.is_short_message || decoded?.is_h0xc_chat_message !== true) continue;
             const rn = deriveRootNameFn(msg.asset_name);
             if (!rn) continue;
             const t = parseTime(msg.time);
@@ -578,6 +580,7 @@
             const rn = deriveRootNameFn(msg.asset_name);
             if (isNotificationSuppressed(rn, msg.asset_name)) continue;
             const decoded = decodeCache[msg.message];
+            if (decoded?.is_short_message && !decoded?.is_h0xc_chat_message) continue;
             const body = decoded?.is_short_message && decoded.text
                 ? decoded.text
                 : `New message from ${rn}`;
@@ -615,6 +618,9 @@
             ).hidden;
         }).filter((msg) => {
             return !isControlCommandMessage(msg);
+        }).filter((msg) => {
+            const dec = decodeCache[msg.message];
+            return dec?.is_short_message === true && dec?.is_h0xc_chat_message === true;
         });
         if (tagBlockedChannels.size > 0) {
             msgs = msgs.filter((msg) => {
@@ -1897,6 +1903,12 @@
                     <button class="msg-detail-close" on:click={closeMsgDetail}>&times;</button>
                 </div>
                 <div class="msg-detail-body">
+                    {#if msgDetail.decoded?.is_h0xc_chat_message}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">TYPE</span>
+                            <span class="msg-detail-val chat-badge">H0XC chat message</span>
+                        </div>
+                    {/if}
                     <div class="msg-detail-row">
                         <span class="msg-detail-label">TEXT</span>
                         <span class="msg-detail-val">{msgDetail.decoded?.is_short_message && msgDetail.decoded.text ? msgDetail.decoded.text : "(not decoded)"}</span>
@@ -2463,6 +2475,16 @@
     }
     .msg-detail-val.mono { font-family: var(--font-mono); }
     .msg-detail-val.dim { color: #666; font-style: italic; }
+    .msg-detail-val.chat-badge {
+        color: var(--color-primary);
+        font-size: 0.55rem;
+        font-weight: 600;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 4px;
+        padding: 0.1rem 0.4rem;
+        letter-spacing: 0.3px;
+    }
     .msg-detail-copy, .msg-detail-action {
         background: rgba(0, 255, 65, 0.06);
         border: 1px solid rgba(0, 255, 65, 0.18);

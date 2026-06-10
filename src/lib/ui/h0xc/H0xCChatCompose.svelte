@@ -59,7 +59,7 @@
         }
         composeEncoding = true;
         try {
-            composeResult = await core.invoke("short_message_encode_built_in", { text });
+            composeResult = await core.invoke("short_message_encode_chat_built_in", { text });
         } catch {
             composeResult = null;
         } finally {
@@ -187,21 +187,9 @@
                     />
                 {/if}
             </div>
-            <div class="compose-side">
-                {#if composeResult}
-                    {@const used = composeResult.encoded_payload_len || 0}
-                    <div class="compose-status"
-                        class:ok={composeResult.fits && used < 20}
-                        class:warn={composeResult.fits && used >= 20}
-                        class:over={!composeResult.fits}
-                    >
-                        <span class="status-text">{used}/27</span>
-                    </div>
-                {/if}
-                <button class="compose-send" disabled={!canSend} on:click={send}>
-                    {#if busy || composeEncoding}...{:else}▶{/if}
-                </button>
-            </div>
+            <button class="compose-send" disabled={!canSend} on:click={send}>
+                {#if busy || composeEncoding}...{:else}▶{/if}
+            </button>
         </div>
         <div class="tools-row">
             {#if packPreparing}
@@ -222,6 +210,16 @@
                     </div>
                 {/if}
             </div>
+            {#if composeResult}
+                {@const used = composeResult.encoded_payload_len || 0}
+                <span class="compose-status"
+                    class:ok={composeResult.fits && used < 20}
+                    class:warn={composeResult.fits && used >= 20}
+                    class:over={!composeResult.fits}
+                >
+                    {used}/27
+                </span>
+            {/if}
             {#if composeResult?.dictionary_name}
                 <span class="dict-chip">DICT {composeResult.dictionary_name}</span>
             {/if}
@@ -285,14 +283,6 @@
     .compose-input::placeholder { color: #444; }
     .compose-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    .compose-side {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.3rem;
-        flex-shrink: 0;
-    }
-
     .compose-status {
         font-size: 0.5rem;
         font-weight: 600;
@@ -303,7 +293,6 @@
     .compose-status.ok { color: var(--color-primary); background: rgba(0, 255, 65, 0.1); border: 1px solid rgba(0, 255, 65, 0.2); }
     .compose-status.warn { color: #ffcc00; background: rgba(255, 204, 0, 0.1); border: 1px solid rgba(255, 204, 0, 0.2); }
     .compose-status.over { color: #ff5555; background: rgba(255, 85, 85, 0.1); border: 1px solid rgba(255, 85, 85, 0.2); }
-    .status-text { font-family: var(--font-mono); }
 
     .compose-send {
         width: 2rem;

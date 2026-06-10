@@ -35,6 +35,7 @@
      *   is_short_message?: boolean;
      *   text?: string;
      *   warnings?: string[];
+     *   is_h0xc_chat_message?: boolean;
      * }} ShortMessageDecodeResult
      * @typedef {{
      *   name: string,
@@ -369,6 +370,11 @@
         return Array.from(names);
     }
 
+    /** @param {string | undefined | null} message */
+    function isHxChatFrame(message) {
+        return typeof message === "string" && message.trim().toLowerCase().startsWith("4858");
+    }
+
     $: assetChannelNames = asset ? channelNamesForAsset(asset.name) : [];
     $: filteredMessages = messages.filter((msg) =>
         assetChannelNames.includes(msg.asset_name),
@@ -377,7 +383,13 @@
     $: displayedMessages = (() => {
         const hidden = hiddenMessageIds;
         return (messageExplorerMode ? messages : filteredMessages)
-            .filter((msg) => !hidden.has(messageLocalId(msg)));
+            .filter((msg) => !hidden.has(messageLocalId(msg)))
+            .filter((msg) => {
+                if (messageExplorerMode) return true;
+                const sm = shortMessageCache[msg.message];
+                if (sm === undefined && isHxChatFrame(msg.message)) return false;
+                return !(sm?.is_short_message && sm?.is_h0xc_chat_message);
+            });
     })();
 
     $: inboxRows = (() => {
@@ -608,8 +620,8 @@
         }
     }
 
-    $: if (displayedMessages.length > 0) {
-        decodePendingShortMessages(displayedMessages);
+    $: if (filteredMessages.length > 0) {
+        decodePendingShortMessages(messageExplorerMode ? messages : filteredMessages);
     }
 
     /** @param {AssetMessage[]} msgs */

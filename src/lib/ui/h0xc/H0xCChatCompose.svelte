@@ -52,14 +52,13 @@
     /** @param {string} text @param {unknown} err */
     function overLimitResult(text, err) {
         const message = String(err || "");
-        const match = message.match(/(\d+)\s+bytes required/i);
-        const fallbackLen = new TextEncoder().encode(text).length;
+        const visibleLen = Array.from(text).length;
         return {
             hex: "",
             decoded_preview: text,
             normalized_text: text.toLowerCase(),
             raw_len: text.length,
-            encoded_payload_len: match ? Number(match[1]) : fallbackLen,
+            encoded_payload_len: visibleLen,
             encoding_mode: "too-long",
             dictionary_index: null,
             dictionary_name: null,
@@ -275,7 +274,7 @@
                     class:warn={displayFits && used >= 20}
                     class:over={isOver}
                 >
-                    {used}/27{isOver ? ` (+${used - 27})` : ""}
+                    {used}/27
                 </span>
             {/if}
             {#if displayResult?.dictionary_name}

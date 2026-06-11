@@ -1027,7 +1027,7 @@ fn select_candidate_with_runtime(text: &str, runtime: &ActiveRuntime) -> Option<
         });
     }
 
-    if let Some(payload) = encode_nbit(text, &rev5, 5, PAYLOAD_MAX * 8 / 5) {
+    if let Some(payload) = encode_nbit(text, &rev5, 5, MAX_TEXT_CHARS) {
         consider(Candidate {
             mode: MODE_5BIT,
             dict_idx: 0,
@@ -1035,7 +1035,7 @@ fn select_candidate_with_runtime(text: &str, runtime: &ActiveRuntime) -> Option<
         });
     }
 
-    if let Some(payload) = encode_nbit(text, &rev6, 6, PAYLOAD_MAX * 8 / 6) {
+    if let Some(payload) = encode_nbit(text, &rev6, 6, MAX_TEXT_CHARS) {
         consider(Candidate {
             mode: MODE_6BIT,
             dict_idx: 0,
@@ -1835,6 +1835,18 @@ mod tests {
         assert!(enc.hex.is_empty());
         assert!(enc.encoded_payload_len > PAYLOAD_MAX);
         assert!(enc.encoded_payload_len < 64);
+    }
+
+    #[test]
+    fn long_letter_run_reports_nbit_nonfit_len() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode(&"l".repeat(44)).expect("encode result");
+        assert!(!enc.fits);
+        assert!(enc.hex.is_empty());
+        assert_eq!(enc.encoded_payload_len, 28);
+        assert_eq!(enc.encoding_mode, "5bit");
     }
 
     #[test]

@@ -9,6 +9,7 @@
     import IpfsHashField from "../IpfsHashField.svelte";
     import ShortMessageAutocomplete from "../ShortMessageAutocomplete.svelte";
     import { addNotification } from "../../stores/notifications.js";
+    import { ensureNodeSyncedForBroadcast } from "../../utils/nodeSync.js";
     import TablePackPanel from "./TablePackPanel.svelte";
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
 
@@ -536,6 +537,7 @@
         composePreview = null;
         composePreviewFee = "";
         try {
+            await ensureNodeSyncedForBroadcast();
             const ipfsHash = composeMode === "short" && composeShortResult
                 ? composeShortResult.hex
                 : composeIpfsHash.trim();
@@ -566,6 +568,7 @@
         composeBroadcasting = true;
         composeError = "";
         try {
+            await ensureNodeSyncedForBroadcast();
             const channelName = composePreview.channel_name;
             const ipfsHash = composeMode === "short" && composeShortResult
                 ? composeShortResult.hex

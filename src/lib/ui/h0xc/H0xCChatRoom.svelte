@@ -8,6 +8,7 @@
     import H0xCUserContextMenu from "./H0xCUserContextMenu.svelte";
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
     import HelpHitbox from "../HelpHitbox.svelte";
+    import { ensureNodeSyncedForBroadcast } from "../../utils/nodeSync.js";
     import { addNotification } from "../../stores/notifications.js";
     import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
     import {
@@ -213,12 +214,12 @@
     let broadcastError = "";
 
     // Optimistic pending messages
-    /** @type {Array<{id: string, hex: string, text: string, assetName: string, rootName: string, timeMs: number, status: "pending"|"failed", error?: string}>} */
+    /** @type {Array<{id: string, hex: string, text: string, assetName: string, rootName: string, timeMs: number, status: "pending"|"failed", error?: string, txid?: string}>} */
     let pendingMessages = [];
     let pendingIdCounter = 0;
     /** @type {ReturnType<typeof setTimeout> | null} */
     let pendingTimeout = null;
-    const PENDING_TIMEOUT_MS = 15000;
+    const PENDING_TIMEOUT_MS = 60000;
 
     // Username context menu
     /** @type {string | null} */
@@ -967,6 +968,13 @@
             ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
             : null;
 
+        try {
+            await ensureNodeSyncedForBroadcast();
+        } catch (err) {
+            composeError = String(err?.message || err);
+            return;
+        }
+
         if (settings.showBroadcastPreview) {
             let feeEstimate = null;
             try {
@@ -998,6 +1006,14 @@
         composeBusy = true;
         composeError = "";
 
+        try {
+            await ensureNodeSyncedForBroadcast();
+        } catch (err) {
+            composeError = String(err?.message || err);
+            composeBusy = false;
+            return;
+        }
+
         const pendingId = `pending-${++pendingIdCounter}-${Date.now()}`;
         const pendingEntry = {
             id: pendingId,
@@ -1022,6 +1038,9 @@
                 ipfsHash: hex,
                 expireTime: expiry,
             });
+            pendingMessages = pendingMessages.map((p) =>
+                p.id === pendingId ? { ...p, txid: String(txid || "") } : p
+            );
 
             if (composeRef && composeRef.clearCompose) composeRef.clearCompose();
 
@@ -1071,7 +1090,7 @@
             pendingMessages = pendingMessages.map((p) => {
                 if (p.status === "pending" && now - p.timeMs > PENDING_TIMEOUT_MS) {
                     changed = true;
-                    return { ...p, status: "failed", error: "No on-chain confirmation within timeout." };
+                    return { ...p, status: "failed", error: "Message was not found on-chain after waiting. Check again, or restore the text and send it again." };
                 }
                 return p;
             });
@@ -1081,15 +1100,22 @@
     }
 
     /** @param {string} pendingId */
-    function retryPending(pendingId) {
+    async function retryPending(pendingId) {
         const entry = pendingMessages.find((p) => p.id === pendingId);
         if (!entry || entry.status !== "failed") return;
-        pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
-        const channel = identity.replace(/!$/, "");
-        const expiry = settings.messageExpiryDefault > 0
-            ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
-            : null;
-        doBroadcast(entry.hex, entry.text, channel, expiry);
+        pendingMessages = pendingMessages.map((p) =>
+            p.id === pendingId
+                ? { ...p, status: "pending", error: "Checking for on-chain confirmation..." }
+                : p
+        );
+        await loadMessages();
+        if (pendingMessages.some((p) => p.id === pendingId)) {
+            pendingMessages = pendingMessages.map((p) =>
+                p.id === pendingId
+                    ? { ...p, status: "failed", error: "Still not found on-chain. Check the transaction journal before resending." }
+                    : p
+            );
+        }
     }
 
     /** @param {string} pendingId */
@@ -1097,20 +1123,19 @@
         pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
     }
 
+    /** @param {string} pendingId */
+    function restorePendingToComposer(pendingId) {
+        const entry = pendingMessages.find((p) => p.id === pendingId);
+        if (!entry) return;
+        composeRef?.restoreCompose?.(entry.text);
+        pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
+    }
+
     function reconcilePending() {
         if (pendingMessages.length === 0) return;
         const remaining = [];
         for (const p of pendingMessages) {
-            if (p.status !== "pending") {
-                remaining.push(p);
-                continue;
-            }
-            const found = messages.some((m) => {
-                if (m.asset_name !== p.assetName) return false;
-                if (m.message !== p.hex) return false;
-                const msgTime = parseTime(m.time);
-                return Math.abs(msgTime - p.timeMs) < 60000;
-            });
+            const found = messages.some((m) => pendingMatchesMessage(p, m));
             if (found) {
                 addNotification({
                     type: "message",
@@ -1125,6 +1150,21 @@
         if (remaining.length !== pendingMessages.length) {
             pendingMessages = remaining;
         }
+    }
+
+    /**
+     * Match optimistic rows against messages returned by Core.
+     * Txid is preferred when present. The time window fallback handles older
+     * Core builds or cached entries that may not expose txid yet.
+     * @param {{txid?: string, assetName: string, hex: string, timeMs: number}} pending
+     * @param {AssetMessage} msg
+     */
+    function pendingMatchesMessage(pending, msg) {
+        if (pending.txid && msg.txid && String(msg.txid) === pending.txid) return true;
+        if (msg.asset_name !== pending.assetName) return false;
+        if (msg.message !== pending.hex) return false;
+        const msgTime = parseTime(msg.time);
+        return msgTime >= pending.timeMs - 60000 && msgTime <= pending.timeMs + 5 * 60000;
     }
 
     function startPolling() {
@@ -1283,7 +1323,9 @@
 
     async function handleDeleteMessage() {
         if (!msgDetail?.msg || !canDeleteMessage(msgDetail.msg)) return;
-        const hex = await buildDeleteCommandHex(msgDetail.msg.txid);
+        await ensureNodeSyncedForBroadcast();
+        const deletedTxid = msgDetail.msg.txid;
+        const hex = await buildDeleteCommandHex(deletedTxid);
         const channel = identity.replace(/!$/, "");
         await core.invoke("preview_send_announcement", {
             channelName: channel,
@@ -1301,6 +1343,8 @@
             title: "Delete Command Sent",
             body: `Delete broadcast on ${channel}`,
         });
+        hiddenTxids = new Set([...hiddenTxids, deletedTxid]);
+        hideMessageLocally(deletedTxid, 0);
         msgDetail = null;
         setTimeout(() => loadMessages(), 2000);
     }
@@ -1346,6 +1390,7 @@
         leaveBusy = true;
         leaveError = "";
         try {
+            await ensureNodeSyncedForBroadcast();
             const hex = await buildLeaveCommandHex();
             const channel = identity.replace(/!$/, "");
             await core.invoke("preview_send_announcement", {
@@ -1404,6 +1449,7 @@
         statusBusy = true;
         statusError = "";
         try {
+            await ensureNodeSyncedForBroadcast();
             const hex = await buildStatusCommandHex(status, expiryMode, expiryValue);
             const channel = identity.replace(/!$/, "");
             await core.invoke("preview_send_announcement", {
@@ -1508,6 +1554,7 @@
         reportBusy = true;
         reportError = "";
         try {
+            await ensureNodeSyncedForBroadcast();
             let hex;
             if (reportTargetType === 1) {
                 hex = await buildReportMessageCommandHex(
@@ -1799,11 +1846,12 @@
                                 <span class="msg-short-text">{pm.text}</span>
                                 <span class="failed-badge" title={pm.error || "Send failed"}>
                                     <span class="failed-icon">✕</span>
-                                    <span class="failed-label">failed</span>
+                                    <span class="failed-label">not found</span>
                                 </span>
                             </span>
                             <div class="pending-actions">
-                                <button class="pending-btn retry" on:click={() => retryPending(pm.id)} title="Retry">↻</button>
+                                <button class="pending-btn retry" on:click={() => retryPending(pm.id)} title="Check on-chain again">↻</button>
+                                <button class="pending-btn restore" on:click={() => restorePendingToComposer(pm.id)} title="Restore text to composer">↥</button>
                                 <button class="pending-btn dismiss" on:click={() => dismissPending(pm.id)} title="Dismiss">✕</button>
                             </div>
                         </div>
@@ -1902,6 +1950,9 @@
                 <div class="preview-warning">
                     <span class="preview-warn-icon">⚠</span>
                     <span class="preview-warn-text">This creates an irreversible on-chain transaction. Fee is determined by Core at broadcast time.</span>
+                </div>
+                <div class="preview-note">
+                    Broadcast previews can be turned off in H0XC chat settings.
                 </div>
                 {#if broadcastPreview.warnings.length > 0}
                     {#each broadcastPreview.warnings as w}
@@ -2364,6 +2415,7 @@
         flex: 1;
         min-height: 0;
         position: relative;
+        overflow: hidden;
     }
     .chat-messages {
         flex: 1;
@@ -3168,25 +3220,37 @@
 
     /* Broadcast preview bar */
     .preview-bar {
-        flex-shrink: 0;
-        padding: 0.4rem 0.5rem;
-        background: rgba(255, 170, 0, 0.04);
-        border-top: 1px solid rgba(255, 170, 0, 0.15);
-        border-bottom: 1px solid rgba(255, 170, 0, 0.15);
+        position: absolute;
+        left: 0.6rem;
+        right: 0.6rem;
+        bottom: 0.75rem;
+        z-index: 45;
+        max-height: min(42vh, 15rem);
+        overflow-y: auto;
+        padding: 0.55rem 0.65rem;
+        background: rgba(6, 8, 5, 0.98);
+        border: 1px solid rgba(255, 170, 0, 0.28);
+        border-radius: 6px;
+        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.72), 0 0 18px rgba(255, 170, 0, 0.08);
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 170, 0, 0.35) transparent;
     }
+    .preview-bar::-webkit-scrollbar { width: 5px; }
+    .preview-bar::-webkit-scrollbar-track { background: transparent; }
+    .preview-bar::-webkit-scrollbar-thumb { background: rgba(255, 170, 0, 0.35); border-radius: 3px; }
     .preview-body {
         display: flex;
         flex-direction: column;
-        gap: 0.2rem;
+        gap: 0.24rem;
     }
     .preview-title {
-        font-size: 0.52rem;
+        font-size: 0.62rem;
         font-weight: 700;
         color: #ffaa00;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.8px;
     }
     .preview-error {
-        font-size: 0.52rem;
+        font-size: 0.62rem;
         color: #ff5555;
         padding: 0.15rem 0.3rem;
         background: rgba(255, 85, 85, 0.06);
@@ -3198,12 +3262,12 @@
         gap: 0.4rem;
         padding: 0.15rem 0.3rem;
         background: rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.06);
         border-radius: 3px;
     }
     .preview-label {
         color: #555;
-        font-size: 0.45rem;
+        font-size: 0.54rem;
         font-weight: 600;
         letter-spacing: 0.5px;
         min-width: 3.5rem;
@@ -3212,14 +3276,14 @@
     }
     .preview-val {
         color: #ccc;
-        font-size: 0.52rem;
+        font-size: 0.64rem;
         line-height: 1.35;
         flex: 1;
         min-width: 0;
         word-break: break-all;
     }
     .preview-val.mono { font-family: var(--font-mono); }
-    .hex-preview { color: #666; font-size: 0.48rem; }
+    .hex-preview { color: #777; font-size: 0.58rem; }
     .preview-warning {
         display: flex;
         align-items: flex-start;
@@ -3228,14 +3292,20 @@
     }
     .preview-warn-icon {
         color: #ffaa00;
-        font-size: 0.5rem;
+        font-size: 0.6rem;
         flex-shrink: 0;
         margin-top: 0.02rem;
     }
     .preview-warn-text {
-        font-size: 0.48rem;
+        font-size: 0.58rem;
         color: #999;
         line-height: 1.35;
+    }
+    .preview-note {
+        color: #777;
+        font-size: 0.56rem;
+        line-height: 1.35;
+        padding: 0.05rem 0.3rem;
     }
     .preview-actions {
         display: flex;
@@ -3344,5 +3414,10 @@
         border-color: rgba(0, 255, 65, 0.2);
     }
     .pending-btn.retry:hover { background: rgba(0, 255, 65, 0.1); }
+    .pending-btn.restore {
+        color: #ffcc00;
+        border-color: rgba(255, 204, 0, 0.24);
+    }
+    .pending-btn.restore:hover { background: rgba(255, 204, 0, 0.1); }
     .pending-btn.dismiss:hover { border-color: #ff5555; color: #ff5555; }
 </style>

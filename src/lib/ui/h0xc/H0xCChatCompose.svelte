@@ -194,6 +194,21 @@
         lastStableResultText = "";
     }
 
+    /** @param {string} text */
+    export function restoreCompose(text) {
+        composeText = text || "";
+        composeResult = null;
+        composeResultText = "";
+        lastStableResult = null;
+        lastStableResultText = "";
+        queueEncode();
+        requestAnimationFrame(() => {
+            textareaEl?.focus();
+            const end = composeText.length;
+            textareaEl?.setSelectionRange(end, end);
+        });
+    }
+
     $: displayResult = composeResult || lastStableResult;
     $: displayResultText = composeResult ? composeResultText : lastStableResultText;
     $: currentText = composeText.trim();

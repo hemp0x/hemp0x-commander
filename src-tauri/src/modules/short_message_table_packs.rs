@@ -1,11 +1,10 @@
 // Custom short-message table-pack support.
 //
-// The Commander short-message codec is built on top of eight fixed-size
-// 256-entry dictionaries indexed by a 3-bit header field. The on-chain 32-byte
-// frame format is unchanged: we only ever swap the dictionary contents that the
-// codec consults at runtime. This lets operators import, export, and select
-// custom table packs locally without touching wire format, version markers, or
-// peer code.
+// The Commander short-message codec is built on top of fixed-size 256-entry
+// dictionaries. The expanded HS/HX header can address up to 16 dictionary slots
+// while keeping the same 32-byte frame size. This lets operators import,
+// export, and select custom table packs locally without touching chain or peer
+// code.
 //
 // Built-in official HOXSHTV1.0 dictionaries stay the default. Custom packs are
 // opt-in, validated strictly, and live under the Commander settings/data area
@@ -18,14 +17,15 @@
 use super::files::active_data_dir;
 use super::short_message_tables::{
     ACRONYMS, ALPHABET_5BIT, ALPHABET_6BIT, DICT_A, DICT_B, DICT_C, DICT_D, DICT_E, DICT_F, DICT_G,
-    DICT_H, HOXSHT_VERSION_MARKER, SUFFIXES,
+    DICT_H, DICT_I, DICT_J, DICT_K, DICT_L, DICT_M, DICT_N, DICT_O, DICT_P, HOXSHT_VERSION_MARKER,
+    SUFFIXES,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-pub const MAX_DICTIONARIES: usize = 8;
+pub const MAX_DICTIONARIES: usize = 16;
 pub const DICT_ENTRY_COUNT: usize = 256;
 pub const DICT_LITERAL_ESCAPE: u8 = 255;
 pub const TABLE_PACK_FILE_MAGIC: &str = "HEMP0X_TABLE_PACK";
@@ -41,6 +41,14 @@ const BUILT_IN_DICTIONARY_TITLES: [&str; MAX_DICTIONARIES] = [
     "DICT_F: asset-owner, holder, and announcement phrase pack.",
     "DICT_G: traceability, logistics, and provenance.",
     "DICT_H: crypto, Hemp0x, on-chain, and technical language.",
+    "DICT_I: reserved for future tuning.",
+    "DICT_J: reserved for future tuning.",
+    "DICT_K: reserved for future tuning.",
+    "DICT_L: reserved for future tuning.",
+    "DICT_M: reserved for future tuning.",
+    "DICT_N: reserved for future tuning.",
+    "DICT_O: reserved for future tuning.",
+    "DICT_P: reserved for future tuning.",
 ];
 
 /// Wire-format for an importable custom table pack file (JSON).
@@ -56,7 +64,7 @@ pub struct TablePackFile {
     /// exist so exported packs are easier to tune by hand.
     #[serde(default)]
     pub dictionary_titles: Vec<String>,
-    /// Up to 8 dictionaries, in slot order A..H.
+    /// Up to 16 dictionaries, in slot order A..P.
     pub dictionaries: Vec<Vec<String>>,
     /// Suffixes that the decoder treats as stem-attaching suffixes.
     #[serde(default)]
@@ -181,7 +189,7 @@ fn looks_like_word_missing_trailing_space(entry: &str) -> bool {
 /// Validate a `TablePackFile` and turn it into a `ValidatedTablePack`.
 ///
 /// This enforces the strict rules described in the slice spec:
-/// - At most 8 dictionaries.
+/// - At most 16 dictionaries.
 /// - Each dictionary has exactly 256 entries.
 /// - Token 255 is empty (reserved for the literal escape).
 /// - No duplicate non-empty entries per dictionary.
@@ -374,6 +382,7 @@ pub fn validate_table_pack(
 pub fn built_in_table_pack() -> ValidatedTablePack {
     let raw_dicts: [&[&str; DICT_ENTRY_COUNT]; MAX_DICTIONARIES] = [
         &DICT_A, &DICT_B, &DICT_C, &DICT_D, &DICT_E, &DICT_F, &DICT_G, &DICT_H,
+        &DICT_I, &DICT_J, &DICT_K, &DICT_L, &DICT_M, &DICT_N, &DICT_O, &DICT_P,
     ];
 
     let mut dictionaries: Vec<Vec<String>> = Vec::with_capacity(MAX_DICTIONARIES);
@@ -1114,7 +1123,7 @@ mod tests {
     #[test]
     fn rejects_too_many_dictionaries() {
         let mut file = minimal_pack();
-        for _ in 0..9 {
+        for _ in 0..15 {
             file.dictionaries.push(minimal_pack_dicts());
         }
         let err = validate_table_pack(&file).unwrap_err();
@@ -1152,7 +1161,7 @@ mod tests {
         let pack = built_in_table_pack();
         let legacy = table_identity();
         assert_eq!(pack.fingerprint_sha256, legacy.fingerprint_sha256);
-        assert_eq!(pack.dictionaries.len(), 8);
+        assert_eq!(pack.dictionaries.len(), 16);
     }
 
     #[test]
@@ -1177,7 +1186,7 @@ mod tests {
         // The exported file becomes a "custom" pack, so its fingerprint is
         // anchored to the custom version marker. Verify the dictionary
         // contents round-tripped cleanly and the fingerprint is stable.
-        assert_eq!(reloaded.dictionaries.len(), 8);
+        assert_eq!(reloaded.dictionaries.len(), 16);
         assert_eq!(reloaded.dictionaries[0].len(), 256);
         assert!(reloaded.dictionaries[0][DICT_LITERAL_ESCAPE as usize].is_empty());
         let first = reloaded_for_fingerprint(&written);

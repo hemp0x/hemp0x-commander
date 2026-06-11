@@ -17,10 +17,24 @@ const MAGIC_CHAT_0: u8 = 0x48; // H
 const MAGIC_CHAT_1: u8 = 0x58; // X
 const FORMAT_VERSION: u8 = 0x07;
 
+// v7 header layout (legacy):
+//   bits 7..5 = dictionary index 0-7
+//   bits 4..3 = mode
+//   bits 2..0 = version 7
 const DICT_SHIFT: u8 = 5;
 const VERSION_MASK: u8 = 0x07;
 const MODE_MASK: u8 = 0x18;
 
+// Expanded header layout (revision 0):
+//   bits 7..4 = dictionary index 0-15
+//   bits 3..2 = mode
+//   bits 1..0 = expanded layout revision (0)
+const EXPANDED_DICT_SHIFT: u8 = 4;
+const EXPANDED_MODE_MASK: u8 = 0x0c;
+const EXPANDED_REVISION_MASK: u8 = 0x03;
+const EXPANDED_REVISION: u8 = 0x00;
+
+// Internal mode constants (used for matching regardless of header layout).
 const MODE_DICT: u8 = 0x00;
 const MODE_RAW: u8 = 0x08;
 const MODE_6BIT: u8 = 0x10;
@@ -36,6 +50,28 @@ const DICT_DIGIT_RUN_LEN_MASK: u8 = 0x3f;
 
 fn is_printable_ascii(byte: u8) -> bool {
     (32..=126).contains(&byte)
+}
+
+fn is_v7_header(header: u8) -> bool {
+    (header & VERSION_MASK) == FORMAT_VERSION
+}
+
+fn extract_mode(header: u8) -> u8 {
+    if is_v7_header(header) {
+        header & MODE_MASK
+    } else {
+        // Expanded: bits 3..2 hold the mode (0,4,8,12). Shift left 1 to align
+        // with internal constants (0,8,16,24).
+        (header & EXPANDED_MODE_MASK) << 1
+    }
+}
+
+fn extract_dict_idx(header: u8) -> usize {
+    if is_v7_header(header) {
+        (header >> DICT_SHIFT) as usize
+    } else {
+        (header >> EXPANDED_DICT_SHIFT) as usize
+    }
 }
 
 fn is_compact_punctuation(byte: u8) -> bool {
@@ -216,6 +252,97 @@ fn alphabet_6bit_rev() -> HashMap<u8, u8> {
     fallback_alphabet_rev(a6)
 }
 
+fn expand_contractions(input: &str) -> String {
+    // Contraction expansions, longest-first for greedy matching.
+    // Input is already lowercased with curly quotes normalised to straight.
+    const CONTRACTIONS: &[(&str, &str)] = &[
+        ("shouldn't", "should not"),
+        ("wouldn't", "would not"),
+        ("couldn't", "could not"),
+        ("doesn't", "does not"),
+        ("mustn't", "must not"),
+        ("needn't", "need not"),
+        ("mightn't", "might not"),
+        ("you're", "you are"),
+        ("they're", "they are"),
+        ("there's", "there is"),
+        ("where's", "where is"),
+        ("what's", "what is"),
+        ("who's", "who is"),
+        ("that's", "that is"),
+        ("we're", "we are"),
+        ("here's", "here is"),
+        ("you've", "you have"),
+        ("they've", "they have"),
+        ("you'll", "you will"),
+        ("they'll", "they will"),
+        ("we've", "we have"),
+        ("we'll", "we will"),
+        ("we'd", "we would"),
+        ("he'll", "he will"),
+        ("he'd", "he would"),
+        ("she'll", "she will"),
+        ("she'd", "she would"),
+        ("you'd", "you would"),
+        ("they'd", "they would"),
+        ("won't", "will not"),
+        ("don't", "do not"),
+        ("can't", "can not"),
+        ("isn't", "is not"),
+        ("aren't", "are not"),
+        ("wasn't", "was not"),
+        ("weren't", "were not"),
+        ("hasn't", "has not"),
+        ("haven't", "have not"),
+        ("hadn't", "had not"),
+        ("didn't", "did not"),
+        ("let's", "let us"),
+        ("ain't", "is not"),
+        ("i'm", "i am"),
+        ("i've", "i have"),
+        ("i'll", "i will"),
+        ("i'd", "i would"),
+        ("he's", "he is"),
+        ("she's", "she is"),
+        ("it's", "it is"),
+    ];
+
+    let mut result = String::with_capacity(input.len() + 32);
+    let mut byte_pos = 0;
+
+    while byte_pos < input.len() {
+        let at_boundary = byte_pos == 0
+            || !input.as_bytes()[byte_pos - 1].is_ascii_alphanumeric();
+        if at_boundary {
+            let mut matched = false;
+            for &(contraction, expansion) in CONTRACTIONS {
+                let end = byte_pos + contraction.len();
+                if end <= input.len()
+                    && input.as_bytes()[byte_pos..end] == *contraction.as_bytes()
+                    && (end >= input.len()
+                        || !input.as_bytes()[end].is_ascii_alphanumeric())
+                {
+                    result.push_str(expansion);
+                    byte_pos = end;
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                let ch = input[byte_pos..].chars().next().unwrap();
+                result.push(ch);
+                byte_pos += ch.len_utf8();
+            }
+        } else {
+            let ch = input[byte_pos..].chars().next().unwrap();
+            result.push(ch);
+            byte_pos += ch.len_utf8();
+        }
+    }
+
+    result
+}
+
 fn normalize(input: &str) -> (String, Vec<String>) {
     let mut warnings = Vec::new();
     let mut saw_control = false;
@@ -246,7 +373,8 @@ fn normalize(input: &str) -> (String, Vec<String>) {
         warnings.push("Unsupported control characters were replaced with spaces".to_string());
     }
 
-    (collapse(&out), warnings)
+    let expanded = expand_contractions(&out);
+    (collapse(&expanded), warnings)
 }
 
 fn collapse(text: &str) -> String {
@@ -1047,7 +1175,10 @@ fn select_candidate_with_runtime(text: &str, runtime: &ActiveRuntime) -> Option<
 }
 
 fn build_header(dict_idx: u8, mode: u8) -> u8 {
-    ((dict_idx & 0x07) << DICT_SHIFT) | (mode & MODE_MASK) | (FORMAT_VERSION & VERSION_MASK)
+    // Emit expanded layout: bits 7..4=dict, bits 3..2=mode, bits 1..0=revision 0.
+    // Internal mode constants (0x00/0x08/0x10/0x18) shift right 1 to fit bits 3..2.
+    let expanded_mode = (mode >> 1) & EXPANDED_MODE_MASK;
+    ((dict_idx & 0x0f) << EXPANDED_DICT_SHIFT) | expanded_mode | EXPANDED_REVISION
 }
 
 fn frame_hex(frame: &[u8; FRAME_SIZE]) -> String {
@@ -1079,8 +1210,8 @@ fn decode_payload_with_runtime(
     payload: &[u8],
     runtime: &ActiveRuntime,
 ) -> Option<String> {
-    let mode = header & MODE_MASK;
-    let dict_idx = (header >> DICT_SHIFT) as usize;
+    let mode = extract_mode(header);
+    let dict_idx = extract_dict_idx(header);
     let (a5, a6) = fallback_alphabets();
 
     match mode {
@@ -1234,15 +1365,20 @@ fn decode_with_runtime(hex: &str, runtime: &ActiveRuntime) -> ShortMessageDecode
     };
 
     let header = bytes[2];
-    let version = header & VERSION_MASK;
-    if version != FORMAT_VERSION {
-        return invalid_decode(
-            Some(version),
-            format!("Unknown short message version: {}", version),
-        );
-    }
+    let version = if is_v7_header(header) {
+        header & VERSION_MASK
+    } else {
+        let revision = header & EXPANDED_REVISION_MASK;
+        if revision != EXPANDED_REVISION {
+            return invalid_decode(
+                Some(revision),
+                format!("Unknown expanded layout revision: {}", revision),
+            );
+        }
+        revision
+    };
 
-    let mode = header & MODE_MASK;
+    let mode = extract_mode(header);
     if !matches!(mode, MODE_DICT | MODE_RAW | MODE_5BIT | MODE_6BIT) {
         return invalid_decode(Some(version), format!("Unknown mode: {:#04x}", mode));
     }
@@ -1318,6 +1454,7 @@ pub fn short_message_decode_built_in(hex: String) -> ShortMessageDecodeResult {
 mod tests {
     use super::*;
     use crate::modules::short_message_table_packs::built_in_table_pack;
+    use crate::modules::short_message_tables::SUFFIXES;
 
     fn decode_frame(text: &str) -> ShortMessageDecodeResult {
         let enc = encode(text).expect("encode");
@@ -1356,11 +1493,11 @@ mod tests {
     }
 
     fn header_mode(bytes: &[u8]) -> u8 {
-        bytes[2] & MODE_MASK
+        extract_mode(bytes[2])
     }
 
     fn header_dict(bytes: &[u8]) -> usize {
-        (bytes[2] >> DICT_SHIFT) as usize
+        extract_dict_idx(bytes[2])
     }
 
     #[test]
@@ -1370,8 +1507,8 @@ mod tests {
             .expect("test lock poisoned");
         let pack = built_in_table_pack();
         assert!(
-            pack.dictionaries.len() <= 8,
-            "header stores dictionary index in three bits"
+            pack.dictionaries.len() <= 16,
+            "expanded header stores dictionary index in four bits"
         );
 
         for (idx, dict) in pack.dictionaries.iter().enumerate() {
@@ -1380,19 +1517,15 @@ mod tests {
                 dict.len() <= 256,
                 "dictionary {name} exceeds one-byte token space"
             );
-            for (tok, phrase) in dict.iter().enumerate() {
-                if tok == DICT_LITERAL_ESCAPE as usize {
-                    assert!(
-                        phrase.is_empty(),
-                        "dictionary {name} token 255 must stay empty"
-                    );
-                } else {
-                    assert!(
-                        !phrase.is_empty(),
-                        "dictionary {name} token {tok} is unexpectedly empty"
-                    );
-                }
-            }
+            assert_eq!(
+                dict.len(),
+                256,
+                "dictionary {name} must have exactly 256 entries"
+            );
+            assert!(
+                dict[DICT_LITERAL_ESCAPE as usize].is_empty(),
+                "dictionary {name} token 255 must stay empty"
+            );
         }
     }
 
@@ -1691,7 +1824,8 @@ mod tests {
         assert_eq!(bytes.len(), 32);
         assert_eq!(bytes[0], MAGIC_0);
         assert_eq!(bytes[1], MAGIC_1);
-        assert_eq!(bytes[2] & VERSION_MASK, FORMAT_VERSION);
+        assert!(!is_v7_header(bytes[2]), "new encodes must use expanded layout");
+        assert_eq!(bytes[2] & EXPANDED_REVISION_MASK, EXPANDED_REVISION);
     }
 
     #[test]
@@ -2365,5 +2499,601 @@ mod tests {
         let enc = encode("^hello WORLD.").unwrap();
         // normalize lowercases everything, but ^ is not a letter
         assert_eq!(enc.normalized_text, "^hello world.");
+    }
+
+    // --- Expanded layout / v7 backward-compat tests ---
+
+    fn build_v7_header(dict_idx: u8, mode: u8) -> u8 {
+        ((dict_idx & 0x07) << DICT_SHIFT) | (mode & MODE_MASK) | (FORMAT_VERSION & VERSION_MASK)
+    }
+
+    fn make_v7_frame(magic: [u8; 2], dict_idx: u8, mode: u8, payload: &[u8]) -> [u8; FRAME_SIZE] {
+        let mut frame = [0u8; FRAME_SIZE];
+        frame[0] = magic[0];
+        frame[1] = magic[1];
+        frame[2] = build_v7_header(dict_idx, mode);
+        frame[PAYLOAD_LEN_INDEX] = payload.len() as u8;
+        frame[PAYLOAD_INDEX..PAYLOAD_INDEX + payload.len()].copy_from_slice(payload);
+        frame[CRC_INDEX] = crc8(&frame[0..CRC_INDEX]);
+        frame
+    }
+
+    #[test]
+    fn old_hs_v7_frame_still_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = b"hello world";
+        let frame = make_v7_frame([MAGIC_0, MAGIC_1], 0, MODE_RAW, payload);
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(dec.is_short_message, "v7 HS frame must decode");
+        assert!(!dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn old_hx_v7_frame_still_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = b"hello world";
+        let frame = make_v7_frame([MAGIC_CHAT_0, MAGIC_CHAT_1], 0, MODE_RAW, payload);
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(dec.is_short_message, "v7 HX frame must decode");
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn old_hs_v7_dict_frame_still_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(0, "hello");
+        let frame = make_v7_frame([MAGIC_0, MAGIC_1], 0, MODE_DICT, &payload);
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(dec.is_short_message, "v7 HS dict frame must decode");
+        assert!(!dec.is_h0xc_chat_message);
+        assert!(dec.text.is_some());
+    }
+
+    #[test]
+    fn old_hx_v7_dict_frame_still_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = dict_payload(0, "hello");
+        let frame = make_v7_frame([MAGIC_CHAT_0, MAGIC_CHAT_1], 0, MODE_DICT, &payload);
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(dec.is_short_message, "v7 HX dict frame must decode");
+        assert!(dec.is_h0xc_chat_message);
+        assert!(dec.text.is_some());
+    }
+
+    #[test]
+    fn new_hs_expanded_frame_encodes_and_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("hello world").expect("encode");
+        assert_eq!(enc.hex.len(), 64);
+        let bytes = hex::decode(&enc.hex).expect("hex");
+        assert_eq!(bytes[0], MAGIC_0);
+        assert_eq!(bytes[1], MAGIC_1);
+        assert!(!is_v7_header(bytes[2]), "must be expanded layout");
+
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(!dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn new_hx_expanded_frame_encodes_and_decodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("hello world").expect("chat encode");
+        assert_eq!(enc.hex.len(), 64);
+        let bytes = hex::decode(&enc.hex).expect("hex");
+        assert_eq!(bytes[0], MAGIC_CHAT_0);
+        assert_eq!(bytes[1], MAGIC_CHAT_1);
+        assert!(!is_v7_header(bytes[2]), "must be expanded layout");
+
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn expanded_header_never_looks_like_v7() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        for dict_idx in 0..16u8 {
+            for mode in [MODE_DICT, MODE_RAW, MODE_5BIT, MODE_6BIT] {
+                let header = build_header(dict_idx, mode);
+                assert!(
+                    !is_v7_header(header),
+                    "expanded header (dict={dict_idx}, mode={mode:#04x}) = {header:#04x} must not look like v7"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expanded_encode_selects_high_dictionary_index() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let runtime = current_runtime();
+        assert!(
+            runtime.runtimes.len() > 8,
+            "runtime must have more than 8 dictionaries for this test"
+        );
+    }
+
+    #[test]
+    fn expanded_encode_can_address_dictionary_index_above_seven() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+
+        let mut dictionaries = Vec::new();
+        for _ in 0..10 {
+            dictionaries.push(vec![String::new(); 256]);
+        }
+        dictionaries[9][0] = "zzzzqqqq ".to_string();
+
+        let file = crate::modules::short_message_table_packs::TablePackFile {
+            magic: crate::modules::short_message_table_packs::TABLE_PACK_FILE_MAGIC.to_string(),
+            file_version: crate::modules::short_message_table_packs::TABLE_PACK_FILE_VERSION,
+            name: "High-Dict-Test".to_string(),
+            version: "1.0".to_string(),
+            description: Some("high dictionary index test pack".to_string()),
+            dictionary_titles: Vec::new(),
+            dictionaries,
+            suffixes: Vec::new(),
+            acronyms: Vec::new(),
+        };
+        let (pack, _warnings) =
+            crate::modules::short_message_table_packs::validate_table_pack(&file)
+                .expect("custom high-index pack must validate");
+        crate::modules::short_message_table_packs::set_active_pack_for_tests(pack);
+
+        let enc = encode("zzzzqqqq").expect("encode high-index phrase");
+        assert!(enc.fits);
+        assert_eq!(enc.encoding_mode, "dictionary");
+        assert_eq!(enc.dictionary_index, Some(9));
+
+        let bytes = hex::decode(&enc.hex).expect("hex");
+        assert!(!is_v7_header(bytes[2]));
+        assert_eq!(header_dict(&bytes), 9);
+
+        crate::modules::short_message_table_packs::reset_to_built_in_table_pack()
+            .expect("reset to built-in");
+    }
+
+    #[test]
+    fn v7_bad_crc_still_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = b"hello world";
+        let mut frame = make_v7_frame([MAGIC_0, MAGIC_1], 0, MODE_RAW, payload);
+        frame[CRC_INDEX] ^= 1;
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(!dec.is_short_message, "v7 frame with bad CRC must be rejected");
+    }
+
+    #[test]
+    fn expanded_bad_crc_still_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("hello world").expect("encode");
+        let mut bytes = hex::decode(&enc.hex).expect("hex");
+        bytes[CRC_INDEX] ^= 1;
+        let dec = decode(&hex::encode(bytes));
+        assert!(!dec.is_short_message, "expanded frame with bad CRC must be rejected");
+    }
+
+    #[test]
+    fn expanded_revision_bits_are_zero_in_new_encodes() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let texts = ["hello world", "gm anon", "payment sent", "thank you"];
+        for text in texts {
+            let enc = encode(text).expect("encode");
+            let bytes = hex::decode(&enc.hex).expect("hex");
+            assert_eq!(
+                bytes[2] & EXPANDED_REVISION_MASK,
+                EXPANDED_REVISION,
+                "revision bits must be 0 for {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_dict_mode_extracts_correctly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        for dict_idx in 0..16u8 {
+            let header = build_header(dict_idx, MODE_DICT);
+            assert_eq!(extract_dict_idx(header), dict_idx as usize);
+            assert_eq!(extract_mode(header), MODE_DICT);
+        }
+    }
+
+    #[test]
+    fn expanded_raw_mode_extracts_correctly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let header = build_header(5, MODE_RAW);
+        assert_eq!(extract_dict_idx(header), 5);
+        assert_eq!(extract_mode(header), MODE_RAW);
+    }
+
+    #[test]
+    fn expanded_5bit_mode_extracts_correctly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let header = build_header(10, MODE_5BIT);
+        assert_eq!(extract_dict_idx(header), 10);
+        assert_eq!(extract_mode(header), MODE_5BIT);
+    }
+
+    #[test]
+    fn expanded_6bit_mode_extracts_correctly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let header = build_header(15, MODE_6BIT);
+        assert_eq!(extract_dict_idx(header), 15);
+        assert_eq!(extract_mode(header), MODE_6BIT);
+    }
+
+    #[test]
+    fn v7_header_extracts_correctly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let header = build_v7_header(3, MODE_DICT);
+        assert!(is_v7_header(header));
+        assert_eq!(extract_dict_idx(header), 3);
+        assert_eq!(extract_mode(header), MODE_DICT);
+
+        let header = build_v7_header(7, MODE_5BIT);
+        assert!(is_v7_header(header));
+        assert_eq!(extract_dict_idx(header), 7);
+        assert_eq!(extract_mode(header), MODE_5BIT);
+    }
+
+    #[test]
+    fn old_v7_unknown_revision_rejected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let payload = b"hello world";
+        let mut frame = make_v7_frame([MAGIC_0, MAGIC_1], 0, MODE_RAW, payload);
+        // Set low 3 bits to 0x02 (not v7=0x07, not expanded rev 0)
+        frame[2] = (frame[2] & !VERSION_MASK) | 0x02;
+        frame[CRC_INDEX] = crc8(&frame[0..CRC_INDEX]);
+        let hex = hex::encode(frame);
+        let dec = decode(&hex);
+        assert!(!dec.is_short_message, "unknown revision must be rejected");
+    }
+
+    // --- Contraction handling tests ---
+
+    #[test]
+    fn contraction_don_t_straight_apostrophe() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("don't panic").unwrap();
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("Do not panic"));
+    }
+
+    #[test]
+    fn contraction_don_t_curly_apostrophe() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("don\u{2019}t panic").unwrap();
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("Do not panic"));
+    }
+
+    #[test]
+    fn contraction_i_m_straight() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("I'm ready").unwrap();
+        assert_eq!(enc.normalized_text, "i am ready");
+        let dec = decode(&enc.hex);
+        assert_eq!(dec.text.as_deref(), Some("I am ready"));
+    }
+
+    #[test]
+    fn contraction_i_m_curly() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("I\u{2019}m ready").unwrap();
+        assert_eq!(enc.normalized_text, "i am ready");
+        let dec = decode(&enc.hex);
+        assert_eq!(dec.text.as_deref(), Some("I am ready"));
+    }
+
+    #[test]
+    fn contraction_you_re() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("you're welcome").unwrap();
+        assert_eq!(enc.normalized_text, "you are welcome");
+    }
+
+    #[test]
+    fn contraction_it_s() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("it's done").unwrap();
+        assert_eq!(enc.normalized_text, "it is done");
+    }
+
+    #[test]
+    fn contraction_can_t() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("can't stop").unwrap();
+        assert_eq!(enc.normalized_text, "can not stop");
+    }
+
+    #[test]
+    fn contraction_won_t() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("won't work").unwrap();
+        assert_eq!(enc.normalized_text, "will not work");
+    }
+
+    #[test]
+    fn contraction_we_re_they_re() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("we're here and they're there").unwrap();
+        assert_eq!(enc.normalized_text, "we are here and they are there");
+    }
+
+    #[test]
+    fn contraction_negations() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let cases = [
+            ("isn't", "is not"),
+            ("aren't", "are not"),
+            ("wasn't", "was not"),
+            ("weren't", "were not"),
+            ("doesn't", "does not"),
+            ("didn't", "did not"),
+            ("couldn't", "could not"),
+            ("shouldn't", "should not"),
+            ("wouldn't", "would not"),
+            ("haven't", "have not"),
+            ("hasn't", "has not"),
+            ("hadn't", "had not"),
+        ];
+        for (contraction, expected) in cases {
+            let expanded = expand_contractions(contraction);
+            assert_eq!(expanded, expected, "failed for {contraction}");
+        }
+    }
+
+    #[test]
+    fn contraction_lets() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let expanded = expand_contractions("let's go");
+        assert_eq!(expanded, "let us go");
+    }
+
+    #[test]
+    fn contraction_whats_heres() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        assert_eq!(expand_contractions("what's new"), "what is new");
+        assert_eq!(expand_contractions("here's the plan"), "here is the plan");
+        assert_eq!(expand_contractions("that's great"), "that is great");
+        assert_eq!(expand_contractions("where's the file"), "where is the file");
+        assert_eq!(expand_contractions("who's there"), "who is there");
+        assert_eq!(expand_contractions("there's a bug"), "there is a bug");
+    }
+
+    #[test]
+    fn contraction_does_not_break_possessive_s() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("the wallet's balance").unwrap();
+        assert_eq!(enc.normalized_text, "the wallet's balance");
+    }
+
+    #[test]
+    fn contraction_with_punctuation() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let expanded = expand_contractions("don't!");
+        assert_eq!(expanded, "do not!");
+        let expanded = expand_contractions("can't?");
+        assert_eq!(expanded, "can not?");
+    }
+
+    #[test]
+    fn contraction_roundtrip_compression() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("I'm happy you're here").unwrap();
+        assert!(enc.fits);
+        assert_eq!(enc.normalized_text, "i am happy you are here");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("I am happy you are here"));
+    }
+
+    #[test]
+    fn contraction_chat_roundtrip() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode_chat("don't worry we're fine").unwrap();
+        let bytes = hex::decode(&enc.hex).unwrap();
+        assert_eq!(bytes[0], MAGIC_CHAT_0);
+        assert_eq!(bytes[1], MAGIC_CHAT_1);
+        let dec = decode(&enc.hex);
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("Do not worry we are fine"));
+    }
+
+    // --- Stem + suffix tests ---
+
+    #[test]
+    fn stem_suffix_started() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the build started");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("The build started"));
+    }
+
+    #[test]
+    fn stem_suffix_starting() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the build starting now");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("The build starting now"));
+    }
+
+    #[test]
+    fn stem_suffix_priced() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the item priced at 10");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("priced"));
+    }
+
+    #[test]
+    fn stem_suffix_tokenized() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the asset tokenized");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("tokenized"));
+    }
+
+    #[test]
+    fn stem_suffix_tokenizing() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("we are tokenizing the asset");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("tokenizing"));
+    }
+
+    #[test]
+    fn stem_suffix_updated() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the config updated");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("updated"));
+    }
+
+    #[test]
+    fn stem_suffix_updating() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("we are updating the config");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("updating"));
+    }
+
+    #[test]
+    fn stem_suffix_confirmed() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("the order confirmed");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("confirmed"));
+    }
+
+    #[test]
+    fn stem_suffix_confirming() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("we are confirming the order");
+        assert!(dec.is_short_message);
+        assert!(dec.text.as_deref().unwrap().contains("confirming"));
+    }
+
+    #[test]
+    fn stem_suffix_encode_size_started() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("the build started").unwrap();
+        assert!(enc.fits);
+        assert_eq!(enc.encoding_mode, "dictionary");
+    }
+
+    #[test]
+    fn stem_suffix_encode_size_tokenized() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("the asset tokenized").unwrap();
+        assert!(enc.fits);
+        assert_eq!(enc.encoding_mode, "dictionary");
+    }
+
+    #[test]
+    fn new_suffix_ize_in_list() {
+        assert!(SUFFIXES.contains(&"ize "), "ize must be in SUFFIXES");
+        assert!(SUFFIXES.contains(&"izing "), "izing must be in SUFFIXES");
     }
 }

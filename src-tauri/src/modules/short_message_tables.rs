@@ -7,8 +7,8 @@
 // - Every Commander short message is a fixed 32-byte frame.
 // - Dictionary mode stores one byte per dictionary token, plus compact literal
 //   escapes for unknown ASCII, long digit runs, and number-like runs.
-// - The frame header stores a 3-bit dictionary index, so DICTIONARIES may hold
-//   at most 8 dictionaries unless FORMAT_VERSION changes.
+// - The expanded frame header stores a 4-bit dictionary index, so DICTIONARIES
+//   may hold up to 16 dictionaries (A..P).
 // - Token 255 is reserved for dictionary literal escape. Fixed-size
 //   dictionaries should keep entry 255 as ""; variable-size dictionaries must
 //   stay below 255 real entries.
@@ -61,8 +61,8 @@ pub const ALPHABET_6BIT: [u8; 64] = [
 #[rustfmt::skip]
 pub const SUFFIXES: &[&str] = &[
     "'s ", "able ", "al ", "ation ", "d ", "e ", "ed ", "er ", "ers ", "es ", "est ", "ful ",
-    "ial ", "ible ", "ies ", "ing ", "ion ", "ions ", "ish ", "ized ", "less ", "ly ", "ment ",
-    "ness ", "ping ", "s ", "ting ", "tion ", "tions ", "y ",
+    "ial ", "ible ", "ies ", "ing ", "ion ", "ions ", "ish ", "ize ", "ized ", "izing ", "less ",
+    "ly ", "ment ", "ness ", "ping ", "s ", "ting ", "tion ", "tions ", "y ",
 ];
 
 // Index 255 is reserved for the dictionary literal escape and must stay empty.
@@ -181,9 +181,9 @@ pub const DICT_C: [&str; 256] = [
     "link ", "list ", "location ", "look ", "manage ", "meet ", "message ", "minute ",
     "move ", "note ", "notice ", "open ", "order ", "owner ", "partner ", "pending ",
     "plan ", "problem ", "process ", "progress ", "project ", "provid ", "question ", "receiv ",
-    "release ", "reply ", "report ", "request ", "requir ", "resolv ", "response ", "review ",
+    "release ", "is being ", "report ", "request ", "requir ", "resolv ", "response ", "review ",
     "schedul ", "service ", "setting ", "share ", "show ", "solv ", "start ", "status ",
-    "step ", "submit ", "support ", "task ", "team ", "ticket ", "track ", "troubleshoot ",
+    "step ", "submit ", "support ", "successfully ", "team ", "ticket ", "track ", "troubleshoot ",
     "understand ", "updat ", "urgent ", "vendor ", "verify ", "wait ", "working ", "",
 ];
 
@@ -320,7 +320,7 @@ pub const DICT_G: [&str; 256] = [
     "want ", "we ", "week ", "when ", "where ", "which ", "while ", "will ",
     "with ", "without ", "yes ", "you ", "your ", "accept ", "address ", "allocat ",
     "arriv ", "asset ", "attach ", "avail ", "back ", "backup ", "batch ", "box ",
-    "bundle ", "carrier ", "carton ", "chain ", "check ", "client ", "code ", "collect ",
+    "recipient ", "carrier ", "carton ", "chain ", "check ", "client ", "code ", "collect ",
     "complete ", "confirm ", "container ", "count ", "courier ", "creat ", "customer ", "date ",
     "day ", "delay ", "depart ", "deliver ", "delivery ", "destination ", "detail ", "dispatch ",
     "distribut ", "document ", "driver ", "drop ", "entry ", "expect ", "export ", "facility ",
@@ -348,7 +348,7 @@ pub const DICT_H: [&str; 256] = [
     "tions ", "y ", "a ", "about ", "account ", "address ", "after ", "again ",
     "airdrop ", "all ", "already ", "am ", "amount ", "and ", "any ", "api ",
     "app ", "are ", "as ", "asset ", "asset holder ", "at ", "attach ", "backup ",
-    "balance ", "be ", "because ", "before ", "between ", "block ", "social ", "burn ",
+    "balance ", "be ", "because ", "before ", "between ", "block ", "consensus ", "burn ",
     "but ", "buy ", "by ", "can ", "chain ", "chart ", "claim ", "cli ",
     "client ", "code ", "command ", "community ", "confirm ", "connect ", "core ", "could ",
     "data ", "commander ", "deploy ", "dev ", "develop ", "dex ", "did ", "difficulty ",
@@ -375,8 +375,35 @@ pub const DICT_H: [&str; 256] = [
     "without ", "work ", "system ", "would ", "yes ", "you ", "your ", "",
 ];
 
-#[rustfmt::skip]
-pub const DICTIONARIES: [(&str, &[&str]); 8] = [
+// DICT_I through DICT_P are empty placeholders for future tuned releases.
+// Keeping them empty avoids accidental selection and keeps prediction warm-up
+// close to the A-H baseline until real beta data justifies a new table.
+
+// DICT_I: reserved for future tuning.
+pub const DICT_I: [&str; 256] = [""; 256];
+
+// DICT_J: reserved for future tuning.
+pub const DICT_J: [&str; 256] = [""; 256];
+
+// DICT_K: reserved for future tuning.
+pub const DICT_K: [&str; 256] = [""; 256];
+
+// DICT_L: reserved for future tuning.
+pub const DICT_L: [&str; 256] = [""; 256];
+
+// DICT_M: reserved for future tuning.
+pub const DICT_M: [&str; 256] = [""; 256];
+
+// DICT_N: reserved for future tuning.
+pub const DICT_N: [&str; 256] = [""; 256];
+
+// DICT_O: reserved for future tuning.
+pub const DICT_O: [&str; 256] = [""; 256];
+
+// DICT_P: reserved for future tuning.
+pub const DICT_P: [&str; 256] = [""; 256];
+
+pub const DICTIONARIES: [(&str, &[&str]); 16] = [
     ("A", &DICT_A),
     ("B", &DICT_B),
     ("C", &DICT_C),
@@ -385,6 +412,14 @@ pub const DICTIONARIES: [(&str, &[&str]); 8] = [
     ("F", &DICT_F),
     ("G", &DICT_G),
     ("H", &DICT_H),
+    ("I", &DICT_I),
+    ("J", &DICT_J),
+    ("K", &DICT_K),
+    ("L", &DICT_L),
+    ("M", &DICT_M),
+    ("N", &DICT_N),
+    ("O", &DICT_O),
+    ("P", &DICT_P),
 ];
 
 #[rustfmt::skip]

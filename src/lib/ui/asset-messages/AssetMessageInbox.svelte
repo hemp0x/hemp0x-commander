@@ -79,6 +79,8 @@
     /** @type {Set<string>} */
     let selectedMessageIds = new Set();
 
+    let showExpired = false;
+
     /** @type {null | 'clearUnpinned' | 'deleteSelected'} */
     let pendingConfirmAction = null;
 
@@ -375,6 +377,34 @@
         return typeof message === "string" && message.trim().toLowerCase().startsWith("4858");
     }
 
+    /** @param {string | undefined | null} message */
+    function isHcControlFrame(message) {
+        return typeof message === "string" && message.trim().length >= 4 && message.trim().toLowerCase().startsWith("4843");
+    }
+
+    /** @param {AssetMessage} msg */
+    function isMessageExpired(msg) {
+        const raw = msg.expire_time;
+        if (!raw) return false;
+        const n = Number(raw);
+        let d;
+        if (Number.isFinite(n) && n > 1000000000) {
+            d = new Date(n * 1000);
+        } else {
+            d = new Date(raw);
+        }
+        if (isNaN(d.getTime())) return false;
+        return d.getTime() - Date.now() <= 0;
+    }
+
+    /** @param {AssetMessage} msg */
+    function isInboxControlFrame(msg) {
+        if (isHcControlFrame(msg.message)) return true;
+        const sm = shortMessageCache[msg.message];
+        if (sm === undefined && isHxChatFrame(msg.message)) return true;
+        return !!(sm?.is_short_message && sm?.is_h0xc_chat_message);
+    }
+
     $: assetChannelNames = asset ? channelNamesForAsset(asset.name) : [];
     $: filteredMessages = messages.filter((msg) =>
         assetChannelNames.includes(msg.asset_name),
@@ -382,14 +412,34 @@
 
     $: displayedMessages = (() => {
         const hidden = hiddenMessageIds;
+        const pinned = pinnedMessageIds;
+        const showExp = showExpired;
         return (messageExplorerMode ? messages : filteredMessages)
             .filter((msg) => !hidden.has(messageLocalId(msg)))
             .filter((msg) => {
                 if (messageExplorerMode) return true;
-                const sm = shortMessageCache[msg.message];
-                if (sm === undefined && isHxChatFrame(msg.message)) return false;
-                return !(sm?.is_short_message && sm?.is_h0xc_chat_message);
+                return !isInboxControlFrame(msg);
+            })
+            .filter((msg) => {
+                if (showExp) return true;
+                if (pinned.has(messageLocalId(msg))) return true;
+                return !isMessageExpired(msg);
             });
+    })();
+
+    $: hiddenExpiredCount = (() => {
+        if (showExpired) return 0;
+        const _pinned = pinnedMessageIds;
+        const _hidden = hiddenMessageIds;
+        const _msgs = messageExplorerMode ? messages : filteredMessages;
+        let count = 0;
+        for (const msg of _msgs) {
+            if (_hidden.has(messageLocalId(msg))) continue;
+            if (!messageExplorerMode && isInboxControlFrame(msg)) continue;
+            if (_pinned.has(messageLocalId(msg))) continue;
+            if (isMessageExpired(msg)) count++;
+        }
+        return count;
     })();
 
     $: inboxRows = (() => {
@@ -736,6 +786,17 @@
             >
                 <span class="toolbar-icon">{messageExplorerMode ? "⊘" : "☰"}</span>
             </button>
+            <button
+                class="toolbar-btn"
+                class:active={showExpired}
+                on:click={() => (showExpired = !showExpired)}
+                title={showExpired ? "Hide expired messages" : "Show expired messages"}
+            >
+                <span class="toolbar-icon">{showExpired ? "⏰" : "⏳"}</span>
+            </button>
+            {#if !showExpired && hiddenExpiredCount > 0}
+                <span class="toolbar-chip expired-chip">{hiddenExpiredCount} expired</span>
+            {/if}
             {#if selectedMessageIds.size > 0}
                 <div class="bulk-bar">
                     <span class="bulk-count">{selectedMessageIds.size} selected</span>
@@ -1068,6 +1129,10 @@
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 999px;
         padding: 0.15rem 0.4rem;
+    }
+    .toolbar-chip.expired-chip {
+        color: #aa8800;
+        border-color: rgba(170, 136, 0, 0.25);
     }
     .bulk-bar {
         display: inline-flex;

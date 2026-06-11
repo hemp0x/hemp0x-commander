@@ -288,6 +288,22 @@ pub fn bits_to_target(bits_hex: &str) -> String {
     result
 }
 
+pub fn bits_to_difficulty(bits_hex: &str) -> Result<f64, String> {
+    let bits = u32::from_str_radix(bits_hex, 16)
+        .map_err(|e| format!("Invalid bits hex {}: {}", bits_hex, e))?;
+    let exponent = (bits >> 24) as i32;
+    let mantissa = (bits & 0x007fffff) as f64;
+
+    if mantissa == 0.0 {
+        return Ok(0.0);
+    }
+
+    let power = 248 - 8 * exponent;
+    let numerator = 2.0_f64.powi(power);
+
+    Ok(numerator / mantissa)
+}
+
 pub fn get_seed_hash(height: u32) -> String {
     let epoch_length: u32 = 7500;
     let epoch = height / epoch_length;
@@ -980,5 +996,34 @@ mod tests {
         let mix = "a".repeat(64);
         let err = build_block_hex(&job, nonce, &mix).unwrap_err();
         assert!(err.contains("Empty hex string"));
+    }
+
+    #[test]
+    fn bits_to_difficulty_diff1() {
+        let d = bits_to_difficulty("1d00ffff").unwrap();
+        assert!((d - 1.0).abs() < 0.01, "expected ~1.0, got {}", d);
+    }
+
+    #[test]
+    fn bits_to_difficulty_diff2() {
+        let d = bits_to_difficulty("1d007fff").unwrap();
+        assert!((d - 2.0).abs() < 0.01, "expected ~2.0, got {}", d);
+    }
+
+    #[test]
+    fn bits_to_difficulty_high_diff() {
+        let d = bits_to_difficulty("1c00ffff").unwrap();
+        assert!((d - 256.0).abs() < 1.0, "expected ~256, got {}", d);
+    }
+
+    #[test]
+    fn bits_to_difficulty_rejects_invalid_hex() {
+        assert!(bits_to_difficulty("zzzz").is_err());
+    }
+
+    #[test]
+    fn bits_to_difficulty_zero_mantissa() {
+        let d = bits_to_difficulty("00000000").unwrap();
+        assert_eq!(d, 0.0);
     }
 }

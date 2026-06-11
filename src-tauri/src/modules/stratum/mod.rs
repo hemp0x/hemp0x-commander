@@ -132,6 +132,43 @@ pub fn start_stratum_server(
     }
 
     {
+        let probe = crate::modules::rpc::call_rpc("getblockchaininfo", &[]);
+        match probe {
+            Ok(info) => {
+                let ibd = info
+                    .get("initialblockdownload")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if ibd {
+                    if let Ok(mut state) = global_state().lock() {
+                        state.node_rpc_ok = false;
+                        state.last_error =
+                            Some("Node is still in initial block download".to_string());
+                    }
+                    return Err(
+                        "Cannot start: node is still in initial block download. Wait for sync to finish."
+                            .to_string(),
+                    );
+                }
+                if let Ok(mut state) = global_state().lock() {
+                    state.node_rpc_ok = true;
+                    state.last_error = None;
+                }
+            }
+            Err(_) => {
+                if let Ok(mut state) = global_state().lock() {
+                    state.node_rpc_ok = false;
+                    state.last_error =
+                        Some("Node is not running or RPC is unavailable".to_string());
+                }
+                return Err(
+                    "Cannot start: node is not running or RPC is unavailable.".to_string(),
+                );
+            }
+        }
+    }
+
+    {
         let mut state = global_state()
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
@@ -295,6 +332,7 @@ mod tests {
             last_submitted_block_at: None,
             share_events: VecDeque::new(),
             submission_history: VecDeque::new(),
+            node_rpc_ok: true,
         }
     }
 

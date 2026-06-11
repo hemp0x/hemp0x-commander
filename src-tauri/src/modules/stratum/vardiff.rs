@@ -67,6 +67,7 @@ pub fn compute_vardiff_adjustment(
     current_diff: f64,
     share_history: &VecDeque<(u64, f64)>,
     retarget_deadline: u64,
+    network_difficulty: Option<f64>,
 ) -> VardiffResult {
     if share_history.len() < 10 {
         return VardiffResult {
@@ -113,7 +114,12 @@ pub fn compute_vardiff_adjustment(
         };
     };
 
-    new_diff = new_diff.clamp(VARDIFF_MIN_DIFF, VARDIFF_MAX_DIFF);
+    let effective_max = match network_difficulty {
+        Some(nd) if nd > VARDIFF_MIN_DIFF => VARDIFF_MAX_DIFF.min(nd * 0.99),
+        _ => VARDIFF_MAX_DIFF,
+    };
+
+    new_diff = new_diff.clamp(VARDIFF_MIN_DIFF, effective_max);
 
     VardiffResult {
         changed: (new_diff - current_diff).abs() > f64::EPSILON,
@@ -196,7 +202,7 @@ mod tests {
     #[test]
     fn vardiff_too_few_shares() {
         let h = make_history(&[(100, 1.0), (110, 1.0), (120, 1.0), (130, 1.0)]);
-        let r = compute_vardiff_adjustment(1.0, &h, 0);
+        let r = compute_vardiff_adjustment(1.0, &h, 0, None);
         assert!(!r.changed);
     }
 
@@ -215,7 +221,7 @@ mod tests {
             (now - 32, 1.0),
             (now - 31, 1.0),
         ]);
-        let r = compute_vardiff_adjustment(1.0, &h, 0);
+        let r = compute_vardiff_adjustment(1.0, &h, 0, None);
         assert!(r.changed);
         assert!(r.new_diff > 1.0);
     }
@@ -235,7 +241,7 @@ mod tests {
             (now - 60, 8.0),
             (now - 30, 8.0),
         ]);
-        let r = compute_vardiff_adjustment(8.0, &h, 0);
+        let r = compute_vardiff_adjustment(8.0, &h, 0, None);
         assert!(r.changed);
         assert!(r.new_diff < 8.0);
     }
@@ -255,7 +261,7 @@ mod tests {
             (now - 30, 1.0),
             (now - 15, 1.0),
         ]);
-        let r = compute_vardiff_adjustment(1.0, &h, 0);
+        let r = compute_vardiff_adjustment(1.0, &h, 0, None);
         assert!(!r.changed);
     }
 
@@ -274,7 +280,7 @@ mod tests {
             (now - 60, 0.25),
             (now - 30, 0.25),
         ]);
-        let r = compute_vardiff_adjustment(0.25, &h, 0);
+        let r = compute_vardiff_adjustment(0.25, &h, 0, None);
         assert!(r.changed);
         assert_eq!(r.new_diff, VARDIFF_MIN_DIFF);
     }
@@ -294,7 +300,7 @@ mod tests {
             (now - 32, 800.0),
             (now - 31, 800.0),
         ]);
-        let r = compute_vardiff_adjustment(800.0, &h, 0);
+        let r = compute_vardiff_adjustment(800.0, &h, 0, None);
         assert!(r.changed);
         assert_eq!(r.new_diff, VARDIFF_MAX_DIFF);
     }
@@ -314,7 +320,7 @@ mod tests {
             (now - 32, 1.0),
             (now - 31, 1.0),
         ]);
-        let r = compute_vardiff_adjustment(1.0, &h, now + 60);
+        let r = compute_vardiff_adjustment(1.0, &h, now + 60, None);
         assert!(!r.changed);
     }
 
@@ -351,5 +357,85 @@ mod tests {
         let hr = compute_worker_hashrate_hs(&h, 1000);
         let expected = (0.4 * DIFF1_BASE) / 30.0;
         assert!((hr - expected).abs() < 0.1);
+    }
+
+    #[test]
+    fn vardiff_capped_below_network_difficulty() {
+        let now = crate::modules::stratum::state::current_timestamp();
+        let h = make_history(&[
+            (now - 40, 800.0),
+            (now - 39, 800.0),
+            (now - 38, 800.0),
+            (now - 37, 800.0),
+            (now - 36, 800.0),
+            (now - 35, 800.0),
+            (now - 34, 800.0),
+            (now - 33, 800.0),
+            (now - 32, 800.0),
+            (now - 31, 800.0),
+        ]);
+        let r = compute_vardiff_adjustment(800.0, &h, 0, Some(50.0));
+        assert!(r.changed);
+        assert!((r.new_diff - 50.0 * 0.99).abs() < 0.01);
+    }
+
+    #[test]
+    fn vardiff_network_difficulty_below_min_uses_max_diff() {
+        let now = crate::modules::stratum::state::current_timestamp();
+        let h = make_history(&[
+            (now - 40, 0.1),
+            (now - 39, 0.1),
+            (now - 38, 0.1),
+            (now - 37, 0.1),
+            (now - 36, 0.1),
+            (now - 35, 0.1),
+            (now - 34, 0.1),
+            (now - 33, 0.1),
+            (now - 32, 0.1),
+            (now - 31, 0.1),
+        ]);
+        let r = compute_vardiff_adjustment(0.1, &h, 0, Some(0.1));
+        assert!(r.changed);
+        assert!(r.new_diff >= VARDIFF_MIN_DIFF);
+    }
+
+    #[test]
+    fn vardiff_none_network_difficulty_uses_max() {
+        let now = crate::modules::stratum::state::current_timestamp();
+        let h = make_history(&[
+            (now - 40, 800.0),
+            (now - 39, 800.0),
+            (now - 38, 800.0),
+            (now - 37, 800.0),
+            (now - 36, 800.0),
+            (now - 35, 800.0),
+            (now - 34, 800.0),
+            (now - 33, 800.0),
+            (now - 32, 800.0),
+            (now - 31, 800.0),
+        ]);
+        let r = compute_vardiff_adjustment(800.0, &h, 0, None);
+        assert!(r.changed);
+        assert_eq!(r.new_diff, VARDIFF_MAX_DIFF);
+    }
+
+    #[test]
+    fn vardiff_network_difficulty_above_max_uses_max() {
+        let now = crate::modules::stratum::state::current_timestamp();
+        let h = make_history(&[
+            (now - 40, 800.0),
+            (now - 39, 800.0),
+            (now - 38, 800.0),
+            (now - 37, 800.0),
+            (now - 36, 800.0),
+            (now - 35, 800.0),
+            (now - 34, 800.0),
+            (now - 33, 800.0),
+            (now - 32, 800.0),
+            (now - 31, 800.0),
+        ]);
+        let r = compute_vardiff_adjustment(800.0, &h, 0, Some(50000.0));
+        assert!(r.changed);
+        assert_eq!(r.new_diff, VARDIFF_MAX_DIFF);
     }
 }

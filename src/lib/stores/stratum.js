@@ -66,6 +66,7 @@ export const stratumStatus = writable({
     accepted_submissions: 0,
     stale_orphan_submissions: 0,
     inconclusive_submissions: 0,
+    node_rpc_ok: true,
 });
 
 /** @param {number | null | undefined} hs */

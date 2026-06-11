@@ -132,6 +132,8 @@ async fn update_template() -> Result<(), String> {
                 state.current_target = Some(target.clone());
                 state.last_template_update = Some(current_timestamp());
                 state.template_error = None;
+                state.last_error = None;
+                state.node_rpc_ok = true;
                 state.current_job_id = (state.current_job_id + 1) % 10000;
                 state.template_generation = state.template_generation.wrapping_add(1);
                 state.template_clean = new_prev || state.current_seed_hash.is_none();
@@ -150,6 +152,8 @@ async fn update_template() -> Result<(), String> {
             } else {
                 state.last_template_update = Some(current_timestamp());
                 state.template_error = None;
+                state.last_error = None;
+                state.node_rpc_ok = true;
 
                 if let Ok(_current) = serde_json::to_string(&template) {
                     let _ = tx_hashes;
@@ -162,7 +166,8 @@ async fn update_template() -> Result<(), String> {
             let mut state = global_state()
                 .lock()
                 .map_err(|e| format!("Lock error: {}", e))?;
-            state.template_error = Some(format!("Template RPC error: {}", e));
+            state.node_rpc_ok = false;
+            state.template_error = Some("Node unavailable — will retry automatically".to_string());
             state.last_error = Some(format!("Template RPC error: {}", e));
             log::warn!("Block template update failed: {}", e);
             Err(e)

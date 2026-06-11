@@ -30,6 +30,7 @@ pub struct ConnectionState {
     pub difficulty: f64,
     pub share_history: std::collections::VecDeque<(u64, f64)>,
     pub last_vardiff_adjust: u64,
+    pub seen_shares: std::collections::HashSet<String>,
 }
 
 impl ConnectionState {
@@ -50,6 +51,7 @@ impl ConnectionState {
             difficulty: VARDIFF_MIN_DIFF,
             share_history: std::collections::VecDeque::new(),
             last_vardiff_adjust: now,
+            seen_shares: std::collections::HashSet::new(),
         }
     }
 
@@ -256,6 +258,7 @@ pub fn build_and_send_job(conn: &mut ConnectionState) -> Result<Option<serde_jso
 
     if clean {
         conn.job_cache.clear();
+        conn.seen_shares.clear();
     }
     conn.last_generation = gen;
 
@@ -430,6 +433,27 @@ async fn handle_submit(
         }
     };
 
+    let share_key = make_share_key(job_id_str, &nonce_hex, &mix_hash);
+    if !conn.seen_shares.insert(share_key) {
+        log::debug!(
+            "Duplicate share rejected: job_id={}, nonce={}, mix_hash={}",
+            job_id_str,
+            nonce_hex,
+            mix_hash
+        );
+        increment_worker_rejected_by_key(&conn.session_key(), conn.difficulty);
+        send_json(
+            writer,
+            &serde_json::json!({
+                "id": id,
+                "result": false,
+                "error": [22, "Duplicate share", null]
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let rpc_nonce = format!("0x{}", nonce_hex);
     let header_hash = submitted_job.header_hash.clone();
     let height = submitted_job.height;
@@ -457,9 +481,14 @@ async fn handle_submit(
 
     match kawpow_result {
         Ok(result) => {
-            let is_valid = result["result"].as_str() == Some("true")
-                || result["result"].as_bool() == Some(true);
-            if !is_valid {
+            let (is_valid, meets_target) = parse_kawpow_validity(&result);
+            if !is_valid || !meets_target {
+                if result.get("meets_target").is_none() {
+                    log::warn!(
+                        "getkawpowhash response missing meets_target field — rejecting share \
+                         (possible Core build mismatch)"
+                    );
+                }
                 increment_worker_rejected_by_key(&sk, diff);
                 send_json(
                     writer,
@@ -541,14 +570,27 @@ async fn handle_submit(
             Ok(())
         }
         Err(e) => {
-            increment_worker_rejected_by_key(&sk, diff);
+            conn.seen_shares
+                .remove(&make_share_key(job_id_str, &nonce_hex, &mix_hash));
+            let node_unavailable = is_rpc_unavailable_error(&e)
+                || global_state()
+                    .lock()
+                    .map(|state| !state.node_rpc_ok)
+                    .unwrap_or(false);
+            if !node_unavailable {
+                increment_worker_rejected_by_key(&sk, diff);
+            }
             log::warn!("getkawpowhash RPC error: {}", e);
             send_json(
                 writer,
                 &serde_json::json!({
                     "id": id,
                     "result": false,
-                    "error": [20, "Share validation error", null]
+                    "error": [
+                        20,
+                        if node_unavailable { "Node unavailable" } else { "Share validation error" },
+                        null
+                    ]
                 }),
             )
             .await
@@ -955,7 +997,12 @@ async fn adjust_difficulty_for_connection(
     let deadline = conn
         .last_vardiff_adjust
         .saturating_add(VARDIFF_RETARGET_TIME_SECS);
-    let adj = compute_vardiff_adjustment(conn.difficulty, &conn.share_history, deadline);
+    let network_diff = global_state()
+        .lock()
+        .ok()
+        .and_then(|s| s.current_bits.clone())
+        .and_then(|bits| crate::modules::stratum::job::bits_to_difficulty(&bits).ok());
+    let adj = compute_vardiff_adjustment(conn.difficulty, &conn.share_history, deadline, network_diff);
 
     if adj.changed {
         conn.difficulty = adj.new_diff;
@@ -989,6 +1036,29 @@ async fn adjust_difficulty_for_connection(
 
 fn hex_str(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+pub fn parse_kawpow_validity(result: &Value) -> (bool, bool) {
+    let is_valid = result["result"].as_str() == Some("true")
+        || result["result"].as_bool() == Some(true);
+    let meets_target = result["meets_target"].as_str() == Some("true")
+        || result["meets_target"].as_bool() == Some(true);
+    (is_valid, meets_target)
+}
+
+pub fn make_share_key(job_id_str: &str, nonce_hex: &str, mix_hash: &str) -> String {
+    format!("{}:{}:{}", job_id_str, nonce_hex, mix_hash)
+}
+
+fn is_rpc_unavailable_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("connection aborted")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("transport")
+        || lower.contains("rpc unavailable")
 }
 
 #[cfg(test)]
@@ -1089,5 +1159,123 @@ mod tests {
         let (status, note) = resolve_chain_comparison("DeAdBeEf", "deadbeef", 100, 100);
         assert_eq!(status, "accepted");
         assert!(note.is_none());
+    }
+
+    #[test]
+    fn parse_kawpow_validity_result_true_meets_target_true() {
+        let r = serde_json::json!({"result": true, "meets_target": true});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(valid);
+        assert!(meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_result_true_meets_target_false() {
+        let r = serde_json::json!({"result": true, "meets_target": false});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(valid);
+        assert!(!meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_result_false() {
+        let r = serde_json::json!({"result": false, "meets_target": true});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(!valid);
+        assert!(meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_missing_meets_target() {
+        let r = serde_json::json!({"result": true});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(valid);
+        assert!(!meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_string_true() {
+        let r = serde_json::json!({"result": "true", "meets_target": "true"});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(valid);
+        assert!(meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_string_false() {
+        let r = serde_json::json!({"result": "true", "meets_target": "false"});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(valid);
+        assert!(!meets);
+    }
+
+    #[test]
+    fn parse_kawpow_validity_both_false() {
+        let r = serde_json::json!({"result": false, "meets_target": false});
+        let (valid, meets) = parse_kawpow_validity(&r);
+        assert!(!valid);
+        assert!(!meets);
+    }
+
+    #[test]
+    fn make_share_key_deterministic() {
+        let k1 = make_share_key("42", "0000000000000001", "abcdef");
+        let k2 = make_share_key("42", "0000000000000001", "abcdef");
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn make_share_key_different_for_different_nonce() {
+        let k1 = make_share_key("42", "0000000000000001", "abcdef");
+        let k2 = make_share_key("42", "0000000000000002", "abcdef");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn make_share_key_different_for_different_job() {
+        let k1 = make_share_key("42", "0000000000000001", "abcdef");
+        let k2 = make_share_key("43", "0000000000000001", "abcdef");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn make_share_key_different_for_different_mix_hash() {
+        let k1 = make_share_key("42", "0000000000000001", "abcdef");
+        let k2 = make_share_key("42", "0000000000000001", "123456");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn duplicate_share_tracking_basic() {
+        let mut conn = ConnectionState::new();
+        let key = make_share_key("1", "abcdef0123456789", "feedface");
+        assert!(conn.seen_shares.insert(key.clone()));
+        assert!(!conn.seen_shares.insert(key));
+    }
+
+    #[test]
+    fn duplicate_share_tracking_different_jobs_independent() {
+        let mut conn = ConnectionState::new();
+        let k1 = make_share_key("1", "abcdef0123456789", "feedface");
+        let k2 = make_share_key("2", "abcdef0123456789", "feedface");
+        assert!(conn.seen_shares.insert(k1));
+        assert!(conn.seen_shares.insert(k2));
+    }
+
+    #[test]
+    fn duplicate_share_tracking_cleared_on_new_job() {
+        let mut conn = ConnectionState::new();
+        let key = make_share_key("1", "abcdef0123456789", "feedface");
+        conn.seen_shares.insert(key.clone());
+        assert!(!conn.seen_shares.is_empty());
+        conn.seen_shares.clear();
+        assert!(conn.seen_shares.is_empty());
+    }
+
+    #[test]
+    fn rpc_unavailable_error_detects_transport_failures() {
+        assert!(is_rpc_unavailable_error("Connection refused (os error 111)"));
+        assert!(is_rpc_unavailable_error("request timed out"));
+        assert!(!is_rpc_unavailable_error("invalid params"));
     }
 }

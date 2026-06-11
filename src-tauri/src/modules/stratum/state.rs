@@ -91,6 +91,7 @@ pub struct StratumStatus {
     pub accepted_submissions: u64,
     pub stale_orphan_submissions: u64,
     pub inconclusive_submissions: u64,
+    pub node_rpc_ok: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +149,7 @@ pub struct SharedState {
     pub last_submitted_block_at: Option<u64>,
     pub share_events: VecDeque<ShareEvent>,
     pub submission_history: VecDeque<SubmissionRecord>,
+    pub node_rpc_ok: bool,
 }
 
 static GLOBAL: OnceLock<Mutex<SharedState>> = OnceLock::new();
@@ -192,6 +194,7 @@ pub fn global_state() -> &'static Mutex<SharedState> {
             last_submitted_block_at: None,
             share_events: VecDeque::new(),
             submission_history: VecDeque::new(),
+            node_rpc_ok: true,
         })
     })
 }
@@ -331,6 +334,7 @@ pub fn build_status(state: &SharedState) -> StratumStatus {
         accepted_submissions,
         stale_orphan_submissions,
         inconclusive_submissions,
+        node_rpc_ok: state.node_rpc_ok,
     }
 }
 
@@ -381,6 +385,7 @@ pub fn reset_state_for_stop(state: &mut SharedState) {
     state.submission_history.clear();
     state.template_wake_tx.clear();
     state.template_refresh_tx.clear();
+    state.node_rpc_ok = true;
 }
 
 pub fn reset_state_stats(state: &mut SharedState) {

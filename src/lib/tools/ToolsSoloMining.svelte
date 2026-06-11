@@ -1,5 +1,5 @@
 <script>
-    import { onMount, onDestroy } from "svelte";
+    import { onMount, onDestroy, afterUpdate } from "svelte";
     import { fly } from "svelte/transition";
     import { core } from "@tauri-apps/api";
     import { systemStatus } from "../../stores.js";
@@ -36,6 +36,8 @@
     let walletDropdownRef;
     /** @type {HTMLElement | undefined} */
     let bindDropdownRef;
+    /** @type {HTMLElement | undefined} */
+    let submissionTableRef;
 
     async function pollStatus() {
         if (!tauriReady) return;
@@ -333,11 +335,13 @@
     $: isRunning =
         $stratumStatus.state === "RUNNING" ||
         $stratumStatus.state === "STARTING";
+    $: nodeAvailable = $stratumStatus.node_rpc_ok !== false;
     $: canStart =
         tauriReady && activePayoutAddress.trim().length > 0 && !isRunning;
     $: canStop = tauriReady && isRunning;
 
     $: connectionString = `stratum+tcp://${$stratumStatus.bind_address || bindAddress}:${$stratumStatus.port || port}`;
+    $: displayState = isRunning && !nodeAvailable ? "DEGRADED" : $stratumStatus.state;
     $: workerFormat = activePayoutAddress.trim()
         ? `${activePayoutAddress.trim()}.worker1`
         : "<address>.worker1";
@@ -350,6 +354,19 @@
             : "0.0";
     $: staleCount = $stratumStatus.stale_orphan_submissions ?? 0;
     $: inconclusiveCount = $stratumStatus.inconclusive_submissions ?? 0;
+
+    $: reversedHistory = $stratumStatus.submission_history
+        ? [...$stratumStatus.submission_history].reverse()
+        : [];
+
+    let prevSubCount = 0;
+    afterUpdate(() => {
+        const cur = reversedHistory.length;
+        if (cur > 0 && cur !== prevSubCount && submissionTableRef) {
+            submissionTableRef.scrollTop = submissionTableRef.scrollHeight;
+        }
+        prevSubCount = cur;
+    });
 
     // Toast
     import { createEventDispatcher } from "svelte";
@@ -416,11 +433,12 @@
         <div class="header-right">
             <span
                 class="status-badge"
-                class:running={$stratumStatus.state === "RUNNING"}
+                class:running={$stratumStatus.state === "RUNNING" && nodeAvailable}
                 class:error={$stratumStatus.state === "ERROR"}
                 class:starting={$stratumStatus.state === "STARTING"}
+                class:degraded={isRunning && !nodeAvailable}
             >
-                {$stratumStatus.state}
+                {displayState}
             </span>
         </div>
     </div>
@@ -437,6 +455,32 @@
             address configured in your miner. The address selector is a setup
             helper only.
         </p>
+    {/if}
+
+    {#if isRunning && !nodeAvailable}
+        <div class="alert-panel alert-warn node-down-banner">
+            <div class="alert-header">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <span>NODE UNAVAILABLE</span>
+            </div>
+            <p class="alert-message">Local node is not responding. Mining is paused — connected miners will receive work once the node recovers.</p>
+        </div>
+    {:else if !isRunning && !nodeAvailable}
+        <div class="alert-panel alert-warn node-down-banner">
+            <div class="alert-header">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <span>NODE OFFLINE</span>
+            </div>
+            <p class="alert-message">Start your local node before starting solo mining.</p>
+        </div>
     {/if}
 
     <!-- Main layout -->
@@ -777,17 +821,17 @@
 
             <!-- Recent Submissions -->
             {#if $stratumStatus.submission_history && $stratumStatus.submission_history.length > 0}
-                <div class="panel-section">
+                <div class="panel-section submissions-section">
                     <h4 class="section-label">RECENT SUBMISSIONS</h4>
-                    <div class="submission-table">
+                    <div class="submission-table" bind:this={submissionTableRef}>
                         <div class="sub-row sub-header-row">
                             <span class="sub-col-time">Time</span>
                             <span class="sub-col-h">Height</span>
-                            <span class="sub-col-digest">Digest</span>
+                            <span class="sub-col-digest">Block Digest</span>
                             <span class="sub-col-worker">Worker</span>
                             <span class="sub-col-status">Status</span>
                         </div>
-                        {#each $stratumStatus.submission_history as sub}
+                        {#each reversedHistory as sub}
                             <div class="sub-row">
                                 <span class="sub-col-time mono">{formatTimestamp(sub.timestamp || 0)}</span>
                                 <span class="sub-col-h mono">{sub.height ?? '--'}</span>
@@ -801,12 +845,15 @@
                                     {sub.worker_id || '--'}
                                 </span>
                                 <span class="sub-col-status">
-                                    <span class="sub-status-badge {subStatusClass(sub.status)}">
+                                    <span
+                                        class="sub-status-badge {subStatusClass(sub.status)}"
+                                        title={sub.status === 'stale_orphan' ? (sub.result || sub.error || 'Stale or orphaned block') : ''}
+                                    >
                                         {subStatusLabel(sub.status)}
                                     </span>
-                                    {#if sub.result && sub.status !== 'accepted'}
+                                    {#if sub.result && sub.status !== 'accepted' && sub.status !== 'stale_orphan'}
                                         <span class="sub-result-text" title={sub.result}>{sub.result}</span>
-                                    {:else if sub.error}
+                                    {:else if sub.error && sub.status !== 'stale_orphan'}
                                         <span class="sub-result-text" title={sub.error}>{sub.error}</span>
                                     {/if}
                                 </span>
@@ -844,7 +891,7 @@
                             </span>
                         </div>
                         <div class="chip wide">
-                            <span class="chip-label">Digest</span>
+                            <span class="chip-label">Block Digest</span>
                             <span class="chip-value mono digest" title={$stratumStatus.last_submitted_block_digest || ''}>
                                 {$stratumStatus.last_submitted_block_digest
                                     ? compactDigest($stratumStatus.last_submitted_block_digest)
@@ -1001,6 +1048,10 @@
         background: rgba(255, 68, 68, 0.15);
         color: #ff6666;
     }
+    .status-badge.degraded {
+        background: rgba(255, 200, 0, 0.12);
+        color: #ffc800;
+    }
 
     /* Layout */
     .layout-columns {
@@ -1020,6 +1071,10 @@
         flex-direction: column;
         gap: 0.5rem;
     }
+    .column-right {
+        overflow: hidden;
+        min-height: 0;
+    }
 
     /* Panel sections */
     .panel-section {
@@ -1027,6 +1082,7 @@
         border: 1px solid rgba(0, 255, 65, 0.1);
         border-radius: 5px;
         padding: 0.5rem 0.65rem;
+        flex-shrink: 0;
     }
 
     .port-section {
@@ -1412,6 +1468,7 @@
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 0.35rem;
+        flex-shrink: 0;
     }
     @media (max-width: 800px) {
         .stats-grid-compact {
@@ -1518,6 +1575,7 @@
         display: flex;
         flex-direction: column;
         gap: 0.25rem;
+        flex-shrink: 0;
     }
     .alert-warn {
         background: rgba(255, 170, 0, 0.06);
@@ -1628,11 +1686,18 @@
     }
 
     /* Submission history table */
+    .submissions-section {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-height: 0;
+    }
     .submission-table {
         display: flex;
         flex-direction: column;
         gap: 1px;
-        max-height: 12rem;
+        flex: 1;
+        min-height: 0;
         overflow-y: auto;
     }
     .sub-row {
@@ -1715,5 +1780,20 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    /* Node-down banner */
+    .node-down-banner {
+        margin-top: 0.2rem;
+        flex-shrink: 0;
+    }
+    .node-down-banner .alert-message {
+        font-size: 0.65rem;
+    }
+
+    /* Stale/orphan badge with tooltip hint */
+    .sub-status-badge[title]:not([title=""]) {
+        cursor: help;
+        border-bottom: 1px dotted rgba(255, 255, 255, 0.15);
     }
 </style>

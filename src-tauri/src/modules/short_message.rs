@@ -639,6 +639,36 @@ fn push_numeric_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize)
     Some(())
 }
 
+fn packed_run_chunk_len(remaining: usize) -> usize {
+    let max = DICT_DIGIT_RUN_LEN_MASK as usize;
+    let mut len = remaining.min(max);
+    let tail = remaining - len;
+    if (1..3).contains(&tail) && len > 3 {
+        len -= 3 - tail;
+    }
+    len
+}
+
+fn push_digit_run(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let len = packed_run_chunk_len(bytes.len() - offset);
+        push_digit_literal(payload, &bytes[offset..offset + len], max_payload)?;
+        offset += len;
+    }
+    Some(())
+}
+
+fn push_numeric_run(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let len = packed_run_chunk_len(bytes.len() - offset);
+        push_numeric_literal(payload, &bytes[offset..offset + len], max_payload)?;
+        offset += len;
+    }
+    Some(())
+}
+
 fn digit_run_len(bytes: &[u8], offset: usize) -> usize {
     bytes[offset..]
         .iter()
@@ -673,12 +703,12 @@ fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) ->
         let numeric = numeric_run_len(bytes, i);
         let digits = digit_run_len(bytes, i);
         if numeric >= 3 && numeric > digits {
-            push_numeric_literal(payload, &bytes[i..i + numeric], max_payload)?;
+            push_numeric_run(payload, &bytes[i..i + numeric], max_payload)?;
             i += numeric;
             continue;
         }
         if digits >= 3 {
-            push_digit_literal(payload, &bytes[i..i + digits], max_payload)?;
+            push_digit_run(payload, &bytes[i..i + digits], max_payload)?;
             i += digits;
             continue;
         }
@@ -734,12 +764,12 @@ fn encode_dict(text: &str, runtime: &DictionaryRuntime, max_payload: usize) -> O
         let numeric = numeric_run_len(bytes, i);
         let digits = digit_run_len(bytes, i);
         if numeric >= 3 && numeric > digits {
-            push_numeric_literal(&mut payload, &bytes[i..i + numeric], max_payload)?;
+            push_numeric_run(&mut payload, &bytes[i..i + numeric], max_payload)?;
             i += numeric;
             continue;
         }
         if digits >= 3 {
-            push_digit_literal(&mut payload, &bytes[i..i + digits], max_payload)?;
+            push_digit_run(&mut payload, &bytes[i..i + digits], max_payload)?;
             i += digits;
             continue;
         }
@@ -1793,6 +1823,18 @@ mod tests {
         assert!(enc.hex.is_empty());
         assert!(enc.encoded_payload_len > PAYLOAD_MAX);
         assert!(enc.warnings.iter().any(|w| w.contains("Message too long")));
+    }
+
+    #[test]
+    fn long_digit_run_reports_compressed_nonfit_len() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode(&"3".repeat(64)).expect("encode result");
+        assert!(!enc.fits);
+        assert!(enc.hex.is_empty());
+        assert!(enc.encoded_payload_len > PAYLOAD_MAX);
+        assert!(enc.encoded_payload_len < 64);
     }
 
     #[test]

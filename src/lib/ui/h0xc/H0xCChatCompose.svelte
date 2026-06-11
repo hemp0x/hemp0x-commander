@@ -49,19 +49,38 @@
     let lastStableResult = null;
     let lastStableResultText = "";
 
+    /** @param {string} text @param {unknown} err */
+    function overLimitResult(text, err) {
+        const message = String(err || "");
+        const match = message.match(/(\d+)\s+bytes required/i);
+        const fallbackLen = new TextEncoder().encode(text).length;
+        return {
+            hex: "",
+            decoded_preview: text,
+            normalized_text: text.toLowerCase(),
+            raw_len: text.length,
+            encoded_payload_len: match ? Number(match[1]) : fallbackLen,
+            encoding_mode: "too-long",
+            dictionary_index: null,
+            dictionary_name: null,
+            fits: false,
+            warnings: [message || "Message is too long"],
+        };
+    }
+
     function queueEncode() {
         if (composeDebounce) clearTimeout(composeDebounce);
         composeDebounce = setTimeout(encodeShort, 200);
     }
 
-    async function encodeShort() {
-        const text = composeText.trim();
+    /** @param {string} text */
+    async function encodeText(text) {
         if (!text) {
             composeResult = null;
             composeResultText = "";
             lastStableResult = null;
             lastStableResultText = "";
-            return;
+            return null;
         }
         composeEncoding = true;
         try {
@@ -73,10 +92,23 @@
                 lastStableResult = composeResult;
                 lastStableResultText = text;
             }
-        } catch {
-            composeResult = null;
-            composeResultText = "";
+            return result;
+        } catch (err) {
+            if (composeText.trim() !== text) return null;
+            const result = overLimitResult(text, err);
+            composeResult = result;
+            composeResultText = text;
+            return result;
         } finally {
+            composeEncoding = false;
+        }
+    }
+
+    async function encodeShort() {
+        const text = composeText.trim();
+        try {
+            await encodeText(text);
+        } catch {
             composeEncoding = false;
         }
     }
@@ -146,12 +178,13 @@
         }
     }
 
-    function send() {
+    async function send() {
         if (busy) return;
         const text = composeText.trim();
         if (!text) return;
-        if (!currentResult?.fits) return;
-        dispatch("send", { hex: currentResult.hex, text, mode: "short" });
+        const result = currentResult?.fits ? currentResult : await encodeText(text);
+        if (!result?.fits || !result.hex) return;
+        dispatch("send", { hex: result.hex, text, mode: "short" });
     }
 
     export function clearCompose() {
@@ -169,8 +202,9 @@
     $: hasText = composeText.trim().length > 0;
     $: used = displayResult?.encoded_payload_len || 0;
     $: fits = !!currentResult?.fits;
-    $: isOver = hasText && displayResultText === currentText && displayResult && !fits;
-    $: canSend = !busy && hasText && fits;
+    $: isOver = hasText && displayResultText === currentText && displayResult && !displayResult.fits;
+    $: displayFits = !!displayResult?.fits;
+    $: canSend = !busy && hasText && displayFits;
 </script>
 
 <svelte:window on:click={handleWindowClick} />
@@ -237,8 +271,8 @@
             </div>
             {#if hasText}
                 <span class="compose-status"
-                    class:ok={fits && used < 20}
-                    class:warn={fits && used >= 20}
+                    class:ok={displayFits && used < 20}
+                    class:warn={displayFits && used >= 20}
                     class:over={isOver}
                 >
                     {used}/27{isOver ? ` (+${used - 27})` : ""}

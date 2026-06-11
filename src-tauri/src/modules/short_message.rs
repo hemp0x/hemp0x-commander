@@ -541,13 +541,13 @@ fn find_stem_suffix_match(
     None
 }
 
-fn push_ascii_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+fn push_ascii_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
     if bytes.is_empty() || bytes.iter().any(|&byte| !is_printable_ascii(byte)) {
         return None;
     }
 
     if bytes.len() == 1 {
-        if payload.len() + 2 > PAYLOAD_MAX {
+        if payload.len() + 2 > max_payload {
             return None;
         }
         payload.push(DICT_LITERAL_ESCAPE);
@@ -555,7 +555,7 @@ fn push_ascii_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
         return Some(());
     }
 
-    if bytes.len() > u8::MAX as usize || payload.len() + 2 + bytes.len() > PAYLOAD_MAX {
+    if bytes.len() > u8::MAX as usize || payload.len() + 2 + bytes.len() > max_payload {
         return None;
     }
     payload.push(DICT_LITERAL_ESCAPE);
@@ -564,7 +564,7 @@ fn push_ascii_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
-fn push_digit_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+fn push_digit_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
     if bytes.len() < 3
         || bytes.len() > DICT_DIGIT_RUN_LEN_MASK as usize
         || bytes.iter().any(|byte| !byte.is_ascii_digit())
@@ -573,7 +573,7 @@ fn push_digit_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     }
 
     let packed_len = bytes.len().div_ceil(2);
-    if payload.len() + 2 + packed_len > PAYLOAD_MAX {
+    if payload.len() + 2 + packed_len > max_payload {
         return None;
     }
 
@@ -611,7 +611,7 @@ fn numeric_symbol_byte(nibble: u8) -> Option<u8> {
     }
 }
 
-fn push_numeric_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+fn push_numeric_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
     if bytes.len() < 3
         || bytes.len() > DICT_DIGIT_RUN_LEN_MASK as usize
         || !bytes.iter().any(|byte| byte.is_ascii_digit())
@@ -623,7 +623,7 @@ fn push_numeric_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     }
 
     let packed_len = bytes.len().div_ceil(2);
-    if payload.len() + 2 + packed_len > PAYLOAD_MAX {
+    if payload.len() + 2 + packed_len > max_payload {
         return None;
     }
 
@@ -663,7 +663,7 @@ fn numeric_run_len(bytes: &[u8], offset: usize) -> usize {
     }
 }
 
-fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8], max_payload: usize) -> Option<()> {
     if bytes.is_empty() || bytes.iter().any(|&byte| !is_printable_ascii(byte)) {
         return None;
     }
@@ -673,12 +673,12 @@ fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
         let numeric = numeric_run_len(bytes, i);
         let digits = digit_run_len(bytes, i);
         if numeric >= 3 && numeric > digits {
-            push_numeric_literal(payload, &bytes[i..i + numeric])?;
+            push_numeric_literal(payload, &bytes[i..i + numeric], max_payload)?;
             i += numeric;
             continue;
         }
         if digits >= 3 {
-            push_digit_literal(payload, &bytes[i..i + digits])?;
+            push_digit_literal(payload, &bytes[i..i + digits], max_payload)?;
             i += digits;
             continue;
         }
@@ -696,12 +696,12 @@ fn push_dict_literal(payload: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
             }
             i += next_digits.max(1);
         }
-        push_ascii_literal(payload, &bytes[literal_start..i])?;
+        push_ascii_literal(payload, &bytes[literal_start..i], max_payload)?;
     }
     Some(())
 }
 
-fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
+fn encode_dict(text: &str, runtime: &DictionaryRuntime, max_payload: usize) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     let mut payload = Vec::with_capacity(PAYLOAD_MAX);
     let mut i = 0;
@@ -709,7 +709,7 @@ fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
     while i < bytes.len() {
         if let Some((tok, len)) = find_dict_match(bytes, i, runtime) {
             debug_assert!(len > 0, "dictionary token made no progress");
-            if payload.len() + 1 > PAYLOAD_MAX {
+            if payload.len() + 1 > max_payload {
                 return None;
             }
             payload.push(tok);
@@ -719,7 +719,7 @@ fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
 
         if let Some((stem_tok, suffix_tok, len)) = find_stem_suffix_match(bytes, i, runtime) {
             debug_assert!(len > 0, "stem+suffix match made no progress");
-            if payload.len() + 2 > PAYLOAD_MAX {
+            if payload.len() + 2 > max_payload {
                 return None;
             }
             payload.push(stem_tok);
@@ -734,12 +734,12 @@ fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
         let numeric = numeric_run_len(bytes, i);
         let digits = digit_run_len(bytes, i);
         if numeric >= 3 && numeric > digits {
-            push_numeric_literal(&mut payload, &bytes[i..i + numeric])?;
+            push_numeric_literal(&mut payload, &bytes[i..i + numeric], max_payload)?;
             i += numeric;
             continue;
         }
         if digits >= 3 {
-            push_digit_literal(&mut payload, &bytes[i..i + digits])?;
+            push_digit_literal(&mut payload, &bytes[i..i + digits], max_payload)?;
             i += digits;
             continue;
         }
@@ -757,7 +757,7 @@ fn encode_dict(text: &str, runtime: &DictionaryRuntime) -> Option<Vec<u8>> {
             }
             i += 1;
         }
-        push_dict_literal(&mut payload, &bytes[literal_start..i])?;
+        push_dict_literal(&mut payload, &bytes[literal_start..i], max_payload)?;
     }
 
     Some(payload)
@@ -980,7 +980,7 @@ fn select_candidate_with_runtime(text: &str, runtime: &ActiveRuntime) -> Option<
     };
 
     for (dict_idx, rt) in runtimes.iter().enumerate() {
-        if let Some(payload) = encode_dict(text, rt) {
+        if let Some(payload) = encode_dict(text, rt, MAX_TEXT_CHARS) {
             consider(Candidate {
                 mode: MODE_DICT,
                 dict_idx: dict_idx as u8,
@@ -1084,7 +1084,7 @@ fn encode_with_runtime(
         return Err(format!("Message exceeds {} characters", MAX_TEXT_CHARS));
     }
 
-    let (normalized_text, warnings) = normalize(trimmed);
+    let (normalized_text, mut warnings) = normalize(trimmed);
     if normalized_text.is_empty() {
         return Err("Message is empty after normalization".to_string());
     }
@@ -1092,31 +1092,33 @@ fn encode_with_runtime(
     let candidate = select_candidate_with_runtime(&normalized_text, runtime)
         .ok_or_else(|| "Message too long for any encoding mode".to_string())?;
 
-    if candidate.payload.len() > PAYLOAD_MAX {
-        return Err(format!(
+    let header = build_header(candidate.dict_idx, candidate.mode);
+    let fits = candidate.payload.len() <= PAYLOAD_MAX;
+    let hex = if fits {
+        let mut frame = [0u8; FRAME_SIZE];
+        if is_chat {
+            frame[0] = MAGIC_CHAT_0;
+            frame[1] = MAGIC_CHAT_1;
+        } else {
+            frame[0] = MAGIC_0;
+            frame[1] = MAGIC_1;
+        }
+        frame[2] = header;
+        frame[PAYLOAD_LEN_INDEX] = candidate.payload.len() as u8;
+        frame[PAYLOAD_INDEX..PAYLOAD_INDEX + candidate.payload.len()]
+            .copy_from_slice(&candidate.payload);
+        frame[CRC_INDEX] = crc8(&frame[0..CRC_INDEX]);
+        frame_hex(&frame)
+    } else {
+        warnings.push(format!(
             "Message too long: {} bytes required, max is {}",
             candidate.payload.len(),
             PAYLOAD_MAX
         ));
-    }
-
-    let mut frame = [0u8; FRAME_SIZE];
-    if is_chat {
-        frame[0] = MAGIC_CHAT_0;
-        frame[1] = MAGIC_CHAT_1;
-    } else {
-        frame[0] = MAGIC_0;
-        frame[1] = MAGIC_1;
-    }
-    frame[2] = build_header(candidate.dict_idx, candidate.mode);
-    frame[PAYLOAD_LEN_INDEX] = candidate.payload.len() as u8;
-    frame[PAYLOAD_INDEX..PAYLOAD_INDEX + candidate.payload.len()]
-        .copy_from_slice(&candidate.payload);
-    frame[CRC_INDEX] = crc8(&frame[0..CRC_INDEX]);
-
-    let hex = frame_hex(&frame);
+        String::new()
+    };
     let decoded_raw =
-        decode_payload_with_runtime(frame[2], &candidate.payload, runtime).unwrap_or_default();
+        decode_payload_with_runtime(header, &candidate.payload, runtime).unwrap_or_default();
     let decoded_preview = restore_case_with_runtime(&collapse(&decoded_raw), runtime);
 
     Ok(ShortMessageEncodeResult {
@@ -1140,7 +1142,7 @@ fn encode_with_runtime(
                         .unwrap_or_default()
                 })
         }),
-        fits: true,
+        fits,
         warnings,
     })
 }
@@ -1299,7 +1301,7 @@ mod tests {
 
     fn dict_payload(dict_idx: usize, text: &str) -> Vec<u8> {
         let (normalized, _) = normalize(text);
-        encode_dict(&normalized, &current_runtime().runtimes[dict_idx]).unwrap_or_else(|| {
+        encode_dict(&normalized, &current_runtime().runtimes[dict_idx], PAYLOAD_MAX).unwrap_or_else(|| {
             panic!("dictionary payload failed for dict {dict_idx}: {normalized:?}")
         })
     }
@@ -1311,7 +1313,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter_map(|(idx, runtime)| {
-                encode_dict(&normalized, runtime).map(|payload| (idx, payload))
+                encode_dict(&normalized, runtime, PAYLOAD_MAX).map(|payload| (idx, payload))
             })
             .min_by_key(|(_, payload)| payload.len())
             .unwrap_or_else(|| panic!("no dictionary payload for {normalized:?}"))
@@ -1779,6 +1781,18 @@ mod tests {
             .lock()
             .expect("test lock poisoned");
         assert!(encode(&"a".repeat(513)).is_err());
+    }
+
+    #[test]
+    fn over_frame_message_reports_nonfit_payload_len() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode(&"333 ".repeat(20)).expect("encode result");
+        assert!(!enc.fits);
+        assert!(enc.hex.is_empty());
+        assert!(enc.encoded_payload_len > PAYLOAD_MAX);
+        assert!(enc.warnings.iter().any(|w| w.contains("Message too long")));
     }
 
     #[test]

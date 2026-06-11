@@ -2,6 +2,7 @@
     import { tick, createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import { fly } from "svelte/transition";
+    import { ensureNodeSyncedForBroadcast } from "../utils/nodeSync.js";
     import { nodeStatus, networkInfo } from "../../stores.js";
 
     export let consoleOutput = "";
@@ -245,6 +246,9 @@
                 const splitAt = line.search(/\s/);
                 const cmd = splitAt === -1 ? line : line.slice(0, splitAt);
                 const cmdArgs = splitAt === -1 ? "" : line.slice(splitAt + 1);
+                if (cmd.toLowerCase() === "sendrawtransaction") {
+                    try { await ensureNodeSyncedForBroadcast(); } catch (e) { appendOutput(`Sync check: ${e}`); showToast("Node not synced", "error"); isProcessing = false; processingMessage = ""; return; }
+                }
                 res = await core.invoke("run_cli_command", {
                     command: cmd,
                     args: cmdArgs,

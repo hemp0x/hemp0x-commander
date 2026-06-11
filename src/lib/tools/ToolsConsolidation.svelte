@@ -3,6 +3,7 @@
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import { formatAmount } from "../utils.js";
+    import { ensureNodeSyncedForBroadcast } from "../utils/nodeSync.js";
     import { systemStatus } from "../../stores.js";
     import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
     import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
@@ -547,6 +548,7 @@
         const { inputs, roundLabel, plan, journalEntryId, runData } = opts;
         const roundDestination = String(plan?.destination || runData?.destination || destination || "").trim();
         if (!roundDestination) throw new Error("Destination is required.");
+        await ensureNodeSyncedForBroadcast();
         setPhase(`Previewing round${roundLabel ? ` ${roundLabel}` : ""}...`);
         await tick();
         let preview = plan;
@@ -872,6 +874,7 @@
             status = `Selected ${selectedCount} inputs exceeds the one-round limit of ${maxSafeInputs}. Use PLAN MULTI-ROUND for this selected set.`;
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
 
         setPhase("Building consolidation preview...");
         previewing = true;

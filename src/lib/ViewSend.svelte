@@ -3,6 +3,7 @@
     import { core } from "@tauri-apps/api";
     import { save, open } from "@tauri-apps/plugin-dialog";
     import { formatAmount } from "./utils.js";
+    import { ensureNodeSyncedForBroadcast } from "./utils/nodeSync.js";
     import WalletUnlockModal from "./ui/WalletUnlockModal.svelte";
 
     // --- FORM STATE ---
@@ -136,6 +137,7 @@
         if (!tauriReady) return (status = "Backend unavailable.");
         if (!address || !amount)
             return (status = "Address and amount required.");
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
 
         if (isAdvanced) {
             await buildAdvancedPreview();
@@ -319,6 +321,7 @@
     async function executeSend() {
         showConfirmModal = false;
         try {
+            await ensureNodeSyncedForBroadcast();
             status = "Broadcasting...";
             let txid;
             const amountStr = String(amount);
@@ -923,6 +926,7 @@
         broadcasting = true;
         showConfirmModal = false;
         try {
+            await ensureNodeSyncedForBroadcast();
             status = "Preparing Advanced Tx...";
 
             const sendAmount = parseFloat(amount);

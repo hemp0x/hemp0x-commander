@@ -6,6 +6,7 @@
     import ModalAlert from "./ModalAlert.svelte";
     import AddressBookPicker from "../ui/AddressBookPicker.svelte";
     import WalletUnlockModal from "../ui/WalletUnlockModal.svelte";
+    import { ensureNodeSyncedForBroadcast } from "../utils/nodeSync.js";
 
     export let isOpen = false;
     export let inline = false;
@@ -166,6 +167,13 @@
     // Called by timer when 10s is up
     async function handleTransferLogic() {
         isSubmitting = true;
+        try {
+            await ensureNodeSyncedForBroadcast();
+        } catch (e) {
+            isSubmitting = false;
+            triggerAlert("Node Not Synced", String(e), "error");
+            return;
+        }
         const ownerToken = (asset?.name || "") + "!";
         const dest = newOwnerAddress;
         try {
@@ -248,6 +256,13 @@
     async function handleLock() {
         if (!lockConfirmed) return;
         isSubmitting = true;
+        try {
+            await ensureNodeSyncedForBroadcast();
+        } catch (e) {
+            isSubmitting = false;
+            triggerAlert("Node Not Synced", String(e), "error");
+            return;
+        }
         try {
             const units = asset?.units ?? 8;
             const assetName = asset?.name || "";

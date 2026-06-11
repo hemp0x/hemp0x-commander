@@ -11,6 +11,7 @@
     import AssetPicker from "../ui/AssetPicker.svelte";
     import WalletUnlockModal from "../ui/WalletUnlockModal.svelte";
     import { addTransactionNotification, addToolNotification } from "../stores/notifications.js";
+    import { ensureNodeSyncedForBroadcast } from "../utils/nodeSync.js";
 
     export let isOpen = false;
     export let nodeOnline = false;
@@ -432,6 +433,7 @@
             triggerAlert("Validation", "Qualifier name and quantity are required.", "error");
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { triggerAlert("Node Not Synced", String(e), "error"); return; }
         previewInProgress = true;
         try {
             previewData = await invoke("preview_issue_qualifier_asset", {
@@ -472,6 +474,7 @@
             triggerAlert("Validation", "Restricted asset name, quantity, and verifier are required.", "error");
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { triggerAlert("Node Not Synced", String(e), "error"); return; }
         previewInProgress = true;
         try {
             previewData = await invoke("preview_issue_restricted_asset", {
@@ -515,6 +518,7 @@
             triggerAlert("Validation", "Tag name and address are required.", "error");
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { triggerAlert("Node Not Synced", String(e), "error"); return; }
         previewInProgress = true;
         try {
             if (tagAction === "add") {
@@ -721,6 +725,7 @@
             triggerAlert("Validation", "Run Dry Run for current values before execution.", "error");
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { triggerAlert("Node Not Synced", String(e), "error"); return; }
         const confirmed = window.confirm("Execute reward distribution now? This action is irreversible.");
         if (!confirmed) return;
         try {
@@ -811,6 +816,7 @@
     async function confirmAction() {
         isBroadcasting = true;
         try {
+            await ensureNodeSyncedForBroadcast();
             let txid = "";
             let successMessage = "";
             let journalDetails = null;

@@ -176,6 +176,7 @@
 
     import { nodeStatus } from "../stores.js";
     import { addNotification } from "./stores/notifications.js";
+    import { ensureNodeSyncedForBroadcast } from "./utils/nodeSync.js";
     $: isNodeOnline = $nodeStatus.online;
 
     let nodeOnline = false;
@@ -672,6 +673,7 @@
             fullName = `${issueParent}/${issueName.toUpperCase()}`;
         }
 
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
         status = "Building preview...";
         try {
             if (issueType === "sub") {
@@ -724,6 +726,7 @@
             status = "Asset and Qty required.";
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
         status = "Building preview...";
         try {
             previewData = await core.invoke("preview_reissue_asset", {
@@ -767,6 +770,7 @@
             status = "NFT tag name required.";
             return;
         }
+        try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
         status = "Building preview...";
         try {
             previewData = await core.invoke("preview_issue_unique_asset", {
@@ -804,6 +808,7 @@
         if (!tauriReady || isBroadcasting) return;
         isBroadcasting = true;
         try {
+            await ensureNodeSyncedForBroadcast();
             let txid = "";
             if (confirmType === "TRANSFER") {
                 if (!confirmPayload) return;

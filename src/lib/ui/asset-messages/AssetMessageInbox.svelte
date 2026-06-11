@@ -787,16 +787,16 @@
                 <span class="toolbar-icon">{messageExplorerMode ? "⊘" : "☰"}</span>
             </button>
             <button
-                class="toolbar-btn"
+                class="toolbar-btn expired-toggle"
                 class:active={showExpired}
                 on:click={() => (showExpired = !showExpired)}
-                title={showExpired ? "Hide expired messages" : "Show expired messages"}
+                title={showExpired ? "Hide expired messages" : `Show expired messages${hiddenExpiredCount > 0 ? ` (${hiddenExpiredCount} hidden)` : ""}`}
             >
-                <span class="toolbar-icon">{showExpired ? "⏰" : "⏳"}</span>
+                <span class="toolbar-text">EXP</span>
+                {#if !showExpired && hiddenExpiredCount > 0}
+                    <span class="toolbar-badge">{hiddenExpiredCount}</span>
+                {/if}
             </button>
-            {#if !showExpired && hiddenExpiredCount > 0}
-                <span class="toolbar-chip expired-chip">{hiddenExpiredCount} expired</span>
-            {/if}
             {#if selectedMessageIds.size > 0}
                 <div class="bulk-bar">
                     <span class="bulk-count">{selectedMessageIds.size} selected</span>
@@ -1122,6 +1122,42 @@
     .toolbar-icon {
         font-size: 0.8rem;
     }
+    .toolbar-text {
+        font-size: 0.52rem;
+        line-height: 1;
+    }
+    .expired-toggle {
+        position: relative;
+        min-width: 2.3rem;
+        justify-content: center;
+    }
+    .expired-toggle:not(.active) {
+        color: #777;
+        border-color: rgba(170, 136, 0, 0.16);
+    }
+    .expired-toggle.active {
+        color: #ffcc00;
+        border-color: rgba(255, 204, 0, 0.35);
+        background: rgba(255, 204, 0, 0.08);
+    }
+    .toolbar-badge {
+        position: absolute;
+        top: -0.32rem;
+        right: -0.32rem;
+        min-width: 0.82rem;
+        height: 0.82rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 0.12rem;
+        border-radius: 999px;
+        background: rgba(255, 204, 0, 0.14);
+        border: 1px solid rgba(255, 204, 0, 0.36);
+        color: #ffcc00;
+        font-size: 0.44rem;
+        line-height: 1;
+        font-weight: 700;
+    }
     .toolbar-chip {
         font-size: 0.5rem;
         color: #888;
@@ -1129,10 +1165,6 @@
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 999px;
         padding: 0.15rem 0.4rem;
-    }
-    .toolbar-chip.expired-chip {
-        color: #aa8800;
-        border-color: rgba(170, 136, 0, 0.25);
     }
     .bulk-bar {
         display: inline-flex;

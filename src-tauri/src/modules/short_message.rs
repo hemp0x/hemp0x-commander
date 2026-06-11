@@ -311,17 +311,22 @@ fn render_word_with_runtime(word: &str, sentence_start: bool, runtime: &ActiveRu
     }
 }
 
-fn flush_word_with_runtime(
+fn flush_word_uppercase(
     word: &mut String,
     sentence_start: bool,
     out: &mut String,
     runtime: &ActiveRuntime,
+    force_uppercase: bool,
 ) -> bool {
     if word.is_empty() {
         return sentence_start;
     }
 
-    out.push_str(&render_word_with_runtime(word, sentence_start, runtime));
+    if force_uppercase {
+        out.push_str(&word.to_uppercase());
+    } else {
+        out.push_str(&render_word_with_runtime(word, sentence_start, runtime));
+    }
     word.clear();
     false
 }
@@ -334,26 +339,81 @@ fn restore_case_with_runtime(raw: &str, runtime: &ActiveRuntime) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut word = String::new();
     let mut sentence_start = true;
-
+    let mut uppercase_span = false;
     let mut prev_was_word = false;
 
-    for ch in raw.chars() {
-        if should_extend_word(ch, prev_was_word) {
-            word.push(ch);
-            prev_was_word = ch.is_alphanumeric();
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if ch == '^' {
+            // Flush any accumulated word before processing the marker
+            if !word.is_empty() {
+                sentence_start =
+                    flush_word_uppercase(&mut word, sentence_start, &mut out, runtime, uppercase_span);
+            }
+
+            if uppercase_span {
+                // ^^ inside an uppercase span -> literal ^
+                if i + 1 < chars.len() && chars[i + 1] == '^' {
+                    word.push('^');
+                    i += 2;
+                    continue;
+                }
+                // Single ^ inside a span is a no-op
+                i += 1;
+                continue;
+            }
+
+            // ^^ outside a span -> literal ^
+            if i + 1 < chars.len() && chars[i + 1] == '^' {
+                word.push('^');
+                i += 2;
+                continue;
+            }
+
+            // Start uppercase span
+            uppercase_span = true;
+            i += 1;
             continue;
         }
 
-        sentence_start = flush_word_with_runtime(&mut word, sentence_start, &mut out, runtime);
+        // Sentence boundary ends an uppercase span
+        if uppercase_span && is_sentence_boundary(ch) {
+            // Flush the current word as uppercase before ending the span
+            if !word.is_empty() {
+                sentence_start =
+                    flush_word_uppercase(&mut word, sentence_start, &mut out, runtime, true);
+            }
+            uppercase_span = false;
+        }
+
+        if should_extend_word(ch, prev_was_word) {
+            word.push(ch);
+            prev_was_word = ch.is_alphanumeric();
+            i += 1;
+            continue;
+        }
+
+        sentence_start = flush_word_uppercase(
+            &mut word,
+            sentence_start,
+            &mut out,
+            runtime,
+            uppercase_span,
+        );
 
         out.push(ch);
         if is_sentence_boundary(ch) {
             sentence_start = true;
         }
         prev_was_word = false;
+        i += 1;
     }
 
-    let _ = flush_word_with_runtime(&mut word, sentence_start, &mut out, runtime);
+    let _ = flush_word_uppercase(&mut word, sentence_start, &mut out, runtime, uppercase_span);
 
     out
 }
@@ -2020,5 +2080,219 @@ mod tests {
         assert!(dec_hx.is_short_message);
         assert!(dec_hx.is_h0xc_chat_message);
         assert_eq!(dec_hx.text.as_deref(), Some("Hello world"));
+    }
+
+    // --- ^ uppercase-span tests ---
+
+    #[test]
+    fn uppercase_span_until_period() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^the message.");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("THE MESSAGE."));
+    }
+
+    #[test]
+    fn uppercase_span_until_exclamation() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^hello world!");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("HELLO WORLD!"));
+    }
+
+    #[test]
+    fn uppercase_span_until_question_mark() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^is this working?");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("IS THIS WORKING?"));
+    }
+
+    #[test]
+    fn uppercase_span_until_end_of_message() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^hello world");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("HELLO WORLD"));
+    }
+
+    #[test]
+    fn escaped_literal_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^^");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("^"));
+    }
+
+    #[test]
+    fn mixed_sentence_case_before_and_after_uppercase_span() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("gm ^btc and hemp are moving! nice.");
+        assert!(dec.is_short_message);
+        assert_eq!(
+            dec.text.as_deref(),
+            Some("GM BTC AND HEMP ARE MOVING! Nice.")
+        );
+    }
+
+    #[test]
+    fn uppercase_span_acronyms_already_upper() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("please check ^hs system test.");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("Please check HS SYSTEM TEST."));
+    }
+
+    #[test]
+    fn existing_acronym_restoration_unaffected() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        // Acronyms still work without ^ markers
+        let dec = decode_frame("payment sent. check cid and ipfs.");
+        assert_eq!(
+            dec.text.as_deref(),
+            Some("Payment sent. Check CID and IPFS.")
+        );
+    }
+
+    #[test]
+    fn hs_normal_roundtrip_with_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let text = "^hello world.";
+        let enc = encode(text).expect("hs encode");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(!dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("HELLO WORLD."));
+    }
+
+    #[test]
+    fn hx_chat_roundtrip_with_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let text = "^hello world.";
+        let enc = encode_chat(text).expect("hx encode");
+        let dec = decode(&enc.hex);
+        assert!(dec.is_short_message);
+        assert!(dec.is_h0xc_chat_message);
+        assert_eq!(dec.text.as_deref(), Some("HELLO WORLD."));
+    }
+
+    #[test]
+    fn caret_only_starts_span_no_crash() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn double_caret_in_span_is_literal() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        // ^^ inside an uppercase span -> literal ^
+        let dec = decode_frame("^test^^more.");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("TEST^MORE."));
+    }
+
+    #[test]
+    fn triple_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        // ^^^ -> literal ^ then start span (which ends at EOF)
+        let dec = decode_frame("^^^hello");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("^HELLO"));
+    }
+
+    #[test]
+    fn uppercase_span_with_comma_continues() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^hello, world.");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("HELLO, WORLD."));
+    }
+
+    #[test]
+    fn multiple_uppercase_spans() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let dec = decode_frame("^first. ^second.");
+        assert!(dec.is_short_message);
+        assert_eq!(dec.text.as_deref(), Some("FIRST. SECOND."));
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_preserves_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let cases: &[(&str, &str)] = &[
+            ("^hello world.", "HELLO WORLD."),
+            ("gm ^btc and hemp!", "GM BTC AND HEMP!"),
+            ("^^literal caret", "^literal caret"),
+            ("^first. ^second.", "FIRST. SECOND."),
+            ("^test^^more.", "TEST^MORE."),
+        ];
+        for &(text, expected) in cases {
+            let enc = encode(text).unwrap_or_else(|e| panic!("encode failed for {text}: {e}"));
+            let dec = decode(&enc.hex);
+            assert!(dec.is_short_message, "decode failed for {text}");
+            assert_eq!(dec.text.as_deref(), Some(expected), "roundtrip mismatch for {text}");
+        }
+    }
+
+    #[test]
+    fn chat_encode_decode_roundtrip_preserves_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let cases: &[(&str, &str)] = &[
+            ("^hello world.", "HELLO WORLD."),
+            ("gm ^btc!", "GM BTC!"),
+        ];
+        for &(text, expected) in cases {
+            let enc = encode_chat(text).unwrap_or_else(|e| panic!("chat encode failed for {text}: {e}"));
+            let dec = decode(&enc.hex);
+            assert!(dec.is_short_message, "chat decode failed for {text}");
+            assert!(dec.is_h0xc_chat_message);
+            assert_eq!(dec.text.as_deref(), Some(expected), "chat roundtrip mismatch for {text}");
+        }
+    }
+
+    #[test]
+    fn normalize_text_preserves_caret() {
+        let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
+            .lock()
+            .expect("test lock poisoned");
+        let enc = encode("^hello WORLD.").unwrap();
+        // normalize lowercases everything, but ^ is not a letter
+        assert_eq!(enc.normalized_text, "^hello world.");
     }
 }

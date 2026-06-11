@@ -165,11 +165,12 @@
                 channels = [];
                 return;
             }
-            const isH0xC = asset && isH0xCChannelAsset(asset.name);
+            const assetName = asset?.name || "";
+            const isH0xC = assetName && isH0xCChannelAsset(assetName);
             let msgs;
             if (isH0xC) {
                 try {
-                    msgs = await core.invoke("view_channel_messages", { channel: asset.name });
+                    msgs = await core.invoke("view_channel_messages", { channel: assetName });
                 } catch {
                     msgs = await core.invoke("view_asset_messages");
                 }

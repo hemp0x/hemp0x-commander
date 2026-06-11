@@ -655,6 +655,21 @@
         return `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()}`;
     }
 
+    /** @param {string} raw */
+    function formatDateInputMMDDYYYY(raw) {
+        const digits = raw.replace(/\D/g, "").slice(0, 8);
+        if (digits.length <= 2) return digits;
+        if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+        return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+    }
+
+    /** @param {Event} event */
+    function handleExpireDateInput(event) {
+        const target = /** @type {HTMLInputElement | null} */ (event.currentTarget);
+        composeExpireDateInput = formatDateInputMMDDYYYY(target?.value || "");
+        validateExpireInputs();
+    }
+
     /** @param {Date} date */
     function formatTimeHHMM(date) {
         return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -935,8 +950,8 @@
                         id="compose-expire-date"
                         class="expire-date-text"
                         type="text"
-                        bind:value={composeExpireDateInput}
-                        on:input={validateExpireInputs}
+                        value={composeExpireDateInput}
+                        on:input={handleExpireDateInput}
                         on:change={validateExpireInputs}
                         on:keydown={(e) => {
                             if (e.key === "Escape") {

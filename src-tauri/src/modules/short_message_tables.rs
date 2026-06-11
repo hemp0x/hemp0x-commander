@@ -391,7 +391,7 @@ pub const DICTIONARIES: [(&str, &[&str]); 8] = [
 pub const ACRONYMS: &[&str] = &[
     "ach", "ai", "aml", "api", "apr", "apy", "asic", "ath", "atl", "av", "btc", "btw", "cid",
     "cli", "cpu", "css", "db", "defi", "dev", "dht", "dns", "fdv", "fr", "gb", "gm", "gn",
-    "gpu", "gui", "hemp", "hs", "html", "http", "https", "id", "idk", "imo", "ip", "ipfs", "irl",
+    "gpu", "gui", "h0xc", "hemp", "hs", "html", "http", "https", "id", "idk", "imo", "ip", "ipfs", "irl",
     "json", "kyc", "llm", "lol", "lmao", "mb", "msrp", "nft", "ngl", "otc", "omg", "p2p",
     "pdf", "pin", "po", "pos", "pow", "pr", "qr", "ram", "roi", "rpc", "sdk", "seo", "sku",
     "sms", "sql", "ssl", "svg", "tbh", "tls", "tor", "tx", "txid", "ui", "url", "usb", "utxo",

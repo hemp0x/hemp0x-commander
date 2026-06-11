@@ -1425,6 +1425,9 @@ mod tests {
             dec.text.as_deref(),
             Some("This is a test of the hemp0x on chain message system.")
         );
+
+        let dec = decode_frame("h0xc is now live");
+        assert_eq!(dec.text.as_deref(), Some("H0XC is now live"));
     }
 
     #[test]

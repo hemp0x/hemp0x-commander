@@ -53,12 +53,16 @@
     function overLimitResult(text, err) {
         const message = String(err || "");
         const visibleLen = Array.from(text).length;
+        const lastTextLen = Array.from(lastStableResultText || "").length;
+        const overflowLen = lastStableResult?.encoded_payload_len && lastStableResultText && text.startsWith(lastStableResultText)
+            ? lastStableResult.encoded_payload_len + Math.max(1, visibleLen - lastTextLen)
+            : visibleLen;
         return {
             hex: "",
             decoded_preview: text,
             normalized_text: text.toLowerCase(),
             raw_len: text.length,
-            encoded_payload_len: visibleLen,
+            encoded_payload_len: overflowLen,
             encoding_mode: "too-long",
             dictionary_index: null,
             dictionary_name: null,

@@ -19,6 +19,7 @@
     let composeEncoding = false;
     /** @type {any} */
     let composeResult = null;
+    let composeResultText = "";
     /** @type {ReturnType<typeof setTimeout> | null} */
     let composeDebounce = null;
     /** @type {HTMLTextAreaElement | null} */
@@ -45,23 +46,36 @@
         packPreparing = false;
     }
 
+    let lastStableResult = null;
+    let lastStableResultText = "";
+
     function queueEncode() {
         if (composeDebounce) clearTimeout(composeDebounce);
-        composeResult = null;
-        composeDebounce = setTimeout(encodeShort, 250);
+        composeDebounce = setTimeout(encodeShort, 200);
     }
 
     async function encodeShort() {
         const text = composeText.trim();
         if (!text) {
             composeResult = null;
+            composeResultText = "";
+            lastStableResult = null;
+            lastStableResultText = "";
             return;
         }
         composeEncoding = true;
         try {
-            composeResult = await core.invoke("short_message_encode_chat_built_in", { text });
+            const result = await core.invoke("short_message_encode_chat_built_in", { text });
+            if (composeText.trim() !== text) return;
+            composeResult = result;
+            composeResultText = text;
+            if (composeResult?.fits) {
+                lastStableResult = composeResult;
+                lastStableResultText = text;
+            }
         } catch {
             composeResult = null;
+            composeResultText = "";
         } finally {
             composeEncoding = false;
         }
@@ -136,16 +150,27 @@
         if (busy) return;
         const text = composeText.trim();
         if (!text) return;
-        if (!composeResult?.fits) return;
-        dispatch("send", { hex: composeResult.hex, text, mode: "short" });
+        if (!currentResult?.fits) return;
+        dispatch("send", { hex: currentResult.hex, text, mode: "short" });
     }
 
     export function clearCompose() {
         composeText = "";
         composeResult = null;
+        composeResultText = "";
+        lastStableResult = null;
+        lastStableResultText = "";
     }
 
-    $: canSend = !busy && composeText.trim().length > 0 && !!composeResult?.fits;
+    $: displayResult = composeResult || lastStableResult;
+    $: displayResultText = composeResult ? composeResultText : lastStableResultText;
+    $: currentText = composeText.trim();
+    $: currentResult = displayResultText === currentText ? displayResult : null;
+    $: hasText = composeText.trim().length > 0;
+    $: used = displayResult?.encoded_payload_len || 0;
+    $: fits = !!currentResult?.fits;
+    $: isOver = hasText && displayResultText === currentText && displayResult && !fits;
+    $: canSend = !busy && hasText && fits;
 </script>
 
 <svelte:window on:click={handleWindowClick} />
@@ -182,7 +207,7 @@
                         targetElement={textareaEl}
                         onAccept={handleSuggestion}
                         focused={textareaFocused}
-                        preferredDict={composeResult?.dictionary_index ?? null}
+                        preferredDict={displayResult?.dictionary_index ?? null}
                         suggestionCommand="short_message_suggestions_built_in"
                     />
                 {/if}
@@ -210,18 +235,17 @@
                     </div>
                 {/if}
             </div>
-            {#if composeResult}
-                {@const used = composeResult.encoded_payload_len || 0}
+            {#if hasText}
                 <span class="compose-status"
-                    class:ok={composeResult.fits && used < 20}
-                    class:warn={composeResult.fits && used >= 20}
-                    class:over={!composeResult.fits}
+                    class:ok={fits && used < 20}
+                    class:warn={fits && used >= 20}
+                    class:over={isOver}
                 >
-                    {used}/27
+                    {used}/27{isOver ? ` (+${used - 27})` : ""}
                 </span>
             {/if}
-            {#if composeResult?.dictionary_name}
-                <span class="dict-chip">DICT {composeResult.dictionary_name}</span>
+            {#if displayResult?.dictionary_name}
+                <span class="dict-chip">DICT {displayResult.dictionary_name}</span>
             {/if}
         </div>
     {/if}

@@ -3,7 +3,7 @@
     import { fade } from "svelte/transition";
 
     export let show = false;
-    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number, communityReportAutoHide: boolean, communityReportMinReports: number, communityReportMinRatio: number, communityReportWindowDays: number }} */
+    /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number, communityReportAutoHide: boolean, communityReportMinReports: number, communityReportMinRatio: number, communityReportWindowDays: number, showBroadcastPreview: boolean }} */
     export let settings = {
         messageExpiryDefault: 30,
         autoDiscovery: true,
@@ -20,6 +20,7 @@
         communityReportMinReports: 3,
         communityReportMinRatio: 0.4,
         communityReportWindowDays: 30,
+        showBroadcastPreview: true,
     };
     /** @type {string[]} */
     export let blockedUsers = [];
@@ -83,6 +84,7 @@
             communityReportMinReports: 3,
             communityReportMinRatio: 0.4,
             communityReportWindowDays: 30,
+            showBroadcastPreview: true,
         };
         draftTagsText = "#SPAM";
     }
@@ -139,6 +141,15 @@
                         <span class="sett-toggle-label">SHOW EXPIRED MESSAGES</span>
                     </label>
                     <p class="sett-hint">Expired messages remain on-chain but are hidden by default. Enable this to see them in the chat feed.</p>
+                </div>
+
+                <div class="sett-section">
+                    <label class="sett-toggle-row">
+                        <input type="checkbox" bind:checked={draft.showBroadcastPreview} />
+                        <span class="checkbox-visual"></span>
+                        <span class="sett-toggle-label">SHOW BROADCAST PREVIEW</span>
+                    </label>
+                    <p class="sett-hint">When enabled, a compact confirmation panel shows before each send with the channel, message preview, encoded hex, expiry, and an irreversibility warning.</p>
                 </div>
 
                 <div class="sett-section">

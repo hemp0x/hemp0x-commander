@@ -47,6 +47,7 @@
         communityReportMinReports: 3,
         communityReportMinRatio: 0.4,
         communityReportWindowDays: 30,
+        showBroadcastPreview: true,
     };
     let lastScanBlock = 0;
     let lastSeenMessageKey = "";
@@ -114,6 +115,7 @@
             communityReportMinReports: 3,
             communityReportMinRatio: 0.4,
             communityReportWindowDays: 30,
+            showBroadcastPreview: true,
         });
         if (!Array.isArray(settings.autoBlockTags) || settings.autoBlockTags.length === 0) {
             settings.autoBlockTags = ["#SPAM"];
@@ -130,6 +132,7 @@
         if (typeof settings.communityReportMinReports !== "number" || settings.communityReportMinReports < 1) settings.communityReportMinReports = 3;
         if (typeof settings.communityReportMinRatio !== "number" || settings.communityReportMinRatio < 0.1) settings.communityReportMinRatio = 0.4;
         if (typeof settings.communityReportWindowDays !== "number" || settings.communityReportWindowDays < 1) settings.communityReportWindowDays = 30;
+        if (typeof settings.showBroadcastPreview !== "boolean") settings.showBroadcastPreview = true;
         lastSeenMessageKey = loadJson(LAST_SEEN_KEY, "");
         lastScanTime = loadJson(LAST_SCAN_TIME_KEY, "");
         disclaimerAccepted = loadJson(DISCLAIMER_KEY, false) === true;

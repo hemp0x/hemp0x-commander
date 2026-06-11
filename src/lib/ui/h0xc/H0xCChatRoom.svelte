@@ -206,6 +206,20 @@
     /** @type {null | { msg: AssetMessage, rootName: string, decoded: DecodeResult|undefined, time: string }} */
     let msgDetail = null;
 
+    // Broadcast preview
+    /** @type {null | { hex: string, text: string, channel: string, expiry: number|null, warnings: string[], feeEstimate: string|null }} */
+    let broadcastPreview = null;
+    let broadcastBusy = false;
+    let broadcastError = "";
+
+    // Optimistic pending messages
+    /** @type {Array<{id: string, hex: string, text: string, assetName: string, rootName: string, timeMs: number, status: "pending"|"failed", error?: string}>} */
+    let pendingMessages = [];
+    let pendingIdCounter = 0;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let pendingTimeout = null;
+    const PENDING_TIMEOUT_MS = 15000;
+
     // Username context menu
     /** @type {string | null} */
     let ctxUser = null;
@@ -351,6 +365,7 @@
 
             await decodeVisible(messages);
             updateParticipantsFromMessages(messages);
+            reconcilePending();
 
             if (!initialLoadDone) {
                 for (const msg of messages) seenMessageKeys.add(messageKey(msg));
@@ -946,15 +961,56 @@
 
     /** @param {CustomEvent} e */
     async function handleSend(e) {
-        const { hex } = e.detail;
+        const { hex, text } = e.detail;
+        const channel = identity.replace(/!$/, "");
+        const expiry = settings.messageExpiryDefault > 0
+            ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
+            : null;
+
+        if (settings.showBroadcastPreview) {
+            let feeEstimate = null;
+            try {
+                feeEstimate = await core.invoke("estimate_announcement_fee");
+            } catch { /* fee estimation unavailable */ }
+            broadcastPreview = { hex, text, channel, expiry, warnings: [], feeEstimate };
+            broadcastError = "";
+            return;
+        }
+
+        doBroadcast(hex, text, channel, expiry);
+    }
+
+    function cancelBroadcastPreview() {
+        broadcastPreview = null;
+        broadcastError = "";
+    }
+
+    function confirmBroadcastPreview() {
+        if (!broadcastPreview) return;
+        const { hex, text, channel, expiry } = broadcastPreview;
+        broadcastPreview = null;
+        broadcastError = "";
+        doBroadcast(hex, text, channel, expiry);
+    }
+
+    /** @param {string} hex @param {string} text @param {string} channel @param {number|null} expiry */
+    async function doBroadcast(hex, text, channel, expiry) {
         composeBusy = true;
         composeError = "";
-        try {
-            const channel = identity.replace(/!$/, "");
-            const expiry = settings.messageExpiryDefault > 0
-                ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
-                : null;
 
+        const pendingId = `pending-${++pendingIdCounter}-${Date.now()}`;
+        const pendingEntry = {
+            id: pendingId,
+            hex,
+            text,
+            assetName: channel,
+            rootName: rootName(),
+            timeMs: Date.now(),
+            status: "pending",
+        };
+        pendingMessages = [...pendingMessages, pendingEntry];
+
+        try {
             await core.invoke("preview_send_announcement", {
                 channelName: channel,
                 ipfsHash: hex,
@@ -977,22 +1033,97 @@
                 action: { label: "Copy TXID", txid },
             });
 
-            setTimeout(() => loadMessages(), 2000);
+            schedulePendingTimeout();
+            setTimeout(() => loadMessages(), 1500);
+            setTimeout(() => loadMessages(), 4000);
         } catch (err) {
-            const text = String(err);
-            if (/wallet.*locked|passphrase|unlock/i.test(text)) {
-                requestWalletUnlock(() => handleSend(e));
+            const errorText = String(err);
+            if (/wallet.*locked|passphrase|unlock/i.test(errorText)) {
+                pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
+                requestWalletUnlock(() => doBroadcast(hex, text, channel, expiry));
                 return;
             }
-            composeError = text;
+            pendingMessages = pendingMessages.map((p) =>
+                p.id === pendingId ? { ...p, status: "failed", error: errorText } : p
+            );
+            composeError = errorText;
             addNotification({
                 type: "message",
                 severity: "error",
                 title: "H0XC Send Failed",
-                body: text,
+                body: errorText,
             });
         } finally {
             composeBusy = false;
+        }
+    }
+
+    function schedulePendingTimeout() {
+        if (pendingTimeout) clearTimeout(pendingTimeout);
+        if (!pendingMessages.some((p) => p.status === "pending")) {
+            pendingTimeout = null;
+            return;
+        }
+        pendingTimeout = setTimeout(() => {
+            pendingTimeout = null;
+            const now = Date.now();
+            let changed = false;
+            pendingMessages = pendingMessages.map((p) => {
+                if (p.status === "pending" && now - p.timeMs > PENDING_TIMEOUT_MS) {
+                    changed = true;
+                    return { ...p, status: "failed", error: "No on-chain confirmation within timeout." };
+                }
+                return p;
+            });
+            if (changed) pendingMessages = pendingMessages;
+            schedulePendingTimeout();
+        }, 5000);
+    }
+
+    /** @param {string} pendingId */
+    function retryPending(pendingId) {
+        const entry = pendingMessages.find((p) => p.id === pendingId);
+        if (!entry || entry.status !== "failed") return;
+        pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
+        const channel = identity.replace(/!$/, "");
+        const expiry = settings.messageExpiryDefault > 0
+            ? Math.floor(Date.now() / 1000) + settings.messageExpiryDefault * 86400
+            : null;
+        doBroadcast(entry.hex, entry.text, channel, expiry);
+    }
+
+    /** @param {string} pendingId */
+    function dismissPending(pendingId) {
+        pendingMessages = pendingMessages.filter((p) => p.id !== pendingId);
+    }
+
+    function reconcilePending() {
+        if (pendingMessages.length === 0) return;
+        const remaining = [];
+        for (const p of pendingMessages) {
+            if (p.status !== "pending") {
+                remaining.push(p);
+                continue;
+            }
+            const found = messages.some((m) => {
+                if (m.asset_name !== p.assetName) return false;
+                if (m.message !== p.hex) return false;
+                const msgTime = parseTime(m.time);
+                return Math.abs(msgTime - p.timeMs) < 60000;
+            });
+            if (found) {
+                addNotification({
+                    type: "message",
+                    severity: "success",
+                    title: "H0XC Message Confirmed",
+                    body: `"${p.text.slice(0, 40)}${p.text.length > 40 ? "..." : ""}" confirmed on-chain`,
+                });
+            } else {
+                remaining.push(p);
+            }
+        }
+        if (remaining.length !== pendingMessages.length) {
+            pendingMessages = remaining;
         }
     }
 
@@ -1032,6 +1163,10 @@
         if (refreshIndicatorTimer) {
             clearTimeout(refreshIndicatorTimer);
             refreshIndicatorTimer = null;
+        }
+        if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingTimeout = null;
         }
         stopPolling();
         stopBackgroundDiscovery();
@@ -1645,6 +1780,35 @@
                         </span>
                     </div>
                 {/each}
+
+                {#each pendingMessages as pm (pm.id)}
+                    {#if pm.status === "pending"}
+                        <div class="chat-msg me pending-msg">
+                            <span class="msg-time">{formatTime(pm.timeMs)}</span>
+                            <span class="msg-user me">[{pm.rootName.toUpperCase()}]</span>
+                            <span class="msg-body">
+                                <span class="msg-short-text">{pm.text}</span>
+                                <span class="pending-dot"></span>
+                            </span>
+                        </div>
+                    {:else}
+                        <div class="chat-msg me pending-msg failed">
+                            <span class="msg-time">{formatTime(pm.timeMs)}</span>
+                            <span class="msg-user me">[{pm.rootName.toUpperCase()}]</span>
+                            <span class="msg-body">
+                                <span class="msg-short-text">{pm.text}</span>
+                                <span class="failed-badge" title={pm.error || "Send failed"}>
+                                    <span class="failed-icon">✕</span>
+                                    <span class="failed-label">failed</span>
+                                </span>
+                            </span>
+                            <div class="pending-actions">
+                                <button class="pending-btn retry" on:click={() => retryPending(pm.id)} title="Retry">↻</button>
+                                <button class="pending-btn dismiss" on:click={() => dismissPending(pm.id)} title="Dismiss">✕</button>
+                            </div>
+                        </div>
+                    {/if}
+                {/each}
             {/if}
 
             {#if showRefreshIndicator}
@@ -1698,6 +1862,59 @@
                     <button class="leave-btn cancel" on:click={closeLeaveConfirm} disabled={leaveBusy}>Cancel</button>
                     <button class="leave-btn confirm" on:click={handleLeaveChat} disabled={leaveBusy}>
                         {leaveBusy ? "Broadcasting..." : "Leave chat"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
+
+    {#if broadcastPreview}
+        <div class="preview-bar" transition:fade={{ duration: 100 }}>
+            <div class="preview-body">
+                <span class="preview-title">BROADCAST PREVIEW</span>
+                {#if broadcastError}
+                    <span class="preview-error">{broadcastError}</span>
+                {/if}
+                <div class="preview-row">
+                    <span class="preview-label">CHANNEL</span>
+                    <span class="preview-val mono">{broadcastPreview.channel}</span>
+                </div>
+                <div class="preview-row">
+                    <span class="preview-label">TEXT</span>
+                    <span class="preview-val">{broadcastPreview.text}</span>
+                </div>
+                <div class="preview-row">
+                    <span class="preview-label">HEX</span>
+                    <span class="preview-val mono hex-preview">{broadcastPreview.hex.length > 48 ? broadcastPreview.hex.slice(0, 24) + "…" + broadcastPreview.hex.slice(-24) : broadcastPreview.hex}</span>
+                </div>
+                {#if broadcastPreview.expiry}
+                    <div class="preview-row">
+                        <span class="preview-label">EXPIRES</span>
+                        <span class="preview-val">{new Date(broadcastPreview.expiry * 1000).toLocaleString()}</span>
+                    </div>
+                {/if}
+                {#if broadcastPreview.feeEstimate}
+                    <div class="preview-row">
+                        <span class="preview-label">FEE (EST)</span>
+                        <span class="preview-val mono">{broadcastPreview.feeEstimate} HEMP</span>
+                    </div>
+                {/if}
+                <div class="preview-warning">
+                    <span class="preview-warn-icon">⚠</span>
+                    <span class="preview-warn-text">This creates an irreversible on-chain transaction. Fee is determined by Core at broadcast time.</span>
+                </div>
+                {#if broadcastPreview.warnings.length > 0}
+                    {#each broadcastPreview.warnings as w}
+                        <div class="preview-warning">
+                            <span class="preview-warn-icon">ℹ</span>
+                            <span class="preview-warn-text">{w}</span>
+                        </div>
+                    {/each}
+                {/if}
+                <div class="preview-actions">
+                    <button class="preview-btn cancel" on:click={cancelBroadcastPreview} disabled={broadcastBusy}>Cancel</button>
+                    <button class="preview-btn broadcast" on:click={confirmBroadcastPreview} disabled={broadcastBusy}>
+                        {broadcastBusy ? "Broadcasting..." : "Broadcast"}
                     </button>
                 </div>
             </div>
@@ -2948,4 +3165,184 @@
         background: rgba(255, 60, 60, 0.18);
         border-color: rgba(255, 60, 60, 0.4);
     }
+
+    /* Broadcast preview bar */
+    .preview-bar {
+        flex-shrink: 0;
+        padding: 0.4rem 0.5rem;
+        background: rgba(255, 170, 0, 0.04);
+        border-top: 1px solid rgba(255, 170, 0, 0.15);
+        border-bottom: 1px solid rgba(255, 170, 0, 0.15);
+    }
+    .preview-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .preview-title {
+        font-size: 0.52rem;
+        font-weight: 700;
+        color: #ffaa00;
+        letter-spacing: 0.5px;
+    }
+    .preview-error {
+        font-size: 0.52rem;
+        color: #ff5555;
+        padding: 0.15rem 0.3rem;
+        background: rgba(255, 85, 85, 0.06);
+        border-radius: 3px;
+    }
+    .preview-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.4rem;
+        padding: 0.15rem 0.3rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 3px;
+    }
+    .preview-label {
+        color: #555;
+        font-size: 0.45rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        min-width: 3.5rem;
+        flex-shrink: 0;
+        padding-top: 0.05rem;
+    }
+    .preview-val {
+        color: #ccc;
+        font-size: 0.52rem;
+        line-height: 1.35;
+        flex: 1;
+        min-width: 0;
+        word-break: break-all;
+    }
+    .preview-val.mono { font-family: var(--font-mono); }
+    .hex-preview { color: #666; font-size: 0.48rem; }
+    .preview-warning {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.3rem;
+        padding: 0.15rem 0.3rem;
+    }
+    .preview-warn-icon {
+        color: #ffaa00;
+        font-size: 0.5rem;
+        flex-shrink: 0;
+        margin-top: 0.02rem;
+    }
+    .preview-warn-text {
+        font-size: 0.48rem;
+        color: #999;
+        line-height: 1.35;
+    }
+    .preview-actions {
+        display: flex;
+        gap: 0.35rem;
+        justify-content: flex-end;
+        margin-top: 0.15rem;
+    }
+    .preview-btn {
+        padding: 0.2rem 0.45rem;
+        border-radius: 4px;
+        font-size: 0.5rem;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font-mono);
+    }
+    .preview-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .preview-btn.cancel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+    }
+    .preview-btn.cancel:hover:not(:disabled) { border-color: #ff5555; color: #ff5555; }
+    .preview-btn.broadcast {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        color: var(--color-primary);
+    }
+    .preview-btn.broadcast:hover:not(:disabled) {
+        background: var(--color-primary);
+        color: #000;
+    }
+
+    /* Pending message rows */
+    .pending-msg {
+        border-left-color: rgba(255, 200, 0, 0.4) !important;
+        background: rgba(255, 200, 0, 0.03) !important;
+        animation: pending-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pending-pulse {
+        0%, 100% { background: rgba(255, 200, 0, 0.03); }
+        50% { background: rgba(255, 200, 0, 0.06); }
+    }
+    .pending-msg.failed {
+        border-left-color: rgba(255, 85, 85, 0.3) !important;
+        background: rgba(255, 85, 85, 0.02) !important;
+        animation: none;
+    }
+    .pending-dot {
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #ffcc00;
+        margin-left: 0.35rem;
+        vertical-align: middle;
+        animation: dot-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes dot-pulse {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 1; }
+    }
+    .failed-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        margin-left: 0.35rem;
+        vertical-align: middle;
+        padding: 0.05rem 0.3rem;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.2);
+        border-radius: 3px;
+    }
+    .failed-icon {
+        font-size: 0.5rem;
+        color: #ff5555;
+        font-weight: 700;
+    }
+    .failed-label {
+        font-size: 0.45rem;
+        color: #ff5555;
+    }
+    .pending-actions {
+        display: flex;
+        gap: 0.2rem;
+        flex-shrink: 0;
+        margin-left: 0.2rem;
+    }
+    .pending-btn {
+        width: 1.1rem;
+        height: 1.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 3px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.3);
+        color: #888;
+        font-size: 0.5rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .pending-btn.retry {
+        color: var(--color-primary);
+        border-color: rgba(0, 255, 65, 0.2);
+    }
+    .pending-btn.retry:hover { background: rgba(0, 255, 65, 0.1); }
+    .pending-btn.dismiss:hover { border-color: #ff5555; color: #ff5555; }
 </style>

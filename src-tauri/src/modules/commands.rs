@@ -4457,6 +4457,15 @@ pub fn send_announcement(
   normalize_cli_txid(run_cli(&args)?)
 }
 
+#[tauri::command]
+pub fn estimate_announcement_fee() -> Result<String, String> {
+  let fee_rate = estimate_smartfee_sat_per_byte()
+    .unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE);
+  let tx_bytes = estimate_legacy_tx_bytes(2, 2);
+  let fee = estimate_fee_from_bytes(tx_bytes, fee_rate);
+  Ok(format!("{:.8}", fee))
+}
+
 // ---------------------------------------------------------------------------
 // IPFS Reference Helpers
 // ---------------------------------------------------------------------------

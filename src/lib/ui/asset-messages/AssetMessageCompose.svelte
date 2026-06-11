@@ -24,6 +24,7 @@
     let composeExpireTimeInput = "";
     /** @type {any} */
     let composePreview = null;
+    let composePreviewFee = "";
     let composeError = "";
     let composePreviewing = false;
     let composeBroadcasting = false;
@@ -533,15 +534,21 @@
         composePreviewing = true;
         composeError = "";
         composePreview = null;
+        composePreviewFee = "";
         try {
             const ipfsHash = composeMode === "short" && composeShortResult
                 ? composeShortResult.hex
                 : composeIpfsHash.trim();
-            composePreview = /** @type {any} */ (await core.invoke("preview_send_announcement", {
-                channelName: announcementChannel,
-                ipfsHash,
-                expireTime,
-            }));
+            const [preview, feeEstimate] = await Promise.all([
+                core.invoke("preview_send_announcement", {
+                    channelName: announcementChannel,
+                    ipfsHash,
+                    expireTime,
+                }),
+                core.invoke("estimate_announcement_fee").catch(() => null),
+            ]);
+            composePreview = /** @type {any} */ (preview);
+            composePreviewFee = feeEstimate || "";
         } catch (err) {
             composeError = messageRpcError(err);
         } finally {
@@ -1018,6 +1025,11 @@
                     {#if composePreview.expire_time}
                         <div class="preview-row">
                             <span>Expires:</span> {composePreview.expire_time}
+                        </div>
+                    {/if}
+                    {#if composePreviewFee}
+                        <div class="preview-row">
+                            <span>Fee (est):</span> {composePreviewFee} HEMP
                         </div>
                     {/if}
                     {#if (composePreview.warnings || []).length > 0}

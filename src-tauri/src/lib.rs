@@ -117,6 +117,7 @@ pub fn run() {
             commands::subscribe_to_channel,
             commands::unsubscribe_from_channel,
             commands::preview_send_announcement,
+            commands::estimate_announcement_fee,
             commands::send_announcement,
             // H0XC Channel Authority Commands
             commands::h0xc_resolve_authority_addresses,

@@ -313,10 +313,6 @@
             processingMessage = "";
             appendOutput(displayText);
             showToast("Command Executed", "success");
-            if (!shellMode) {
-                selectedCommand = "";
-                activeSession.selectedCommand = "";
-            }
             cmdLine = "";
             activeSession.input = "";
             commandDropdownSearch = "";

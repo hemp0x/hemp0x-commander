@@ -17,6 +17,7 @@ use modules::short_message;
 use modules::short_message_suggestions;
 use modules::short_message_table_packs;
 use modules::stratum;
+use modules::vault;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -247,6 +248,10 @@ pub fn run() {
             // Provider Settings Commands
             provider_settings::ipfs_get_provider_settings,
             provider_settings::ipfs_update_provider_settings,
+            provider_settings::ipfs_unlock_vault,
+            provider_settings::ipfs_lock_vault,
+            provider_settings::ipfs_vault_status,
+            provider_settings::ipfs_migrate_provider_tokens_to_vault,
             // Stratum Commands
             stratum::start_stratum_server,
             stratum::stop_stratum_server,
@@ -274,6 +279,14 @@ pub fn run() {
             short_message_table_packs::short_message_select_table_pack,
             short_message_table_packs::short_message_delete_table_pack,
             short_message_table_packs::short_message_reset_table_pack,
+            // Vault Commands
+            vault::vault_get_info,
+            vault::vault_setup,
+            vault::vault_verify_passphrase,
+            vault::vault_update_tokens,
+            vault::vault_get_supported_record_types,
+            vault::vault_get_supported_derivation_profiles,
+            vault::vault_get_vault_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

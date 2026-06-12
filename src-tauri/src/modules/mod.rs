@@ -16,3 +16,4 @@ pub mod short_message_table_packs;
 pub mod short_message_tables;
 pub mod stratum;
 pub mod utils;
+pub mod vault;

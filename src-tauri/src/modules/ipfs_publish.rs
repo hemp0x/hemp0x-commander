@@ -218,7 +218,11 @@ fn pinata_api_url(settings: &provider_settings::ProviderSettings) -> String {
 }
 
 fn pinata_test_connection(settings: &provider_settings::ProviderSettings) -> ProviderTestResult {
-    let token = settings.pinata_api_token.trim();
+    let (token, _) = match provider_settings::load_provider_tokens() {
+        Ok(t) => t,
+        Err(e) => return ProviderTestResult { success: false, message: e },
+    };
+    let token = token.trim().to_string();
     if token.is_empty() {
         return ProviderTestResult {
             success: false,
@@ -262,7 +266,8 @@ fn pinata_upload(
     files: &[(String, Vec<u8>)],
     settings: &provider_settings::ProviderSettings,
 ) -> Result<String, String> {
-    let token = settings.pinata_api_token.trim().to_string();
+    let (token, _) = provider_settings::load_provider_tokens()?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Pinata API token is not configured. Add your JWT in IPFS Settings.".to_string());
     }
@@ -478,21 +483,26 @@ fn kubo_upload(
 }
 
 fn filebase_test_connection(settings: &provider_settings::ProviderSettings) -> ProviderTestResult {
-    let token = settings.filebase_token.trim();
+    let (_, token) = match provider_settings::load_provider_tokens() {
+        Ok(t) => t,
+        Err(e) => return ProviderTestResult { success: false, message: e },
+    };
+    let token = token.trim().to_string();
     if token.is_empty() {
         return ProviderTestResult {
             success: false,
             message: "Filebase access token is not configured. Generate one in the Filebase console under Access Keys.".to_string(),
         };
     }
-    ipfs_rpc_test(&filebase_endpoint(settings), Some(token))
+    ipfs_rpc_test(&filebase_endpoint(settings), Some(&token))
 }
 
 fn filebase_upload(
     files: &[(String, Vec<u8>)],
     settings: &provider_settings::ProviderSettings,
 ) -> Result<String, String> {
-    let token = settings.filebase_token.trim().to_string();
+    let (_, token) = provider_settings::load_provider_tokens()?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Filebase access token is not configured. Generate one in the Filebase console under Access Keys and enter it in IPFS Settings.".to_string());
     }
@@ -540,7 +550,8 @@ fn pinata_list_pins(
     page: u32,
     query: Option<&str>,
 ) -> Result<ProviderPinsPage, String> {
-    let token = settings.pinata_api_token.trim();
+    let (token, _) = provider_settings::load_provider_tokens()?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Pinata API token is not configured.".to_string());
     }
@@ -734,7 +745,8 @@ fn kubo_list_pins(
 }
 
 fn pinata_unpin(cid: &str, settings: &provider_settings::ProviderSettings) -> Result<String, String> {
-    let token = settings.pinata_api_token.trim();
+    let (token, _) = provider_settings::load_provider_tokens()?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Pinata API token is not configured.".to_string());
     }
@@ -810,11 +822,12 @@ fn do_unpin_provider_cid(provider: &str, cid: &str, settings: &provider_settings
     match provider {
         "pinata" => pinata_unpin(cid, settings),
         "filebase" => {
-            let token = settings.filebase_token.trim();
+            let (_, token) = provider_settings::load_provider_tokens()?;
+            let token = token.trim().to_string();
             if token.is_empty() {
                 Err("Filebase access token is not configured.".to_string())
             } else {
-                kubo_unpin(cid, &filebase_endpoint(settings), Some(token))
+                kubo_unpin(cid, &filebase_endpoint(settings), Some(&token))
             }
         }
         "installed_kubo" => kubo_unpin(cid, &kubo_endpoint(settings), None),
@@ -844,11 +857,12 @@ pub fn ipfs_list_provider_pins(
     match provider.as_str() {
         "pinata" => pinata_list_pins(&settings, page, query.as_deref()),
         "filebase" => {
-            let token = settings.filebase_token.trim();
+            let (_, token) = provider_settings::load_provider_tokens()?;
+            let token = token.trim().to_string();
             if token.is_empty() {
                 return Err("Filebase access token is not configured.".to_string());
             }
-            kubo_list_pins(&filebase_endpoint(&settings), Some(token), page, query.as_deref(), "filebase")
+            kubo_list_pins(&filebase_endpoint(&settings), Some(&token), page, query.as_deref(), "filebase")
         }
         "installed_kubo" => kubo_list_pins(&kubo_endpoint(&settings), None, page, query.as_deref(), "installed_kubo"),
         _ => unreachable!(),

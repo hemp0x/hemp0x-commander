@@ -8,6 +8,13 @@
     let clearing = false;
     let clearMsg = "";
 
+    let vaultStatus = { exists: false, unlocked: false, has_plaintext_tokens: false, vault_path: "", info: null };
+    let vaultPassphrase = "";
+    let vaultUnlocking = false;
+    let vaultMsg = "";
+    let vaultError = "";
+    let showMigrateConfirm = false;
+
     let providerSettings = {
         selected_publish_provider: "manual",
         gateways: { viewing_gateways: [] },
@@ -62,6 +69,14 @@
         }
     }
 
+    async function loadVaultStatus() {
+        try {
+            vaultStatus = await core.invoke("ipfs_vault_status");
+        } catch {
+            vaultStatus = { exists: false, unlocked: false, info: null };
+        }
+    }
+
     async function loadProviderSettings() {
         try {
             providerSettings = normalizeSettings(await core.invoke("ipfs_get_provider_settings"));
@@ -107,6 +122,95 @@
             settingsError = String(err);
         }
         settingsSaving = false;
+    }
+
+    async function vaultUnlock() {
+        vaultUnlocking = true;
+        vaultError = "";
+        vaultMsg = "";
+        try {
+            const ok = await core.invoke("ipfs_unlock_vault", { passphrase: vaultPassphrase });
+            if (ok) {
+                vaultStatus = { ...vaultStatus, unlocked: true };
+                vaultMsg = "Vault unlocked. Provider tokens are now available for publish operations.";
+                vaultPassphrase = "";
+            } else {
+                vaultError = "Incorrect passphrase.";
+            }
+        } catch (err) {
+            vaultError = String(err);
+        }
+        vaultUnlocking = false;
+    }
+
+    async function vaultLock() {
+        try {
+            await core.invoke("ipfs_lock_vault");
+            vaultStatus = { ...vaultStatus, unlocked: false };
+            vaultMsg = "Vault locked.";
+        } catch (err) {
+            vaultError = String(err);
+        }
+    }
+
+    async function vaultSetup() {
+        if (!vaultPassphrase || vaultPassphrase.length < 8) {
+            vaultError = "Passphrase must be at least 8 characters.";
+            return;
+        }
+        if (!confirm("WARNING: If you lose this passphrase, your encrypted tokens cannot be recovered. There is no reset. Are you sure you want to create a vault?")) {
+            return;
+        }
+        vaultUnlocking = true;
+        vaultError = "";
+        vaultMsg = "";
+        try {
+            const result = await core.invoke("vault_setup", { passphrase: vaultPassphrase });
+            await core.invoke("ipfs_unlock_vault", { passphrase: vaultPassphrase });
+            await loadVaultStatus();
+            vaultMsg = `Vault created (${result.kdf_profile}) and unlocked for this session.`;
+            vaultPassphrase = "";
+            if (vaultStatus.has_plaintext_tokens) {
+                vaultMsg += " Plaintext tokens detected — use Migrate to move them to the vault.";
+            }
+        } catch (err) {
+            vaultError = String(err);
+        }
+        vaultUnlocking = false;
+    }
+
+    async function confirmMigrate() {
+        showMigrateConfirm = true;
+    }
+
+    async function executeMigrate() {
+        showMigrateConfirm = false;
+        vaultUnlocking = true;
+        vaultError = "";
+        vaultMsg = "";
+        try {
+            const result = await core.invoke("ipfs_migrate_provider_tokens_to_vault", { passphrase: vaultPassphrase });
+            await loadVaultStatus();
+            await loadProviderSettings();
+            vaultMsg = result.message;
+            vaultPassphrase = "";
+        } catch (err) {
+            vaultError = String(err);
+        }
+        vaultUnlocking = false;
+    }
+
+    async function cancelMigrate() {
+        showMigrateConfirm = false;
+        vaultPassphrase = "";
+    }
+
+    async function migrateTokens() {
+        if (!vaultPassphrase) {
+            vaultError = "Enter your vault passphrase to migrate tokens.";
+            return;
+        }
+        await confirmMigrate();
     }
 
     async function testProvider(provider) {
@@ -258,6 +362,7 @@
 
     onMount(() => {
         loadStatus();
+        loadVaultStatus();
         loadProviderSettings();
     });
 </script>
@@ -274,8 +379,84 @@
     </div>
 
     <div class="notice-bar">
-        Provider tokens are stored locally in app settings for now. They will move to encrypted vault storage in a later hardening pass.
+        {#if vaultStatus.exists && vaultStatus.unlocked}
+            Vault unlocked. Provider tokens are read from encrypted storage.
+        {:else if vaultStatus.exists}
+            Vault locked. Unlock to enable publish operations.
+        {:else if vaultStatus.has_plaintext_tokens}
+            Plaintext provider tokens detected. Set up a vault and migrate them.
+        {:else}
+            No vault configured. Set up an encrypted vault to protect your API tokens.
+        {/if}
     </div>
+
+    <section class="vault-section">
+        <h4 class="section-subtitle">VAULT</h4>
+        {#if vaultStatus.exists}
+            <div class="vault-status">
+                <span class="vault-indicator" class:unlocked={vaultStatus.unlocked}>
+                    {vaultStatus.unlocked ? "UNLOCKED" : "LOCKED"}
+                </span>
+                {#if vaultStatus.info}
+                    {@const slot = vaultStatus.info.key_slots?.[0]}
+                    <span class="vault-meta">
+                        v{vaultStatus.info.version} | {slot?.kdf_profile ?? "?"}
+                        {#if slot?.kdf_iterations} | {slot.kdf_iterations} iter{/if}
+                        {#if slot?.kdf_log_n} | N=2^{slot.kdf_log_n}{/if}
+                    </span>
+                {/if}
+            </div>
+            {#if !vaultStatus.unlocked}
+                <div class="vault-unlock-row">
+                    <input
+                        type="password"
+                        class="form-input mono"
+                        autocomplete="off"
+                        bind:value={vaultPassphrase}
+                        on:keydown={(e) => e.key === "Enter" && vaultUnlock()}
+                        placeholder="Vault passphrase"
+                    />
+                    <button class="cyber-btn small" on:click={vaultUnlock} disabled={vaultUnlocking || !vaultPassphrase}>
+                        {vaultUnlocking ? "..." : "UNLOCK"}
+                    </button>
+                </div>
+            {:else}
+                <button class="cyber-btn ghost small" on:click={vaultLock}>LOCK VAULT</button>
+            {/if}
+            {#if vaultStatus.vault_path}
+                <div class="vault-meta" style="margin-top:0.4rem;">Path: <code>{vaultStatus.vault_path}</code></div>
+            {/if}
+            {#if vaultStatus.has_plaintext_tokens}
+                <div class="vault-migrate-row">
+                    <p class="provider-desc" style="margin:0;">Plaintext tokens still present in settings file. Migrate them to the vault.</p>
+                    <button class="cyber-btn small" on:click={confirmMigrate} disabled={vaultUnlocking || !vaultStatus.unlocked}>
+                        MIGRATE TOKENS
+                    </button>
+                </div>
+            {/if}
+        {:else}
+            <p class="provider-desc">Create an encrypted vault to protect provider API tokens. Uses scrypt (memory-hard) with AES-256-GCM. PBKDF2-HMAC-SHA512 also supported for Core Next compatibility.</p>
+            <div class="vault-unlock-row">
+                <input
+                    type="password"
+                    class="form-input mono"
+                    autocomplete="off"
+                    bind:value={vaultPassphrase}
+                    on:keydown={(e) => e.key === "Enter" && vaultSetup()}
+                    placeholder="New vault passphrase (min 8 chars)"
+                />
+                <button class="cyber-btn small" on:click={vaultSetup} disabled={vaultUnlocking || !vaultPassphrase || vaultPassphrase.length < 8}>
+                    {vaultUnlocking ? "..." : "CREATE VAULT"}
+                </button>
+            </div>
+        {/if}
+        {#if vaultMsg}
+            <div class="vault-msg">{vaultMsg}</div>
+        {/if}
+        {#if vaultError}
+            <div class="vault-error">{vaultError}</div>
+        {/if}
+    </section>
 
     <div class="provider-grid">
         <section class="provider-card">
@@ -289,9 +470,10 @@
                 class="form-input mono"
                 type="password"
                 autocomplete="off"
+                disabled={vaultStatus.exists && !vaultStatus.unlocked}
                 bind:value={providerSettings.pinata_api_token}
                 on:input={markEdited}
-                placeholder="Paste Pinata JWT"
+                placeholder={vaultStatus.exists && !vaultStatus.unlocked ? "Unlock vault to edit" : "Paste Pinata JWT"}
             />
             <label class="form-label" for="pinata-url">API URL</label>
             <input
@@ -325,9 +507,10 @@
                 class="form-input mono"
                 type="password"
                 autocomplete="off"
+                disabled={vaultStatus.exists && !vaultStatus.unlocked}
                 bind:value={providerSettings.filebase_token}
                 on:input={markEdited}
-                placeholder="Paste Filebase token"
+                placeholder={vaultStatus.exists && !vaultStatus.unlocked ? "Unlock vault to edit" : "Paste Filebase token"}
             />
             <label class="form-label" for="filebase-endpoint">Endpoint</label>
             <input
@@ -533,6 +716,19 @@ https://ipfs.io/ipfs/"
         {/if}
     </div>
 </div>
+{/if}
+
+{#if showMigrateConfirm}
+    <div class="modal-overlay" on:click={cancelMigrate} on:keydown={(e) => e.key === "Escape" && cancelMigrate()}>
+        <div class="modal-content" on:click|stopPropagation style="max-width: 420px;">
+            <h4 style="margin:0 0 0.5rem;">Migrate Tokens to Vault</h4>
+            <p style="font-size:0.75rem; color:#999;">This will move your API tokens into the encrypted vault and remove them from the plaintext settings file. This action cannot be undone without re-entering your tokens. Continue?</p>
+            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button class="cyber-btn ghost small" on:click={cancelMigrate}>CANCEL</button>
+                <button class="cyber-btn small" on:click={executeMigrate}>MIGRATE</button>
+            </div>
+        </div>
+    </div>
 {/if}
 
 <style>
@@ -890,5 +1086,57 @@ https://ipfs.io/ipfs/"
         font-size: 0.62rem;
         border-top: 1px solid rgba(255, 102, 102, 0.1);
         flex-shrink: 0;
+    }
+    .vault-section {
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-left: 2px solid rgba(0, 255, 65, 0.16);
+        border-radius: 6px;
+        padding: 0.85rem 1rem;
+        margin-bottom: 0.8rem;
+    }
+    .vault-status {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .vault-indicator {
+        font-size: 0.6rem;
+        font-weight: 600;
+        letter-spacing: 1px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: rgba(255, 85, 85, 0.1);
+        border: 1px solid rgba(255, 85, 85, 0.3);
+        color: #ff5555;
+    }
+    .vault-indicator.unlocked {
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .vault-meta {
+        font-size: 0.55rem;
+        color: #666;
+    }
+    .vault-unlock-row {
+        display: flex;
+        gap: 0.4rem;
+        align-items: center;
+    }
+    .vault-unlock-row .form-input {
+        flex: 1;
+        min-width: 0;
+    }
+    .vault-msg {
+        font-size: 0.62rem;
+        color: var(--color-primary);
+        margin-top: 0.5rem;
+    }
+    .vault-error {
+        font-size: 0.62rem;
+        color: #ff6666;
+        margin-top: 0.5rem;
     }
 </style>

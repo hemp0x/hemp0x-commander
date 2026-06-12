@@ -982,7 +982,7 @@
         <!-- EXPORT -->
         <div style="display:flex; flex-direction:column; gap: 0.75rem;">
             <h4 style="color:var(--color-primary); margin:0; font-size:0.8rem;">EXPORT MIGRATION PACKAGE</h4>
-            <p class="desc">Creates a local migration artifact for Webcom/Commander compatibility.</p>
+            <p class="desc">Creates a Core Next migration envelope for portable wallet backup. Public-only exports are for metadata checks and cannot restore a wallet. Private exports are encrypted and restorable. <em>Note: This backs up your wallet.dat keys. App secrets (provider tokens) are stored separately in an encrypted vault file (vault.json) with its own passphrase. Backing up wallet.dat does not back up the vault.</em></p>
             <button class="cyber-btn ghost wide" on:click={migrateSelectExportPath}>
                 {migrationExportPath ? migrationExportPath.split('/').pop().split('\\').pop() : "CHOOSE DESTINATION"}
             </button>
@@ -1015,7 +1015,7 @@
         <!-- VALIDATE -->
         <div style="display:flex; flex-direction:column; gap: 0.75rem;">
             <h4 style="color:var(--color-primary); margin:0; font-size:0.8rem;">VALIDATE MIGRATION PACKAGE</h4>
-            <p class="desc">Check a migration envelope before restoring.</p>
+            <p class="desc">Check a migration envelope before restoring. Public-only envelopes cannot restore a wallet. Encrypted private envelopes can.</p>
             <button class="cyber-btn ghost wide" on:click={migrateSelectValidatePath}>
                 {migrationValidatePath ? migrationValidatePath.split('/').pop().split('\\').pop() : "SELECT FILE"}
             </button>

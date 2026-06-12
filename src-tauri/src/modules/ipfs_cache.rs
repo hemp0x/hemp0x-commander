@@ -10,8 +10,7 @@ use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::modules::files::data_dir;
-use crate::modules::content_library::validate_import_cid;
+use crate::modules::content_library::{content_library_dir, validate_import_cid};
 use crate::modules::provider_settings;
 
 const DEFAULT_GATEWAYS: &[&str] = &[
@@ -60,7 +59,7 @@ pub struct CacheStatus {
 // ---------------------------------------------------------------------------
 
 fn cache_dir() -> Result<PathBuf, String> {
-    let dir = data_dir()?.join("content-library").join("cache");
+    let dir = content_library_dir()?.join("cache");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cache dir: {}", e))?;
     Ok(dir)
 }

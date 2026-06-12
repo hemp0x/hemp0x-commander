@@ -7,7 +7,7 @@ use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
 
-use crate::modules::files::data_dir;
+use crate::modules::files::{commander_content_library_dir, data_dir};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ContentFileEntry {
@@ -115,7 +115,15 @@ pub(crate) struct PackageManifest {
 }
 
 pub(crate) fn content_library_dir() -> Result<PathBuf, String> {
-  let dir = data_dir()?.join("content-library");
+  let dir = commander_content_library_dir()?;
+  let legacy = data_dir()?.join("content-library");
+  if !dir.exists() && legacy.exists() {
+    if let Some(parent) = dir.parent() {
+      fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&legacy, &dir).or_else(|_| copy_dir_all(&legacy, &dir))
+      .map_err(|e| format!("Failed to migrate content library: {}", e))?;
+  }
   fs::create_dir_all(&dir).map_err(|e| format!("Failed to create content-library dir: {}", e))?;
   fs::create_dir_all(dir.join("packages")).map_err(|e| e.to_string())?;
   Ok(dir)

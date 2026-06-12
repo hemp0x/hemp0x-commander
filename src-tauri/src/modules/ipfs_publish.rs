@@ -6,7 +6,6 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::modules::content_library;
-use crate::modules::files::data_dir;
 use crate::modules::provider_settings;
 
 #[derive(Serialize)]
@@ -87,7 +86,7 @@ struct MetadataFileEntry {
 }
 
 fn create_staging_dir(package_id: &str) -> Result<PathBuf, String> {
-    let dir = data_dir()?.join("content-library").join(".staging").join(package_id);
+    let dir = content_library::content_library_dir()?.join(".staging").join(package_id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("Failed to clean staging dir: {}", e))?;
     }
@@ -1035,7 +1034,7 @@ pub fn content_library_publish_package(
     content_library::ensure_folder_in_index(&mut index, &pkg.folder);
     content_library::save_index(&index)?;
 
-    let staging_dir = data_dir()?.join("content-library").join(".staging").join(&pkg_id);
+    let staging_dir = content_library::content_library_dir()?.join(".staging").join(&pkg_id);
     let _ = fs::remove_dir_all(&staging_dir);
 
     Ok(PublishResult {

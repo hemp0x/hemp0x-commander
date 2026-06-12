@@ -91,6 +91,16 @@ pub fn commander_settings_path() -> Result<PathBuf, String> {
   Ok(active_data_dir()?.join("commander").join("app_settings.json"))
 }
 
+pub fn commander_dir() -> Result<PathBuf, String> {
+  let dir = active_data_dir()?.join("commander");
+  fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  Ok(dir)
+}
+
+pub fn commander_content_library_dir() -> Result<PathBuf, String> {
+  Ok(commander_dir()?.join("content-library"))
+}
+
 fn external_slice17_settings_path() -> Result<PathBuf, String> {
   if cfg!(windows) {
     let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA not set".to_string())?;
@@ -202,12 +212,31 @@ pub fn parse_config(path: &Path) -> Result<HashMap<String, String>, String> {
 }
 
 fn address_book_path() -> Result<PathBuf, String> {
+  Ok(commander_dir()?.join("address_book.json"))
+}
+
+fn legacy_address_book_path() -> Result<PathBuf, String> {
   Ok(data_dir()?.join("address_book.json"))
+}
+
+fn migrate_legacy_address_book() -> Result<PathBuf, String> {
+  let path = address_book_path()?;
+  if path.exists() {
+    return Ok(path);
+  }
+  let legacy = legacy_address_book_path()?;
+  if legacy.exists() {
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::copy(&legacy, &path).map_err(|e| format!("Failed to migrate address book: {e}"))?;
+  }
+  Ok(path)
 }
 
 #[tauri::command]
 pub fn load_address_book() -> Result<Vec<AddressBookEntry>, String> {
-  let path = address_book_path()?;
+  let path = migrate_legacy_address_book()?;
   if !path.exists() {
     return Ok(Vec::new());
   }
@@ -359,7 +388,7 @@ fn validate_path_in_allowed_roots(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let content_lib_dir = data_dir.join("content-library");
+    let content_lib_dir = commander_content_library_dir()?;
     let content_lib_canonical = content_lib_dir.canonicalize().unwrap_or_else(|_| content_lib_dir.clone());
     if canonical.starts_with(&content_lib_canonical) {
         return Ok(());

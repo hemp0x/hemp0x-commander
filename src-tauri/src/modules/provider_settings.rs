@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Serialize, Deserialize};
 
-use crate::modules::files::data_dir;
+use crate::modules::content_library::content_library_dir;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProviderGateways {
@@ -63,8 +63,7 @@ impl Default for ProviderSettings {
 }
 
 fn provider_settings_path() -> Result<PathBuf, String> {
-    let dir = data_dir()?;
-    Ok(dir.join("content-library").join("provider_settings.json"))
+    Ok(content_library_dir()?.join("provider_settings.json"))
 }
 
 pub fn load_provider_settings() -> Result<ProviderSettings, String> {

@@ -546,6 +546,7 @@
         </div>
         <div class="console-meta">
             <label class="console-notice-toggle" title="Show the console notice when opening this page">
+                <span class="console-notice-icon">i</span>
                 <input
                     type="checkbox"
                     bind:checked={consoleDisclaimerEnabled}
@@ -852,8 +853,9 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 18px;
+        gap: 4px;
         height: 18px;
+        padding: 0 5px;
         border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 4px;
         background: rgba(0, 255, 65, 0.045);
@@ -862,6 +864,20 @@
     .console-notice-toggle:hover {
         border-color: rgba(0, 255, 65, 0.45);
         background: rgba(0, 255, 65, 0.08);
+    }
+    .console-notice-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 11px;
+        height: 11px;
+        border: 1px solid rgba(0, 255, 65, 0.35);
+        border-radius: 50%;
+        color: var(--color-primary);
+        font-size: 0.52rem;
+        font-weight: bold;
+        line-height: 1;
+        font-family: var(--font-mono);
     }
     .console-notice-toggle input {
         width: 12px;

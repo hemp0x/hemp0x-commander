@@ -70,6 +70,7 @@
         ],
     };
 
+    const CONSOLE_DISCLAIMER_KEY = "commander_console_disclaimer_hidden_v1";
     const allCommands = Object.values(commandGroups).flat().sort();
 
     let sessionIdCounter = 0;
@@ -110,12 +111,20 @@
     let editTabName = "";
     let advancedShellEnabled = false;
     let showShellEnableConfirm = false;
+    let showConsoleDisclaimer = false;
+    let hideConsoleDisclaimer = false;
 
     let showCommandDropdown = false;
     let commandDropdownSearch = "";
     let commandDropdownRef;
 
     onMount(async () => {
+        try {
+            showConsoleDisclaimer = localStorage.getItem(CONSOLE_DISCLAIMER_KEY) !== "true";
+        } catch (_) {
+            showConsoleDisclaimer = true;
+        }
+
         try {
             advancedShellEnabled = await core.invoke("get_advanced_shell_enabled");
         } catch (_) {
@@ -422,6 +431,17 @@
         showShellEnableConfirm = false;
     }
 
+    function closeConsoleDisclaimer() {
+        if (hideConsoleDisclaimer) {
+            try {
+                localStorage.setItem(CONSOLE_DISCLAIMER_KEY, "true");
+            } catch (_) {
+                // Ignore localStorage failures; the disclaimer can be shown again next visit.
+            }
+        }
+        showConsoleDisclaimer = false;
+    }
+
     function replaceLastToken(value) {
         const idx = cmdLine.search(/\S+$/);
         if (idx === -1) {
@@ -720,6 +740,38 @@
                 <div class="shell-enable-actions">
                     <button class="cyber-btn danger" on:click={confirmEnableShell}>ENABLE SHELL MODE</button>
                     <button class="cyber-btn ghost" on:click={cancelShellEnable}>CANCEL</button>
+                </div>
+            </div>
+        </div>
+    {/if}
+
+    {#if showConsoleDisclaimer}
+        <div class="console-disclaimer-backdrop" transition:fly={{ y: -4, duration: 150 }}>
+            <div class="console-disclaimer-modal">
+                <div class="console-disclaimer-header">
+                    <span class="console-disclaimer-icon">&#9432;</span>
+                    <span>CONSOLE NOTICE</span>
+                </div>
+                <div class="console-disclaimer-body">
+                    <p class="console-disclaimer-lead">
+                        The Console is an advanced tool for running Hemp0x Core commands and, if enabled separately, system shell commands.
+                    </p>
+                    <div class="console-disclaimer-panel">
+                        <span class="console-disclaimer-label">Before using it:</span>
+                        <ul>
+                            <li>Check command help before running unfamiliar commands.</li>
+                            <li>Review arguments carefully before broadcasting transactions or changing wallet state.</li>
+                            <li>Do not paste commands you do not understand.</li>
+                            <li>Shell mode remains disabled until you explicitly enable it.</li>
+                        </ul>
+                    </div>
+                    <label class="console-disclaimer-toggle">
+                        <input type="checkbox" bind:checked={hideConsoleDisclaimer} />
+                        <span>Do not show this again</span>
+                    </label>
+                </div>
+                <div class="console-disclaimer-actions">
+                    <button class="cyber-btn" on:click={closeConsoleDisclaimer}>ENTER CONSOLE</button>
                 </div>
             </div>
         </div>
@@ -1362,6 +1414,92 @@
         gap: 0.6rem;
         justify-content: flex-end;
         padding-top: 0.4rem;
+    }
+
+    .console-disclaimer-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.78);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        padding: 1rem;
+        backdrop-filter: blur(4px);
+    }
+    .console-disclaimer-modal {
+        width: min(560px, 100%);
+        background: rgba(3, 12, 8, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.35);
+        box-shadow: 0 0 42px rgba(0, 255, 65, 0.12), 0 24px 80px rgba(0, 0, 0, 0.8);
+        border-radius: 8px;
+        overflow: hidden;
+        color: #d8ffe2;
+    }
+    .console-disclaimer-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.9rem 1rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.18);
+        color: var(--color-primary);
+        font-weight: bold;
+        letter-spacing: 1.2px;
+        font-size: 0.82rem;
+    }
+    .console-disclaimer-icon {
+        color: #00ff41;
+        font-size: 1rem;
+    }
+    .console-disclaimer-body {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+    }
+    .console-disclaimer-lead {
+        margin: 0;
+        color: #c9f7d2;
+        line-height: 1.5;
+        font-size: 0.86rem;
+    }
+    .console-disclaimer-panel {
+        border: 1px solid rgba(0, 255, 65, 0.16);
+        background: rgba(0, 255, 65, 0.045);
+        border-radius: 6px;
+        padding: 0.75rem 0.9rem;
+    }
+    .console-disclaimer-label {
+        display: block;
+        color: var(--color-primary);
+        font-size: 0.72rem;
+        font-weight: bold;
+        letter-spacing: 1px;
+        margin-bottom: 0.45rem;
+    }
+    .console-disclaimer-panel ul {
+        margin: 0;
+        padding-left: 1rem;
+        color: #b9d8c0;
+        line-height: 1.55;
+        font-size: 0.8rem;
+    }
+    .console-disclaimer-toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: #9ab8a2;
+        font-size: 0.78rem;
+        cursor: pointer;
+        user-select: none;
+    }
+    .console-disclaimer-toggle input {
+        accent-color: var(--color-primary);
+    }
+    .console-disclaimer-actions {
+        display: flex;
+        justify-content: flex-end;
+        padding: 0 1rem 1rem;
     }
 
     @media (max-width: 800px) {

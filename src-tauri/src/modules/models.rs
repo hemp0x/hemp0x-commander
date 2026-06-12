@@ -237,6 +237,7 @@ pub struct AppSettings {
   pub pending_repair_mode: Option<String>,
   pub active_repair_mode: Option<String>,
   pub active_repair_started_at: Option<u64>,
+  pub advanced_shell_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -263,6 +264,7 @@ impl Default for AppSettings {
       pending_repair_mode: None,
       active_repair_mode: None,
       active_repair_started_at: None,
+      advanced_shell_enabled: false,
     }
   }
 }

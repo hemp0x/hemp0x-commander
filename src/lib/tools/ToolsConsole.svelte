@@ -1,5 +1,5 @@
 <script>
-    import { tick, createEventDispatcher } from "svelte";
+    import { tick, createEventDispatcher, onMount } from "svelte";
     import { core } from "@tauri-apps/api";
     import { fly } from "svelte/transition";
     import { ensureNodeSyncedForBroadcast } from "../utils/nodeSync.js";
@@ -70,7 +70,7 @@
         ],
     };
 
-    const commands = Object.values(commandGroups).flat().sort();
+    const allCommands = Object.values(commandGroups).flat().sort();
 
     let sessionIdCounter = 0;
     let sessions = [];
@@ -85,6 +85,7 @@
             name,
             output: "",
             input: "",
+            selectedCommand: "",
             shellMode: type !== "CLI",
             historyIndex: -1,
             shellWarningShown: false,
@@ -96,7 +97,7 @@
 
     $: activeSession = sessions[activeIndex];
     $: consoleOutput = activeSession ? activeSession.output : "";
-    $: cmdPlaceholder = shellMode ? "type a shell command" : "command args";
+    $: cmdPlaceholder = shellMode ? "type a shell command" : "command arguments";
 
     let consoleRef;
     let inputRef;
@@ -105,14 +106,33 @@
     let shellMode = false;
     let prettyJson = false;
     let outputSearch = "";
-    let showHistoryPanel = false;
-    let commandSearch = "";
     let editingTabId = null;
     let editTabName = "";
+    let advancedShellEnabled = false;
+    let showShellEnableConfirm = false;
 
-    $: filteredCommands = commandSearch
-        ? commands.filter(c => c.includes(commandSearch.toLowerCase()))
-        : [];
+    let showCommandDropdown = false;
+    let commandDropdownSearch = "";
+    let commandDropdownRef;
+
+    onMount(async () => {
+        try {
+            advancedShellEnabled = await core.invoke("get_advanced_shell_enabled");
+        } catch (_) {
+            advancedShellEnabled = false;
+        }
+    });
+
+    $: filteredDropdownCommands = (() => {
+        const term = commandDropdownSearch.trim().toLowerCase();
+        if (!term) return commandGroups;
+        const result = {};
+        for (const [group, cmds] of Object.entries(commandGroups)) {
+            const matched = cmds.filter(c => c.toLowerCase().includes(term));
+            if (matched.length) result[group] = matched;
+        }
+        return result;
+    })();
 
     $: filteredOutput = (() => {
         const output = activeSession ? activeSession.output : "";
@@ -134,7 +154,6 @@
         activeSession.output = activeSession.output
             ? `${activeSession.output}\n${text}`
             : text;
-        // Ensure Svelte notices the session output change for textarea re-render
         sessions = [...sessions];
         await tick();
         if (consoleRef) {
@@ -147,6 +166,7 @@
         if (session) {
             consoleOutput = session.output;
             cmdLine = session.input;
+            selectedCommand = session.selectedCommand;
             shellMode = session.shellMode;
         }
     }
@@ -155,11 +175,12 @@
         const current = sessions[activeIndex];
         if (current) {
             current.input = cmdLine;
+            current.selectedCommand = selectedCommand;
         }
         activeIndex = index;
         syncActiveToConsoleOutput();
         editingTabId = null;
-        showHistoryPanel = false;
+        showCommandDropdown = false;
         tick().then(() => {
             if (consoleRef) consoleRef.scrollTop = consoleRef.scrollHeight;
             if (inputRef) inputRef.focus();
@@ -170,6 +191,7 @@
         const current = sessions[activeIndex];
         if (current) {
             current.input = cmdLine;
+            current.selectedCommand = selectedCommand;
         }
         const session = createSession(shellMode ? "Shell" : "CLI");
         sessions = [...sessions, session];
@@ -221,15 +243,39 @@
         if (!activeSession) return;
 
         try {
-            const line = cmdLine.trim();
-            if (!line) {
+            let cmd, cmdArgs, fullLine;
+            if (shellMode) {
+                fullLine = cmdLine.trim();
+                cmd = fullLine;
+                cmdArgs = "";
+            } else {
+                const trimmedArgs = cmdLine.trim();
+                if (selectedCommand) {
+                    cmd = selectedCommand;
+                    cmdArgs = trimmedArgs;
+                    fullLine = cmd + (cmdArgs ? " " + cmdArgs : "");
+                } else {
+                    const line = trimmedArgs;
+                    if (!line) {
+                        appendOutput("Enter a command to run");
+                        showToast("No command entered", "error");
+                        return;
+                    }
+                    const splitAt = line.search(/\s/);
+                    cmd = splitAt === -1 ? line : line.slice(0, splitAt);
+                    cmdArgs = splitAt === -1 ? "" : line.slice(splitAt + 1);
+                    fullLine = line;
+                }
+            }
+
+            if (!fullLine && !cmd) {
                 appendOutput("Enter a command to run");
                 showToast("No command entered", "error");
                 return;
             }
 
-            if (consoleHistory[consoleHistory.length - 1] !== line) {
-                consoleHistory = [...consoleHistory, line];
+            if (consoleHistory[consoleHistory.length - 1] !== fullLine) {
+                consoleHistory = [...consoleHistory, fullLine];
             }
             activeSession.historyIndex = consoleHistory.length;
 
@@ -238,14 +284,11 @@
 
             let res;
             const prompt = shellMode ? "$" : ">";
-            appendOutput(`${prompt} ${line}`);
+            appendOutput(`${prompt} ${fullLine}`);
 
             if (shellMode) {
-                res = await core.invoke("run_shell_command", { command: line });
+                res = await core.invoke("run_shell_command", { command: cmd });
             } else {
-                const splitAt = line.search(/\s/);
-                const cmd = splitAt === -1 ? line : line.slice(0, splitAt);
-                const cmdArgs = splitAt === -1 ? "" : line.slice(splitAt + 1);
                 if (cmd.toLowerCase() === "sendrawtransaction") {
                     try { await ensureNodeSyncedForBroadcast(); } catch (e) { appendOutput(`Sync check: ${e}`); showToast("Node not synced", "error"); isProcessing = false; processingMessage = ""; return; }
                 }
@@ -270,9 +313,13 @@
             processingMessage = "";
             appendOutput(displayText);
             showToast("Command Executed", "success");
+            if (!shellMode) {
+                selectedCommand = "";
+                activeSession.selectedCommand = "";
+            }
             cmdLine = "";
             activeSession.input = "";
-            selectedCommand = "";
+            commandDropdownSearch = "";
         } catch (err) {
             isProcessing = false;
             processingMessage = "";
@@ -281,23 +328,11 @@
         }
     }
 
-    function handleCommandSelect(event) {
-        selectedCommand = event.target.value;
-        const cmd = selectedCommand || "";
-        cmdLine = cmd;
-        if (cmd) {
-            if (DANGER_COMMANDS.has(cmd.toLowerCase())) {
-                appendOutput(
-                    `[!] ${cmd} is a sensitive command. Verify all arguments before executing.`
-                );
-            }
-            setTimeout(() => { selectedCommand = ""; }, 100);
-        }
-    }
-
-    function handleCommandSearchSelect(cmd) {
-        cmdLine = cmd;
-        commandSearch = "";
+    function handleCommandDropdownSelect(cmd) {
+        selectedCommand = cmd;
+        cmdLine = "";
+        commandDropdownSearch = "";
+        showCommandDropdown = false;
         if (DANGER_COMMANDS.has(cmd.toLowerCase())) {
             appendOutput(
                 `[!] ${cmd} is a sensitive command. Verify all arguments before executing.`
@@ -306,19 +341,89 @@
         tick().then(() => { if (inputRef) inputRef.focus(); });
     }
 
+    async function showCommandHelp(cmd) {
+        if (!cmd) return;
+        try {
+            isProcessing = true;
+            processingMessage = "Loading help...";
+            const res = await core.invoke("run_cli_command", {
+                command: "help",
+                args: cmd,
+            });
+            isProcessing = false;
+            processingMessage = "";
+            appendOutput(`--- Help for ${cmd} ---\n${res || "(no help available)"}\n---`);
+            showToast(`Help loaded for ${cmd}`, "success");
+        } catch (err) {
+            isProcessing = false;
+            processingMessage = "";
+            appendOutput(`Error fetching help: ${err}`);
+            showToast("Failed to load help", "error");
+        }
+    }
+
+    function toggleCommandDropdown() {
+        if (shellMode) return;
+        showCommandDropdown = !showCommandDropdown;
+        if (showCommandDropdown) {
+            commandDropdownSearch = "";
+            tick().then(() => {
+                if (commandDropdownRef) commandDropdownRef.focus();
+            });
+        }
+    }
+
+    function closeCommandDropdown() {
+        showCommandDropdown = false;
+        commandDropdownSearch = "";
+    }
+
+    function handleDropdownKeydown(e) {
+        if (e.key === "Escape") {
+            closeCommandDropdown();
+        }
+    }
+
     function toggleShellMode() {
         if (!activeSession) return;
-        if (!activeSession.shellMode && !activeSession.shellWarningShown) {
-            activeSession.shellWarningShown = true;
-            appendOutput(
-                "[!] SHELL MODE: Commands run directly on this computer. " +
-                "Pasted commands can be dangerous. " +
-                "Secrets typed here may remain in output and history. " +
-                "Use only when you understand the command and trust the input."
-            );
+        if (!activeSession.shellMode) {
+            if (!advancedShellEnabled) {
+                showShellEnableConfirm = true;
+                return;
+            }
+            if (!activeSession.shellWarningShown) {
+                activeSession.shellWarningShown = true;
+                appendOutput(
+                    "[!] SHELL MODE: Unrestricted system commands. " +
+                    "Pasted commands can be dangerous. " +
+                    "Secrets may remain in output and history."
+                );
+            }
         }
         activeSession.shellMode = !activeSession.shellMode;
         shellMode = activeSession.shellMode;
+    }
+
+    async function confirmEnableShell() {
+        try {
+            advancedShellEnabled = await core.invoke("set_advanced_shell_enabled", { enabled: true });
+            showShellEnableConfirm = false;
+            showToast("Shell mode enabled globally", "success");
+            appendOutput(
+                "[!] SHELL MODE ENABLED: Unrestricted system commands. " +
+                "Pasted commands can be dangerous. " +
+                "Secrets may remain in output and history."
+            );
+            activeSession.shellMode = true;
+            activeSession.shellWarningShown = true;
+            shellMode = true;
+        } catch (err) {
+            showToast("Failed to enable shell mode: " + err, "error");
+        }
+    }
+
+    function cancelShellEnable() {
+        showShellEnableConfirm = false;
     }
 
     function replaceLastToken(value) {
@@ -351,7 +456,7 @@
         const input = cmdLine.trim();
         if (!input) return;
         const token = input.split(/\s+/)[0];
-        const options = commands.filter(c => c.startsWith(token));
+        const options = allCommands.filter(c => c.startsWith(token));
         if (options.length === 1) {
             replaceLastToken(options[0]);
         } else if (options.length > 1) {
@@ -394,19 +499,30 @@
         }
     }
 
-    function loadHistoryItem(line) {
-        cmdLine = line;
-        if (activeSession) activeSession.input = line;
-        showHistoryPanel = false;
-        tick().then(() => { if (inputRef) inputRef.focus(); });
-    }
-
     function clearOutputSearch() {
         outputSearch = "";
     }
 </script>
 
 <div class="console-view full-height">
+    <div class="console-header">
+        <div class="console-title">
+            <span class="console-title-text">CONSOLE</span>
+            <span class="console-status" class:online={isNodeOnline}>
+                {isNodeOnline ? '● NODE ONLINE' : '● NODE OFFLINE'}
+            </span>
+        </div>
+        <div class="console-meta">
+            <div class="mode-pill" class:shell={shellMode}>
+                <span class="mode-pill-icon">{shellMode ? '⚡' : '>'}</span>
+                <span class="mode-pill-label">{shellMode ? 'SHELL MODE' : 'CLI/RPC MODE'}</span>
+            </div>
+            <div class="network-badge">
+                {networkMode || 'mainnet'}
+            </div>
+        </div>
+    </div>
+
     <div class="tab-row">
         <div class="tabs">
             {#each sessions as session, i}
@@ -471,64 +587,77 @@
         ></textarea>
     </div>
 
-    <div class="control-bar compact">
-        <div class="field-group grow">
-            <label for="console-mode">MODE</label>
-            <div class="input-wrapper brackets">
-                <div class="mode-badge" class:shell={shellMode}>
-                    {shellMode ? "SHELL" : "CLI RPC"}
-                </div>
-            </div>
-        </div>
-        <div class="field-group grow">
-            <label for="cmd-select">COMMAND LIST</label>
-            <div class="input-wrapper brackets">
-                <div class="cmd-search-row">
-                    <input
-                        class="input-glass mono cmd-search"
-                        placeholder="Search commands..."
-                        bind:value={commandSearch}
+    <div class="control-bar">
+        <div class="cmd-area">
+            {#if !shellMode}
+                <div class="cmd-dropdown-wrapper">
+                    <button
+                        class="cmd-dropdown-trigger"
+                        on:click={toggleCommandDropdown}
                         disabled={shellMode}
-                    />
-                </div>
-                {#if commandSearch && filteredCommands.length > 0}
-                    <div class="cmd-search-dropdown">
-                        {#each filteredCommands.slice(0, 12) as cmd}
-                            <button
-                                class="cmd-search-item"
-                                class:danger={DANGER_COMMANDS.has(cmd.toLowerCase())}
-                                on:click={() => handleCommandSearchSelect(cmd)}
-                            >
-                                {cmd}
-                                {#if DANGER_COMMANDS.has(cmd.toLowerCase())}
-                                    <span class="danger-badge">!</span>
-                                {/if}
-                            </button>
-                        {/each}
-                    </div>
-                {:else}
-                    <select
-                        id="cmd-select"
-                        bind:value={selectedCommand}
-                        on:change={handleCommandSelect}
-                        class="input-glass"
-                        disabled={shellMode}
+                        title="Select a Hemp0x command"
                     >
-                        <option value="">Select command...</option>
-                        {#each Object.entries(commandGroups) as [groupName, groupCmds]}
-                            <optgroup label={groupName}>
-                                {#each groupCmds as cmd}
-                                    <option value={cmd}>{cmd}{DANGER_COMMANDS.has(cmd.toLowerCase()) ? ' [!]' : ''}</option>
-                                {/each}
-                            </optgroup>
-                        {/each}
-                    </select>
-                {/if}
-            </div>
-        </div>
-        <div class="field-group grow">
-            <label for="cmd-line">ARGUMENT</label>
-            <div class="input-wrapper brackets">
+                        <span class="cmd-dropdown-label">{selectedCommand || 'Commands'}</span>
+                        <span class="cmd-dropdown-arrow">{showCommandDropdown ? '▲' : '▼'}</span>
+                    </button>
+                    {#if selectedCommand}
+                        <button
+                            class="cmd-help-btn"
+                            title="Show help for {selectedCommand}"
+                            on:click={() => showCommandHelp(selectedCommand)}
+                        >?</button>
+                    {/if}
+                    {#if showCommandDropdown}
+                        <div class="cmd-dropdown-panel" transition:fly={{ y: 8, duration: 120 }}>
+                            <div class="cmd-dropdown-search">
+                                <input
+                                    class="cmd-dropdown-input"
+                                    placeholder="Filter commands..."
+                                    bind:value={commandDropdownSearch}
+                                    bind:this={commandDropdownRef}
+                                    on:keydown={handleDropdownKeydown}
+                                />
+                            </div>
+                            <div class="cmd-dropdown-list">
+                                {#if Object.keys(filteredDropdownCommands).length === 0}
+                                    <div class="cmd-dropdown-empty">No commands match</div>
+                                {:else}
+                                    {#each Object.entries(filteredDropdownCommands) as [groupName, groupCmds]}
+                                        <div class="cmd-dropdown-group">{groupName}</div>
+                                        {#each groupCmds as cmd}
+                                            <div
+                                                class="cmd-dropdown-item"
+                                                class:danger={DANGER_COMMANDS.has(cmd.toLowerCase())}
+                                                on:click={() => handleCommandDropdownSelect(cmd)}
+                                                role="button"
+                                                tabindex="0"
+                                                on:keydown={(e) => e.key === 'Enter' && handleCommandDropdownSelect(cmd)}
+                                            >
+                                                <span class="cmd-dropdown-item-name">{cmd}</span>
+                                                <span class="cmd-dropdown-item-actions">
+                                                    {#if DANGER_COMMANDS.has(cmd.toLowerCase())}
+                                                        <span class="danger-badge">!</span>
+                                                    {/if}
+                                                    <button
+                                                        type="button"
+                                                        class="cmd-help-inline"
+                                                        title="Show help for {cmd}"
+                                                        on:click|stopPropagation={() => showCommandHelp(cmd)}
+                                                    >?</button>
+                                                </span>
+                                            </div>
+                                        {/each}
+                                    {/each}
+                                {/if}
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+            {:else}
+                <div class="shell-indicator">$</div>
+            {/if}
+
+            <div class="input-wrapper grow">
                 <input
                     id="cmd-line"
                     class="input-glass mono"
@@ -543,55 +672,59 @@
                 />
             </div>
         </div>
-        <div class="field-group options-col">
-            <label class="option-toggle">
+
+        <div class="action-bar">
+            <label class="option-toggle" title="Format JSON responses with indentation">
                 <input type="checkbox" bind:checked={prettyJson} />
                 <span>JSON</span>
             </label>
-        </div>
-        <div class="action-group">
             <button class="cyber-btn" on:click={runCommand}>[ RUN ]</button>
             <button
                 class="cyber-btn ghost"
                 on:click={() => {
                     if (activeSession) activeSession.output = "";
                     syncActiveToConsoleOutput();
-                }}>CLEAR</button>
-            <button class="cyber-btn ghost" on:click={toggleShellMode}>
-                {shellMode ? "SHELL" : "CLI"}
-            </button>
+                }}
+            >CLEAR</button>
             <button
-                class="cyber-btn ghost"
-                on:click={() => showHistoryPanel = !showHistoryPanel}
-                title="Command history"
+                class="cyber-btn"
+                class:ghost={!shellMode}
+                class:shell-active={shellMode}
+                on:click={toggleShellMode}
+                title={shellMode ? "Switch to CLI/RPC mode" : "Switch to shell mode"}
             >
-                HIST
+                {shellMode ? "SHELL ON" : "SHELL OFF"}
             </button>
         </div>
     </div>
 
-    {#if showHistoryPanel}
-        <div class="history-panel" transition:fly={{ y: -4, duration: 150 }}>
-            <div class="history-header">
-                <span>COMMAND HISTORY</span>
-                <button class="history-clear-btn" on:click={() => consoleHistory = []}>
-                    CLEAR ALL
-                </button>
-            </div>
-            <div class="history-body">
-                {#if consoleHistory.length === 0}
-                    <div class="history-empty">No history</div>
-                {:else}
-                    {#each [...consoleHistory].reverse() as line}
-                        <button
-                            class="history-item"
-                            on:click={() => loadHistoryItem(line)}
-                            title={line}
-                        >
-                            <span class="history-text">{line}</span>
-                        </button>
-                    {/each}
-                {/if}
+    {#if showShellEnableConfirm}
+        <div class="shell-enable-backdrop" transition:fly={{ y: -4, duration: 150 }}>
+            <div class="shell-enable-modal">
+                <div class="shell-enable-header">
+                    <span class="shell-enable-warn-icon">&#9888;</span>
+                    <span>ENABLE SHELL MODE</span>
+                </div>
+                <div class="shell-enable-body">
+                    <p class="shell-enable-lead">
+                        Shell mode runs <strong>unrestricted system commands</strong> on this computer.
+                        This is different from CLI/RPC mode, which only sends commands to Hemp0x Core.
+                    </p>
+                    <div class="shell-enable-risks">
+                        <span class="risk-label">Shell commands can:</span>
+                        <ul>
+                            <li>Read, modify, or delete any file you have access to</li>
+                            <li>Install or remove software</li>
+                            <li>Start or stop system services</li>
+                            <li>Access network resources</li>
+                        </ul>
+                    </div>
+                    <p class="shell-enable-note">This setting is stored locally and persists across restarts. You can disable it at any time.</p>
+                </div>
+                <div class="shell-enable-actions">
+                    <button class="cyber-btn danger" on:click={confirmEnableShell}>ENABLE SHELL MODE</button>
+                    <button class="cyber-btn ghost" on:click={cancelShellEnable}>CANCEL</button>
+                </div>
             </div>
         </div>
     {/if}
@@ -601,12 +734,78 @@
     .console-view {
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.2rem;
         height: 100%;
         min-height: 0;
+        padding-bottom: 0;
     }
     .full-height {
         height: 100%;
+    }
+
+    .console-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.45rem 0.7rem;
+        background: rgba(0, 20, 10, 0.6);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 8px;
+        flex-shrink: 0;
+    }
+    .console-title {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+    .console-title-text {
+        font-size: 0.75rem;
+        letter-spacing: 1.5px;
+        color: var(--color-primary);
+        font-weight: bold;
+    }
+    .console-status {
+        font-size: 0.6rem;
+        letter-spacing: 0.5px;
+        color: #555;
+    }
+    .console-status.online {
+        color: var(--color-primary);
+    }
+    .console-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .mode-pill {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 10px;
+        border-radius: 4px;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+        background: rgba(0, 255, 65, 0.07);
+        border: 1px solid rgba(0, 255, 65, 0.3);
+        color: var(--color-primary);
+    }
+    .mode-pill.shell {
+        background: rgba(255, 165, 0, 0.07);
+        border-color: rgba(255, 165, 0, 0.3);
+        color: #ffa500;
+    }
+    .mode-pill-icon {
+        font-size: 0.8rem;
+    }
+    .network-badge {
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.6rem;
+        letter-spacing: 0.5px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #777;
+        text-transform: uppercase;
     }
 
     .tab-row {
@@ -628,7 +827,7 @@
         background: rgba(0, 20, 10, 0.6);
         border: 1px solid rgba(0, 255, 65, 0.15);
         color: #888;
-        padding: 4px 12px;
+        padding: 3px 10px;
         font-size: 0.7rem;
         letter-spacing: 0.5px;
         border-radius: 4px 4px 0 0;
@@ -646,6 +845,15 @@
         border-color: var(--color-primary);
         background: rgba(0, 0, 0, 0.7);
         text-shadow: 0 0 6px rgba(0, 255, 65, 0.3);
+    }
+    .tab-btn.shell {
+        border-color: rgba(255, 165, 0, 0.15);
+        color: #a67c00;
+    }
+    .tab-btn.shell:hover {
+        border-color: rgba(255, 165, 0, 0.3);
+        color: #d49a00;
+        background: rgba(30, 20, 0, 0.6);
     }
     .tab-btn.shell.active {
         border-color: #ffa500;
@@ -686,7 +894,7 @@
         background: rgba(0, 255, 65, 0.05);
         border: 1px solid rgba(0, 255, 65, 0.2);
         color: var(--color-primary);
-        padding: 4px 10px;
+        padding: 3px 10px;
         font-size: 0.9rem;
         border-radius: 4px 4px 0 0;
         cursor: pointer;
@@ -706,6 +914,7 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        min-height: 0;
     }
     .scanline {
         position: absolute;
@@ -729,6 +938,7 @@
         background: rgba(0, 0, 0, 0.4);
         border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         z-index: 3;
+        flex-shrink: 0;
     }
     .search-input {
         flex: 1;
@@ -766,55 +976,64 @@
         background: transparent;
         border: none;
         color: #00ff41;
-        padding: 0.6rem 1rem;
+        padding: 0.4rem 0.7rem;
         font-size: 0.8rem;
         resize: none;
         outline: none;
         white-space: pre-wrap;
         position: relative;
         z-index: 1;
+        min-height: 0;
     }
 
     .control-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.5rem;
         background: rgba(0, 20, 10, 0.6);
         border: 1px solid rgba(255, 255, 255, 0.05);
         border-radius: 8px;
-        padding: 0.7rem;
-        display: flex;
-        gap: 0.6rem;
-        align-items: flex-end;
         flex-shrink: 0;
+        margin-bottom: 0;
     }
-    .field-group {
+    .cmd-area {
         display: flex;
-        flex-direction: column;
-        gap: 0.2rem;
-    }
-    .field-group.grow {
+        align-items: center;
         flex: 1;
+        gap: 0.4rem;
         min-width: 0;
     }
-    .field-group.options-col {
-        justify-content: flex-end;
-        padding-bottom: 2px;
+    .shell-indicator {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        background: rgba(255, 165, 0, 0.08);
+        border: 1px solid rgba(255, 165, 0, 0.3);
+        color: #ffa500;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.85rem;
+        flex-shrink: 0;
     }
     .input-wrapper {
         position: relative;
+        flex: 1;
+        min-width: 0;
     }
-    .action-group {
+    .action-bar {
         display: flex;
+        align-items: center;
         gap: 0.4rem;
-    }
-    label {
-        font-size: 0.6rem;
-        color: #555;
-        letter-spacing: 1px;
+        flex-shrink: 0;
     }
     .option-toggle {
         display: flex;
         align-items: center;
         gap: 4px;
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         color: #666;
         cursor: pointer;
         white-space: nowrap;
@@ -823,41 +1042,97 @@
         accent-color: var(--color-primary);
     }
 
-    .mode-badge {
-        padding: 6px 12px;
-        border-radius: 4px;
-        font-size: 0.7rem;
-        letter-spacing: 1px;
-        text-align: center;
-        background: rgba(0, 255, 65, 0.07);
-        border: 1px solid rgba(0, 255, 65, 0.3);
-        color: var(--color-primary);
-    }
-    .mode-badge.shell {
-        background: rgba(255, 165, 0, 0.07);
-        border-color: rgba(255, 165, 0, 0.3);
-        color: #ffa500;
-    }
-
-    .cmd-search-row {
+    .cmd-dropdown-wrapper {
         position: relative;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 2px;
     }
-    .cmd-search {
-        width: 100%;
-    }
-    .cmd-search-dropdown {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        right: 0;
+    .cmd-dropdown-trigger {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0.4rem 0.6rem;
         background: #111;
         border: 1px solid rgba(0, 255, 65, 0.3);
-        border-radius: 0 0 4px 4px;
-        max-height: 240px;
-        overflow-y: auto;
-        z-index: 100;
+        color: #00ff41;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 0.75rem;
+        cursor: pointer;
+        white-space: nowrap;
     }
-    .cmd-search-item {
+    .cmd-dropdown-trigger:hover {
+        border-color: var(--color-primary);
+    }
+    .cmd-dropdown-trigger:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    .cmd-dropdown-label {
+        min-width: 80px;
+        text-align: left;
+    }
+    .cmd-dropdown-arrow {
+        font-size: 0.6rem;
+        color: #888;
+    }
+
+    .cmd-dropdown-panel {
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 0;
+        width: 280px;
+        max-height: 260px;
+        background: rgba(10, 10, 10, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.35);
+        border-radius: 6px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        z-index: 200;
+        box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.8);
+    }
+    .cmd-dropdown-search {
+        padding: 6px 8px;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.15);
+        flex-shrink: 0;
+    }
+    .cmd-dropdown-input {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(0, 255, 65, 0.25);
+        color: #00ff41;
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        border-radius: 3px;
+        outline: none;
+        font-family: inherit;
+    }
+    .cmd-dropdown-input:focus {
+        border-color: var(--color-primary);
+    }
+    .cmd-dropdown-list {
+        overflow-y: auto;
+        flex: 1;
+        padding: 4px 0;
+    }
+    .cmd-dropdown-group {
+        padding: 5px 10px;
+        font-size: 0.65rem;
+        color: #888;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        font-weight: bold;
+        background: rgba(0, 255, 65, 0.04);
+        border-top: 1px solid rgba(0, 255, 65, 0.12);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.08);
+    }
+    .cmd-dropdown-group:first-child {
+        border-top: none;
+    }
+    .cmd-dropdown-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -865,30 +1140,78 @@
         background: transparent;
         border: none;
         color: #00ff41;
-        padding: 5px 10px;
+        padding: 3px 10px;
         font-size: 0.75rem;
         cursor: pointer;
         text-align: left;
         font-family: inherit;
     }
-    .cmd-search-item:hover {
+    .cmd-dropdown-item:hover {
         background: rgba(0, 255, 65, 0.1);
     }
-    .cmd-search-item.danger {
+    .cmd-dropdown-item.danger {
         color: #ffa500;
     }
-    .cmd-search-item.danger:hover {
+    .cmd-dropdown-item.danger:hover {
         background: rgba(255, 165, 0, 0.1);
     }
-    .danger-badge {
-        display: inline-block;
-        background: rgba(255, 80, 80, 0.15);
-        color: #ff5555;
-        border: 1px solid #ff5555;
+    .cmd-dropdown-item-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .cmd-dropdown-item-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+    .cmd-help-inline {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #888;
+        border-radius: 50%;
         font-size: 0.6rem;
-        padding: 1px 4px;
-        border-radius: 2px;
-        margin-left: 4px;
+        cursor: pointer;
+        line-height: 1;
+        padding: 0;
+        font-family: inherit;
+    }
+    .cmd-help-inline:hover {
+        background: rgba(0, 255, 65, 0.15);
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+    }
+    .cmd-help-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: #888;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        line-height: 1;
+        margin-left: 2px;
+    }
+    .cmd-help-btn:hover {
+        background: rgba(0, 255, 65, 0.1);
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+    }
+    .cmd-dropdown-empty {
+        padding: 10px;
+        text-align: center;
+        color: #555;
+        font-size: 0.75rem;
     }
 
     .input-glass {
@@ -896,35 +1219,21 @@
         background: #111;
         border: 1px solid rgba(0, 255, 65, 0.3);
         color: #00ff41;
-        padding: 0.5rem;
+        padding: 0.45rem 0.6rem;
         border-radius: 4px;
         font-family: inherit;
         font-size: 0.8rem;
+        outline: none;
     }
     .input-glass:focus {
         border-color: var(--color-primary);
-        outline: none;
-    }
-    select.input-glass {
-        appearance: none;
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        background-color: #111 !important;
-        background-image: none;
-        color: #00ff41 !important;
-        cursor: pointer;
-    }
-    select.input-glass option {
-        background-color: #111;
-        color: #00ff41;
-        padding: 10px;
     }
 
     .cyber-btn {
         background: rgba(0, 255, 65, 0.05);
         border: 1px solid var(--color-primary);
         color: var(--color-primary);
-        padding: 0.5rem 1rem;
+        padding: 0.45rem 0.8rem;
         letter-spacing: 1px;
         font-weight: bold;
         transition: all 0.2s;
@@ -932,6 +1241,7 @@
         text-transform: uppercase;
         font-size: 0.7rem;
         white-space: nowrap;
+        border-radius: 4px;
     }
     .cyber-btn:hover {
         background: var(--color-primary);
@@ -949,77 +1259,121 @@
         box-shadow: none;
         background: rgba(255, 255, 255, 0.05);
     }
+    .cyber-btn.danger {
+        border-color: rgba(255, 165, 0, 0.5);
+        color: #ffa500;
+        background: rgba(255, 165, 0, 0.08);
+    }
+    .cyber-btn.danger:hover {
+        background: #ffa500;
+        color: #000;
+        box-shadow: 0 0 12px rgba(255, 165, 0, 0.3);
+    }
+    .cyber-btn.shell-active {
+        border-color: rgba(255, 165, 0, 0.5);
+        color: #ffa500;
+        background: rgba(255, 165, 0, 0.08);
+    }
+    .cyber-btn.shell-active:hover {
+        background: rgba(255, 165, 0, 0.15);
+        color: #ffa500;
+        box-shadow: 0 0 10px rgba(255, 165, 0, 0.2);
+    }
 
-    .history-panel {
+    .danger-badge {
+        display: inline-block;
+        background: rgba(255, 80, 80, 0.15);
+        color: #ff5555;
+        border: 1px solid #ff5555;
+        font-size: 0.6rem;
+        padding: 1px 4px;
+        border-radius: 2px;
+        margin-left: 4px;
+    }
+
+    .shell-enable-backdrop {
+        position: fixed;
+        inset: 0;
         background: rgba(0, 0, 0, 0.85);
-        border: 1px solid rgba(0, 255, 65, 0.15);
-        border-radius: 6px;
-        max-height: 200px;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+    }
+    .shell-enable-modal {
+        width: 100%;
+        max-width: 520px;
+        background: rgba(10, 10, 10, 0.95);
+        border: 1px solid rgba(255, 165, 0, 0.35);
+        border-radius: 10px;
+        padding: 1.5rem;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
-        flex-shrink: 0;
+        gap: 1rem;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
     }
-    .history-header {
+    .shell-enable-header {
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        padding: 6px 10px;
-        background: rgba(0, 255, 65, 0.05);
-        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
-        font-size: 0.6rem;
-        color: #555;
+        gap: 10px;
+        font-size: 0.9rem;
+        color: #ffa500;
         letter-spacing: 1px;
+        font-weight: bold;
+        border-bottom: 1px solid rgba(255, 165, 0, 0.15);
+        padding-bottom: 0.6rem;
     }
-    .history-clear-btn {
-        background: none;
-        border: 1px solid rgba(255, 85, 85, 0.3);
-        color: #ff5555;
-        font-size: 0.55rem;
-        padding: 2px 6px;
-        border-radius: 3px;
-        cursor: pointer;
-        letter-spacing: 0.5px;
+    .shell-enable-warn-icon {
+        font-size: 1.4rem;
     }
-    .history-clear-btn:hover {
-        background: rgba(255, 85, 85, 0.1);
+    .shell-enable-body {
+        color: #bbb;
+        font-size: 0.8rem;
+        line-height: 1.6;
     }
-    .history-body {
-        overflow-y: auto;
-        flex: 1;
+    .shell-enable-lead {
+        margin: 0 0 0.6rem 0;
     }
-    .history-empty {
-        color: #444;
-        padding: 1rem;
-        text-align: center;
-        font-size: 0.75rem;
+    .shell-enable-risks {
+        background: rgba(255, 165, 0, 0.06);
+        border: 1px solid rgba(255, 165, 0, 0.15);
+        border-radius: 6px;
+        padding: 0.7rem 1rem;
+        margin: 0.4rem 0;
     }
-    .history-item {
+    .risk-label {
         display: block;
-        width: 100%;
-        background: transparent;
-        border: none;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-        color: #0c0;
-        padding: 4px 12px;
-        font-size: 0.7rem;
-        cursor: pointer;
-        text-align: left;
-        font-family: monospace;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        color: #ffa500;
+        font-weight: bold;
+        font-size: 0.75rem;
+        margin-bottom: 0.3rem;
     }
-    .history-item:hover {
-        background: rgba(0, 255, 65, 0.08);
+    .shell-enable-risks ul {
+        margin: 0;
+        padding-left: 1.2rem;
     }
-    .history-text {
-        pointer-events: none;
+    .shell-enable-risks li {
+        margin: 0.2rem 0;
+    }
+    .shell-enable-note {
+        margin: 0.6rem 0 0 0;
+        font-size: 0.75rem;
+        color: #888;
+    }
+    .shell-enable-actions {
+        display: flex;
+        gap: 0.6rem;
+        justify-content: flex-end;
+        padding-top: 0.4rem;
     }
 
     @media (max-width: 800px) {
         .control-bar {
             flex-wrap: wrap;
+        }
+        .cmd-area {
+            width: 100%;
         }
     }
 </style>

@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use chrono::Local;
 use std::io::{Read, Seek, SeekFrom};
+use tauri::AppHandle;
+use tauri_plugin_dialog::DialogExt;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -147,7 +149,7 @@ pub fn load_app_settings_impl() -> Result<AppSettings, String> {
   Ok(AppSettings::default())
 }
 
-fn save_app_settings_impl(settings: &AppSettings) -> Result<(), String> {
+pub fn save_app_settings_impl(settings: &AppSettings) -> Result<(), String> {
   let path = commander_settings_path()?;
   let cfg_dir = path.parent().ok_or("Could not determine settings parent directory")?;
   if !cfg_dir.exists() {
@@ -234,12 +236,139 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
 
 #[tauri::command]
 pub fn read_text_file(path: String) -> Result<String, String> {
-  fs::read_to_string(path).map_err(|e| e.to_string())
+  let resolved = validate_read_path(&path)?;
+  validate_path_in_allowed_roots(&resolved)?;
+  fs::read_to_string(&resolved).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn write_text_file(path: String, content: String) -> Result<(), String> {
-  fs::write(path, content).map_err(|e| e.to_string())
+  let resolved = validate_write_path(&path)?;
+  validate_path_in_allowed_roots(&resolved)?;
+  fs::write(&resolved, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn dialog_read_text_file(
+    app: AppHandle,
+    title: Option<String>,
+    filters: Vec<Vec<String>>,
+) -> Result<String, String> {
+    let mut builder = app.dialog().file();
+    if let Some(ref t) = title {
+        builder = builder.set_title(t);
+    }
+    for filter in &filters {
+        if filter.len() >= 2 {
+            let name = &filter[0];
+            let exts: Vec<&str> = filter[1..].iter().map(|s| s.as_str()).collect();
+            builder = builder.add_filter(name, &exts);
+        }
+    }
+    let file_path = builder.blocking_pick_file()
+        .ok_or("No file selected")?;
+    let path = file_path.as_path().ok_or("Invalid file path")?;
+    let resolved = validate_read_path(&path.to_string_lossy())?;
+    fs::read_to_string(&resolved).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn dialog_write_text_file(
+    app: AppHandle,
+    content: String,
+    default_path: Option<String>,
+    title: Option<String>,
+    filters: Vec<Vec<String>>,
+) -> Result<String, String> {
+    let mut builder = app.dialog().file();
+    if let Some(ref t) = title {
+        builder = builder.set_title(t);
+    }
+    if let Some(ref dp) = default_path {
+        builder = builder.set_file_name(dp);
+    }
+    for filter in &filters {
+        if filter.len() >= 2 {
+            let name = &filter[0];
+            let exts: Vec<&str> = filter[1..].iter().map(|s| s.as_str()).collect();
+            builder = builder.add_filter(name, &exts);
+        }
+    }
+    let file_path = builder.blocking_save_file()
+        .ok_or("No file selected")?;
+    let path = file_path.as_path().ok_or("Invalid file path")?;
+    let resolved = validate_write_path(&path.to_string_lossy())?;
+    fs::write(&resolved, content).map_err(|e| e.to_string())?;
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+fn validate_read_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+    let p = PathBuf::from(trimmed);
+    if !p.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+    if !p.exists() {
+        return Err("File does not exist".to_string());
+    }
+    if p.is_dir() {
+        return Err("Path is a directory, not a file".to_string());
+    }
+    let canonical = p.canonicalize().map_err(|e| format!("Cannot resolve path: {e}"))?;
+    Ok(canonical)
+}
+
+fn validate_write_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+    let p = PathBuf::from(trimmed);
+    if !p.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+    if p.is_dir() {
+        return Err("Path is a directory, not a file".to_string());
+    }
+    let parent = p.parent().ok_or("Path has no parent directory")?;
+    if !parent.exists() {
+        return Err("Parent directory does not exist".to_string());
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let file_name = p.file_name().ok_or("Path has no filename")?;
+    let resolved = canonical_parent.join(file_name);
+    Ok(resolved)
+}
+
+fn validate_path_in_allowed_roots(path: &Path) -> Result<(), String> {
+    let canonical = if path.exists() {
+        path.canonicalize().map_err(|e| format!("Cannot resolve path: {e}"))?
+    } else {
+        let parent = path.parent().ok_or("Path has no parent directory")?;
+        let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+        let file_name = path.file_name().ok_or("Path has no filename")?;
+        canonical_parent.join(file_name)
+    };
+
+    let data_dir = data_dir()?;
+    let data_canonical = data_dir.canonicalize().unwrap_or_else(|_| data_dir.clone());
+    if canonical.starts_with(&data_canonical) {
+        return Ok(());
+    }
+
+    let content_lib_dir = data_dir.join("content-library");
+    let content_lib_canonical = content_lib_dir.canonicalize().unwrap_or_else(|_| content_lib_dir.clone());
+    if canonical.starts_with(&content_lib_canonical) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Path is outside allowed directories. Allowed: data directory ({}) and content library.",
+        data_dir.to_string_lossy()
+    ))
 }
 
 #[tauri::command]
@@ -1146,5 +1275,145 @@ mod tests {
     let b = dir.join("nonexistent_child");
     assert!(path_contains(&a, &b), "non-existing child should still be detected as inside parent");
     let _ = fs::remove_dir_all(&a);
+  }
+
+  #[test]
+  fn validate_read_path_accepts_existing_file() {
+    let dir = std::env::temp_dir().join("hemp61b_read_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let result = validate_read_path(&file.to_string_lossy());
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_read_path_rejects_nonexistent() {
+    let dir = std::env::temp_dir().join("hemp61b_read_nonexistent");
+    let file = dir.join("missing.txt");
+    let result = validate_read_path(&file.to_string_lossy());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("does not exist"));
+  }
+
+  #[test]
+  fn validate_read_path_rejects_directory() {
+    let dir = std::env::temp_dir().join("hemp61b_read_dir");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let result = validate_read_path(&dir.to_string_lossy());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("directory"));
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_read_path_rejects_empty() {
+    assert!(validate_read_path("").is_err());
+    assert!(validate_read_path("   ").is_err());
+  }
+
+  #[test]
+  fn validate_read_path_rejects_relative() {
+    assert!(validate_read_path("relative/path.txt").is_err());
+  }
+
+  #[test]
+  fn validate_write_path_accepts_new_file_under_existing_parent() {
+    let dir = std::env::temp_dir().join("hemp61b_write_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("new_output.txt");
+    let result = validate_write_path(&file.to_string_lossy());
+    assert!(result.is_ok());
+    let resolved = result.unwrap();
+    assert_eq!(resolved.file_name().unwrap(), "new_output.txt");
+    assert!(resolved.parent().unwrap().exists());
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_write_path_rejects_missing_parent() {
+    let dir = std::env::temp_dir().join("hemp61b_write_missing_parent");
+    let file = dir.join("subdir").join("output.txt");
+    let result = validate_write_path(&file.to_string_lossy());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("does not exist"));
+  }
+
+  #[test]
+  fn validate_write_path_rejects_directory_target() {
+    let dir = std::env::temp_dir().join("hemp61b_write_dir_target");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let result = validate_write_path(&dir.to_string_lossy());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("directory"));
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_write_path_rejects_empty() {
+    assert!(validate_write_path("").is_err());
+    assert!(validate_write_path("   ").is_err());
+  }
+
+  #[test]
+  fn validate_write_path_rejects_relative() {
+    assert!(validate_write_path("relative/output.txt").is_err());
+  }
+
+  #[test]
+  fn validate_write_path_resolves_symlink_parent() {
+    let dir = std::env::temp_dir().join("hemp61b_symlink_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let real_dir = dir.join("real");
+    fs::create_dir_all(&real_dir).unwrap();
+    let link_dir = dir.join("link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&real_dir, &link_dir).unwrap();
+    let file = link_dir.join("output.txt");
+    let result = validate_write_path(&file.to_string_lossy());
+    assert!(result.is_ok());
+    let resolved = result.unwrap();
+    assert!(resolved.starts_with(&real_dir));
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_path_in_allowed_roots_accepts_data_dir_child() {
+    let dir = std::env::temp_dir().join("hemp61b_allowed_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let data_dir = dir.join(".hemp0x");
+    fs::create_dir_all(&data_dir).unwrap();
+    let file = data_dir.join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    let result = validate_path_in_allowed_roots(&file);
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn validate_path_in_allowed_roots_rejects_outside_path() {
+    let dir = std::env::temp_dir().join("hemp61b_reject_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let data_dir = dir.join(".hemp0x");
+    fs::create_dir_all(&data_dir).unwrap();
+    let outside = dir.join("outside").join("test.txt");
+    fs::create_dir_all(dir.join("outside")).unwrap();
+    fs::write(&outside, "hello").unwrap();
+    std::env::set_var("HOME", dir.to_str().unwrap());
+    let result = validate_path_in_allowed_roots(&outside);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("outside allowed"));
+    let _ = fs::remove_dir_all(&dir);
   }
 }

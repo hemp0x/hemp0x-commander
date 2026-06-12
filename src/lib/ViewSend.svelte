@@ -1,7 +1,6 @@
 <script>
     import { onMount } from "svelte";
     import { core } from "@tauri-apps/api";
-    import { save, open } from "@tauri-apps/plugin-dialog";
     import { formatAmount } from "./utils.js";
     import { ensureNodeSyncedForBroadcast } from "./utils/nodeSync.js";
     import WalletUnlockModal from "./ui/WalletUnlockModal.svelte";
@@ -487,14 +486,14 @@
     // Export to JSON file via Dialog
     async function exportAddressBook() {
         try {
-            const path = await save({
-                filters: [{ name: "JSON", extensions: ["json"] }],
-                defaultPath: "hemp0x_address_book.json",
-            });
-            if (!path) return;
-
             const data = JSON.stringify(favorites, null, 2);
-            await core.invoke("write_text_file", { path, content: data });
+            const result = await core.invoke("dialog_write_text_file", {
+                content: data,
+                defaultPath: "hemp0x_address_book.json",
+                title: "Export Address Book",
+                filters: [["JSON", "json"]],
+            });
+            if (!result) return;
             addNotification({
                 type: "system",
                 severity: "success",
@@ -514,13 +513,11 @@
     // Import from JSON file via Dialog
     async function triggerImport() {
         try {
-            const path = await open({
-                multiple: false,
-                filters: [{ name: "JSON", extensions: ["json"] }],
+            const text = await core.invoke("dialog_read_text_file", {
+                title: "Import Address Book",
+                filters: [["JSON", "json"]],
             });
-            if (!path) return;
-
-            const text = await core.invoke("read_text_file", { path });
+            if (!text) return;
             const imported = JSON.parse(text);
 
             if (Array.isArray(imported)) {

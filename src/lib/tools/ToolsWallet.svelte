@@ -2,7 +2,6 @@
     import { createEventDispatcher, onDestroy } from "svelte";
     import { fly, fade } from "svelte/transition";
     import { core } from "@tauri-apps/api";
-    import { save, open } from "@tauri-apps/plugin-dialog";
     import CryptoJS from "crypto-js";
     import { systemStatus } from "../../stores.js"; // Import Store
     import { addToolNotification } from "../stores/notifications.js";
@@ -411,19 +410,14 @@
 
     async function triggerImport() {
         try {
-            const selected = await open({
+            const content = await core.invoke("dialog_read_text_file", {
                 title: "Select Key File",
-                multiple: false,
-                filters: [{ name: "JSON Key File", extensions: ["json"] }],
+                filters: [["JSON Key File", "json"]],
             });
-            if (!selected) {
-                showKeyModal = false; // Cancelled
+            if (!content) {
+                showKeyModal = false;
                 return;
             }
-
-            const content = await core.invoke("read_text_file", {
-                path: selected,
-            });
 
             // Try parse
             try {
@@ -617,17 +611,14 @@
                 .toISOString()
                 .replace(/[-:T]/g, "")
                 .slice(0, 14);
-            const path = await save({
-                title: "Save Keys",
+            const result = await core.invoke("dialog_write_text_file", {
+                content: finalContent,
                 defaultPath: `hemp0x_keys_${ts}.json`,
-                filters: [{ name: "JSON Key File", extensions: ["json"] }],
+                title: "Save Keys",
+                filters: [["JSON Key File", "json"]],
             });
 
-            if (path) {
-                await core.invoke("write_text_file", {
-                    path,
-                    content: finalContent,
-                });
+            if (result) {
                 showToast("Keys Exported Successfully", "success", false);
                 addToolNotification("Private keys exported", `${selected.length} keys exported to file`, "success");
                 showKeyModal = false;

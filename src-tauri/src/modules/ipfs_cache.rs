@@ -7,6 +7,8 @@ use std::process::Command;
 use chrono::Utc;
 use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
+use tauri::AppHandle;
+use tauri_plugin_dialog::DialogExt;
 
 use crate::modules::files::data_dir;
 use crate::modules::content_library::validate_import_cid;
@@ -630,14 +632,130 @@ pub fn content_library_save_cached(cid: String, destination: String) -> Result<S
     if dest.exists() {
         return Err("Destination file already exists. Choose a different path.".to_string());
     }
-    if let Some(parent) = dest.parent() {
-        if !parent.exists() {
-            return Err("Destination directory does not exist.".to_string());
-        }
+    if dest.is_dir() {
+        return Err("Destination path is a directory, not a file.".to_string());
+    }
+    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    if !parent.exists() {
+        return Err("Destination directory does not exist.".to_string());
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let file_name = dest.file_name().ok_or("Destination path has no filename")?;
+    let resolved = canonical_parent.join(file_name);
+
+    let data_dir = crate::modules::files::data_dir()?;
+    let data_canonical = data_dir.canonicalize().unwrap_or_else(|_| data_dir.clone());
+    if !resolved.starts_with(&data_canonical) {
+        return Err(format!(
+            "Path is outside allowed directories. Allowed: data directory ({}).",
+            data_dir.to_string_lossy()
+        ));
     }
 
-    fs::copy(&content_path, &dest).map_err(|e| format!("Save failed: {}", e))?;
-    Ok(dest.to_string_lossy().to_string())
+    fs::copy(&content_path, &resolved).map_err(|e| format!("Save failed: {}", e))?;
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn dialog_content_library_save_cached(
+    app: AppHandle,
+    cid: String,
+    default_path: Option<String>,
+    title: Option<String>,
+    filters: Vec<Vec<String>>,
+) -> Result<String, String> {
+    let cid = cid.trim().to_string();
+    validate_import_cid(&cid)?;
+
+    let content_path = cid_content_path(&cid)?;
+    if !content_path.exists() {
+        return Err("Content not cached. Fetch first.".to_string());
+    }
+
+    let mut builder = app.dialog().file();
+    if let Some(ref t) = title {
+        builder = builder.set_title(t);
+    }
+    if let Some(ref dp) = default_path {
+        builder = builder.set_file_name(dp);
+    }
+    for filter in &filters {
+        if filter.len() >= 2 {
+            let name = &filter[0];
+            let exts: Vec<&str> = filter[1..].iter().map(|s| s.as_str()).collect();
+            builder = builder.add_filter(name, &exts);
+        }
+    }
+    let file_path = builder.blocking_save_file()
+        .ok_or("No file selected")?;
+    let path = file_path.as_path().ok_or("Invalid file path")?;
+
+    let dest = PathBuf::from(path);
+    if dest.exists() {
+        return Err("Destination file already exists. Choose a different path.".to_string());
+    }
+    if dest.is_dir() {
+        return Err("Destination path is a directory, not a file.".to_string());
+    }
+    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    if !parent.exists() {
+        return Err("Destination directory does not exist.".to_string());
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let file_name = dest.file_name().ok_or("Destination path has no filename")?;
+    let resolved = canonical_parent.join(file_name);
+
+    fs::copy(&content_path, &resolved).map_err(|e| format!("Save failed: {}", e))?;
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn dialog_content_library_write_to_path(
+    app: AppHandle,
+    content_base64: String,
+    default_path: Option<String>,
+    title: Option<String>,
+    filters: Vec<Vec<String>>,
+) -> Result<String, String> {
+    let mut builder = app.dialog().file();
+    if let Some(ref t) = title {
+        builder = builder.set_title(t);
+    }
+    if let Some(ref dp) = default_path {
+        builder = builder.set_file_name(dp);
+    }
+    for filter in &filters {
+        if filter.len() >= 2 {
+            let name = &filter[0];
+            let exts: Vec<&str> = filter[1..].iter().map(|s| s.as_str()).collect();
+            builder = builder.add_filter(name, &exts);
+        }
+    }
+    let file_path = builder.blocking_save_file()
+        .ok_or("No file selected")?;
+    let path = file_path.as_path().ok_or("Invalid file path")?;
+
+    let dest = PathBuf::from(path);
+    if dest.exists() {
+        return Err("Destination file already exists.".to_string());
+    }
+    if dest.is_dir() {
+        return Err("Destination path is a directory, not a file.".to_string());
+    }
+    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    if !parent.exists() {
+        return Err("Destination directory does not exist.".to_string());
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let file_name = dest.file_name().ok_or("Destination path has no filename")?;
+    let resolved = canonical_parent.join(file_name);
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let data = STANDARD.decode(content_base64.as_bytes())
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    fs::write(&resolved, &data).map_err(|e| format!("Write failed: {}", e))?;
+    Ok(resolved.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -717,18 +835,32 @@ pub fn content_library_write_to_path(content_base64: String, destination: String
     if dest.exists() {
         return Err("Destination file already exists.".to_string());
     }
-    if let Some(parent) = dest.parent() {
-        if !parent.exists() {
-            return Err("Destination directory does not exist.".to_string());
-        }
+    if dest.is_dir() {
+        return Err("Destination path is a directory, not a file.".to_string());
+    }
+    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    if !parent.exists() {
+        return Err("Destination directory does not exist.".to_string());
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let file_name = dest.file_name().ok_or("Destination path has no filename")?;
+    let resolved = canonical_parent.join(file_name);
+
+    let data_dir = crate::modules::files::data_dir()?;
+    let data_canonical = data_dir.canonicalize().unwrap_or_else(|_| data_dir.clone());
+    if !resolved.starts_with(&data_canonical) {
+        return Err(format!(
+            "Path is outside allowed directories. Allowed: data directory ({}).",
+            data_dir.to_string_lossy()
+        ));
     }
 
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let data = STANDARD.decode(content_base64.as_bytes())
         .map_err(|e| format!("Base64 decode error: {}", e))?;
 
-    fs::write(&dest, &data).map_err(|e| format!("Write failed: {}", e))?;
-    Ok(dest.to_string_lossy().to_string())
+    fs::write(&resolved, &data).map_err(|e| format!("Write failed: {}", e))?;
+    Ok(resolved.to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------

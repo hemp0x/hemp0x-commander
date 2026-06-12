@@ -1,7 +1,6 @@
 <script>
     import { onDestroy } from "svelte";
     import { core } from "@tauri-apps/api";
-    import { save } from "@tauri-apps/plugin-dialog";
 
     export let contentBase64 = "";
     export let contentType = "text/plain";
@@ -117,27 +116,34 @@
         const defaultName = `content.${extension || "bin"}`;
 
         try {
-            const filePath = await save({
-                defaultPath: defaultName,
-                title: "Save Content",
-            });
-            if (!filePath) return;
-
             if (cid) {
                 try {
-                    await core.invoke("content_library_save_cached", { cid, destination: filePath });
-                    statusMsg = "Saved";
-                    statusType = "ok";
-                    return;
-                } catch (_) {}
+                    const result = await core.invoke("dialog_content_library_save_cached", {
+                        cid,
+                        defaultPath: defaultName,
+                        title: "Save Content",
+                        filters: [],
+                    });
+                    if (result) {
+                        statusMsg = "Saved";
+                        statusType = "ok";
+                        return;
+                    }
+                } catch (err) {
+                    if (String(err).includes("No file selected")) return;
+                }
             }
 
-            await core.invoke("content_library_write_to_path", {
+            const result = await core.invoke("dialog_content_library_write_to_path", {
                 contentBase64,
-                destination: filePath,
+                defaultPath: defaultName,
+                title: "Save Content",
+                filters: [],
             });
-            statusMsg = "Saved";
-            statusType = "ok";
+            if (result) {
+                statusMsg = "Saved";
+                statusType = "ok";
+            }
         } catch (err) {
             statusMsg = "Save failed: " + String(err);
             statusType = "error";

@@ -246,7 +246,7 @@
   .view-tools {
     display: flex;
     flex-direction: column;
-    gap: 1.2rem;
+    gap: 0.4rem;
     flex: 1; /* Force expansion in flex parent */
     min-height: 0; /* KEY FIX: Allow shrinking to viewport */
     /* No negative margins needed. Global padding handled by App.svelte */
@@ -352,7 +352,6 @@
     min-height: 0;
     overflow-y: auto;
     padding: 0.5rem;
-    padding-bottom: 3rem;
     position: relative;
     background: rgba(0, 0, 0, 0.2);
     display: flex;
@@ -360,6 +359,7 @@
   }
   .tools-body.no-scroll {
     overflow-y: hidden;
+    padding-bottom: 0;
   }
   .transition-wrapper {
     flex: 1;

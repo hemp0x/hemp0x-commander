@@ -113,6 +113,7 @@
     let showShellEnableConfirm = false;
     let showConsoleDisclaimer = false;
     let hideConsoleDisclaimer = false;
+    let consoleDisclaimerEnabled = true;
 
     let showCommandDropdown = false;
     let commandDropdownSearch = "";
@@ -120,8 +121,10 @@
 
     onMount(async () => {
         try {
-            showConsoleDisclaimer = localStorage.getItem(CONSOLE_DISCLAIMER_KEY) !== "true";
+            consoleDisclaimerEnabled = localStorage.getItem(CONSOLE_DISCLAIMER_KEY) !== "true";
+            showConsoleDisclaimer = consoleDisclaimerEnabled;
         } catch (_) {
+            consoleDisclaimerEnabled = true;
             showConsoleDisclaimer = true;
         }
 
@@ -439,7 +442,20 @@
                 // Ignore localStorage failures; the disclaimer can be shown again next visit.
             }
         }
+        consoleDisclaimerEnabled = !hideConsoleDisclaimer;
         showConsoleDisclaimer = false;
+    }
+
+    function toggleConsoleDisclaimerPreference() {
+        try {
+            if (consoleDisclaimerEnabled) {
+                localStorage.removeItem(CONSOLE_DISCLAIMER_KEY);
+            } else {
+                localStorage.setItem(CONSOLE_DISCLAIMER_KEY, "true");
+            }
+        } catch (_) {
+            // Ignore localStorage failures; the current checkbox state still reflects the session.
+        }
     }
 
     function replaceLastToken(value) {
@@ -529,6 +545,13 @@
             </span>
         </div>
         <div class="console-meta">
+            <label class="console-notice-toggle" title="Show the console notice when opening this page">
+                <input
+                    type="checkbox"
+                    bind:checked={consoleDisclaimerEnabled}
+                    on:change={toggleConsoleDisclaimerPreference}
+                />
+            </label>
             <div class="mode-pill" class:shell={shellMode}>
                 <span class="mode-pill-icon">{shellMode ? '⚡' : '>'}</span>
                 <span class="mode-pill-label">{shellMode ? 'SHELL MODE' : 'CLI/RPC MODE'}</span>
@@ -824,6 +847,28 @@
         display: flex;
         align-items: center;
         gap: 0.5rem;
+    }
+    .console-notice-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.045);
+        cursor: pointer;
+    }
+    .console-notice-toggle:hover {
+        border-color: rgba(0, 255, 65, 0.45);
+        background: rgba(0, 255, 65, 0.08);
+    }
+    .console-notice-toggle input {
+        width: 12px;
+        height: 12px;
+        margin: 0;
+        accent-color: var(--color-primary);
+        cursor: pointer;
     }
     .mode-pill {
         display: flex;

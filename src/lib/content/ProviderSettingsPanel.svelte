@@ -2,6 +2,7 @@
     import { onMount } from "svelte";
     import { fade } from "svelte/transition";
     import { core } from "@tauri-apps/api";
+    import { save, open } from "@tauri-apps/plugin-dialog";
 
     let cacheStatus = null;
     let cacheDir = "";
@@ -14,6 +15,15 @@
     let vaultMsg = "";
     let vaultError = "";
     let showMigrateConfirm = false;
+
+    let providerRecords = null;
+    let showRestoreConfirm = false;
+    let restoreImportPath = "";
+    let restoreValidation = null;
+    let restoring = false;
+    let showRemoveTokenConfirm = false;
+    let removeTokenProvider = "";
+    let removingToken = false;
 
     let providerSettings = {
         selected_publish_provider: "manual",
@@ -77,6 +87,16 @@
         }
     }
 
+    async function loadProviderRecordsAfterUnlock() {
+        if (vaultStatus.unlocked && vaultStatus.exists) {
+            try {
+                providerRecords = await core.invoke("ipfs_vault_provider_status");
+            } catch {
+                providerRecords = null;
+            }
+        }
+    }
+
     async function loadProviderSettings() {
         try {
             providerSettings = normalizeSettings(await core.invoke("ipfs_get_provider_settings"));
@@ -133,6 +153,7 @@
             if (ok) {
                 vaultStatus = { ...vaultStatus, unlocked: true };
                 vaultMsg = "Vault unlocked. Provider tokens are now available for publish operations.";
+                await loadProviderRecordsAfterUnlock();
                 vaultPassphrase = "";
             } else {
                 vaultError = "Incorrect passphrase.";
@@ -147,6 +168,7 @@
         try {
             await core.invoke("ipfs_lock_vault");
             vaultStatus = { ...vaultStatus, unlocked: false };
+            providerRecords = null;
             vaultMsg = "Vault locked.";
         } catch (err) {
             vaultError = String(err);
@@ -194,6 +216,7 @@
             await loadProviderSettings();
             vaultMsg = result.message;
             vaultPassphrase = "";
+            await loadProviderRecords();
         } catch (err) {
             vaultError = String(err);
         }
@@ -203,6 +226,121 @@
     async function cancelMigrate() {
         showMigrateConfirm = false;
         vaultPassphrase = "";
+    }
+
+    async function loadProviderRecords() {
+        if (!vaultStatus.exists || !vaultStatus.unlocked) {
+            providerRecords = null;
+            return;
+        }
+        try {
+            providerRecords = await core.invoke("ipfs_vault_provider_status");
+        } catch {
+            providerRecords = null;
+        }
+    }
+
+    async function vaultBackup() {
+        vaultMsg = "";
+        vaultError = "";
+        try {
+            const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+            const filePath = await save({
+                title: "Save Vault Backup",
+                defaultPath: `vault_backup_${ts}.json`,
+                filters: [{ name: "Vault Bundle", extensions: ["json"] }],
+            });
+            if (!filePath) return;
+            const result = await core.invoke("vault_export_bundle_to_path", { path: filePath });
+            vaultMsg = `Vault backed up to: ${result}`;
+        } catch (err) {
+            vaultError = String(err);
+        }
+    }
+
+    async function vaultRestoreSelect() {
+        vaultMsg = "";
+        vaultError = "";
+        restoreValidation = null;
+        try {
+            const selected = await open({
+                title: "Select Vault Backup to Restore",
+                multiple: false,
+                filters: [{ name: "Vault Bundle", extensions: ["json"] }],
+            });
+            if (!selected) return;
+            restoreImportPath = selected;
+            try {
+                restoreValidation = await core.invoke("vault_validate_import_bundle", { path: selected });
+            } catch (err) {
+                vaultError = "Validation failed: " + String(err);
+                restoreImportPath = "";
+                restoreValidation = null;
+                return;
+            }
+            if (vaultStatus.exists) {
+                showRestoreConfirm = true;
+            } else {
+                await executeRestore(null);
+            }
+        } catch (err) {
+            vaultError = String(err);
+        }
+    }
+
+    async function executeRestore(passphrase) {
+        showRestoreConfirm = false;
+        restoring = true;
+        vaultMsg = "";
+        vaultError = "";
+        try {
+            const result = await core.invoke("ipfs_vault_import_bundle_replace", {
+                path: restoreImportPath,
+                passphrase: passphrase || null,
+            });
+            vaultMsg = `Vault restored (v${result.version}, ${result.network}). Vault is locked — unlock with the restored vault passphrase.`;
+            await loadVaultStatus();
+            providerRecords = null;
+        } catch (err) {
+            vaultError = "Restore failed: " + String(err);
+        }
+        restoring = false;
+        restoreImportPath = "";
+        restoreValidation = null;
+    }
+
+    function cancelRestore() {
+        showRestoreConfirm = false;
+        restoreImportPath = "";
+        restoreValidation = null;
+    }
+
+    function confirmRemoveToken(provider) {
+        removeTokenProvider = provider;
+        showRemoveTokenConfirm = true;
+    }
+
+    async function executeRemoveToken() {
+        removingToken = true;
+        vaultMsg = "";
+        vaultError = "";
+        try {
+            await core.invoke("ipfs_vault_remove_provider_token", {
+                providerId: removeTokenProvider,
+            });
+            vaultMsg = `${removeTokenProvider.charAt(0).toUpperCase() + removeTokenProvider.slice(1)} token removed from vault.`;
+            await loadProviderRecords();
+        } catch (err) {
+            vaultError = "Remove failed: " + String(err);
+        }
+        removingToken = false;
+        showRemoveTokenConfirm = false;
+        removeTokenProvider = "";
+    }
+
+    function cancelRemoveToken() {
+        showRemoveTokenConfirm = false;
+        removeTokenProvider = "";
     }
 
     async function migrateTokens() {
@@ -362,7 +500,11 @@
 
     onMount(() => {
         loadStatus();
-        loadVaultStatus();
+        loadVaultStatus().then(() => {
+            if (vaultStatus.exists && vaultStatus.unlocked) {
+                loadProviderRecords();
+            }
+        });
         loadProviderSettings();
     });
 </script>
@@ -425,6 +567,43 @@
             {/if}
             {#if vaultStatus.vault_path}
                 <div class="vault-meta" style="margin-top:0.4rem;">Path: <code>{vaultStatus.vault_path}</code></div>
+            {/if}
+            <div class="vault-actions-row">
+                <button class="cyber-btn ghost small" on:click={vaultBackup} disabled={!vaultStatus.exists}>
+                    BACK UP VAULT
+                </button>
+                <button class="cyber-btn ghost small" on:click={vaultRestoreSelect} disabled={restoring}>
+                    {restoring ? "RESTORING..." : "RESTORE VAULT"}
+                </button>
+            </div>
+            {#if vaultStatus.unlocked && providerRecords}
+                <div class="vault-provider-status">
+                    <span class="vault-provider-label">Provider tokens:</span>
+                    {#if providerRecords.providers}
+                        <div class="vault-provider-row">
+                            <span class="provider-token-name">Pinata</span>
+                            <span class="provider-token-indicator" class:has-token={providerRecords.providers.pinata?.has_token}>
+                                {providerRecords.providers.pinata?.has_token ? "TOKEN STORED" : "NO TOKEN"}
+                            </span>
+                            {#if providerRecords.providers.pinata?.has_token}
+                                <button class="cyber-btn ghost tiny" on:click={() => confirmRemoveToken("pinata")} disabled={removingToken}>
+                                    REMOVE
+                                </button>
+                            {/if}
+                        </div>
+                        <div class="vault-provider-row">
+                            <span class="provider-token-name">Filebase</span>
+                            <span class="provider-token-indicator" class:has-token={providerRecords.providers.filebase?.has_token}>
+                                {providerRecords.providers.filebase?.has_token ? "TOKEN STORED" : "NO TOKEN"}
+                            </span>
+                            {#if providerRecords.providers.filebase?.has_token}
+                                <button class="cyber-btn ghost tiny" on:click={() => confirmRemoveToken("filebase")} disabled={removingToken}>
+                                    REMOVE
+                                </button>
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
             {/if}
             {#if vaultStatus.has_plaintext_tokens}
                 <div class="vault-migrate-row">
@@ -726,6 +905,43 @@ https://ipfs.io/ipfs/"
             <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                 <button class="cyber-btn ghost small" on:click={cancelMigrate}>CANCEL</button>
                 <button class="cyber-btn small" on:click={executeMigrate}>MIGRATE</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if showRestoreConfirm}
+    <div class="modal-overlay" on:click={cancelRestore} on:keydown={(e) => e.key === "Escape" && cancelRestore()}>
+        <div class="modal-content" on:click|stopPropagation style="max-width: 460px;">
+            <h4 style="margin:0 0 0.5rem; color:#ffaa00;">Replace Current Vault?</h4>
+            <p style="font-size:0.75rem; color:#999;">Restoring will <strong style="color:#ff6666;">replace</strong> your current vault.json with the imported bundle. Your current encrypted provider tokens will be overwritten.</p>
+            <p style="font-size:0.75rem; color:#bb9955; margin-top:0.4rem;"><strong>Back up your current vault first</strong> if you want to keep it. After restore, the vault will be locked — you must know the restored vault's passphrase to unlock it.</p>
+            {#if restoreValidation}
+                <div style="background:rgba(0,0,0,0.3); padding:0.5rem; border-radius:4px; margin:0.75rem 0; font-size:0.7rem; color:#aaa;">
+                    <p style="margin:0;">Bundle version: {restoreValidation.bundle_version} | Network: {restoreValidation.network}</p>
+                    <p style="margin:0.2rem 0 0;">Cipher: {restoreValidation.cipher_profile} | Slots: {restoreValidation.key_slots?.length ?? 0}</p>
+                </div>
+            {/if}
+            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button class="cyber-btn ghost small" on:click={cancelRestore}>CANCEL</button>
+                <button class="cyber-btn small" style="border-color:#ffaa00; color:#ffaa00;" on:click={() => executeRestore(null)}>
+                    {restoring ? "RESTORING..." : "REPLACE VAULT"}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if showRemoveTokenConfirm}
+    <div class="modal-overlay" on:click={cancelRemoveToken} on:keydown={(e) => e.key === "Escape" && cancelRemoveToken()}>
+        <div class="modal-content" on:click|stopPropagation style="max-width: 420px;">
+            <h4 style="margin:0 0 0.5rem; color:#ff6666;">Remove {removeTokenProvider.charAt(0).toUpperCase() + removeTokenProvider.slice(1)} Token?</h4>
+            <p style="font-size:0.75rem; color:#999;">This will permanently remove the {removeTokenProvider} API token from your encrypted vault. You will need to re-enter it to use {removeTokenProvider} for publishing. Continue?</p>
+            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button class="cyber-btn ghost small" on:click={cancelRemoveToken}>CANCEL</button>
+                <button class="cyber-btn small" style="border-color:#ff6666; color:#ff6666;" on:click={executeRemoveToken}>
+                    {removingToken ? "REMOVING..." : "REMOVE TOKEN"}
+                </button>
             </div>
         </div>
     </div>
@@ -1138,5 +1354,59 @@ https://ipfs.io/ipfs/"
         font-size: 0.62rem;
         color: #ff6666;
         margin-top: 0.5rem;
+    }
+    .vault-actions-row {
+        display: flex;
+        gap: 0.4rem;
+        margin-top: 0.5rem;
+    }
+    .vault-provider-status {
+        margin-top: 0.6rem;
+        padding: 0.5rem 0.6rem;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 4px;
+    }
+    .vault-provider-label {
+        font-size: 0.55rem;
+        color: #666;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.4rem;
+    }
+    .vault-provider-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    .provider-token-name {
+        font-size: 0.6rem;
+        color: #aaa;
+        min-width: 50px;
+    }
+    .provider-token-indicator {
+        font-size: 0.5rem;
+        color: #666;
+        letter-spacing: 0.5px;
+    }
+    .provider-token-indicator.has-token {
+        color: var(--color-primary);
+    }
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 1rem;
+    }
+    .modal-content {
+        background: #0a0f0d;
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 8px;
+        padding: 1.2rem;
     }
 </style>

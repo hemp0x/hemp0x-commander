@@ -10,10 +10,13 @@ use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use scrypt::{scrypt, Params as ScryptParams};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Sha512};
+use sha2::{Sha256, Sha512, Digest};
 use zeroize::Zeroizing;
 
 use crate::modules::files::{commander_dir, data_dir};
+
+const MAX_LABEL_LENGTH: usize = 128;
+const MAX_IMPORT_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
 const CURRENT_BUNDLE_VERSION: i32 = 3;
 const FORMAT_IDENTIFIER: &str = "hemp0x-unified-vault-bundle";
@@ -850,6 +853,198 @@ pub fn remove_provider_token_from_vault(
     Ok(bundle)
 }
 
+pub fn export_bundle_to_path(dest_path: &str) -> Result<String, String> {
+    let src = vault_path()?;
+    if !src.exists() {
+        return Err("No vault exists to export".to_string());
+    }
+    let dest = PathBuf::from(dest_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Cannot create destination directory: {e}"))?;
+    }
+    let content = fs::read_to_string(&src).map_err(|e| format!("Cannot read vault: {e}"))?;
+    let _: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Vault is not valid JSON: {e}"))?;
+    fs::write(&dest, &content).map_err(|e| format!("Cannot write to destination: {e}"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+pub fn validate_import_bundle_from_path(path: &str) -> Result<serde_json::Value, String> {
+    let src = PathBuf::from(path);
+    if !src.exists() {
+        return Err("Import file does not exist".to_string());
+    }
+    if src.is_dir() {
+        return Err("Import path is a directory, not a file".to_string());
+    }
+    let content = fs::read_to_string(&src).map_err(|e| format!("Cannot read import file: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Import file is not valid JSON: {e}"))?;
+
+    let bundle: VaultBundle = if value.get("bundleVersion").is_some()
+        || (value.get("bundle_version").is_some() && value.get("vault").is_some())
+    {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("Invalid vault bundle: {e}"))?
+    } else {
+        let envelope: VaultEnvelope = serde_json::from_value(value.clone())
+            .map_err(|e| format!("Invalid vault envelope: {e}"))?;
+        VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        }
+    };
+
+    if bundle.bundleVersion < 1 || bundle.bundleVersion > CURRENT_BUNDLE_VERSION {
+        return Err(format!(
+            "Unsupported bundle version: {}. Supported: 1-{}",
+            bundle.bundleVersion, CURRENT_BUNDLE_VERSION
+        ));
+    }
+    if bundle.format_identifier != FORMAT_IDENTIFIER {
+        return Err(format!(
+            "Unknown vault format: {} (expected {})",
+            bundle.format_identifier, FORMAT_IDENTIFIER
+        ));
+    }
+    validate_network(bundle.vault.network.as_deref())?;
+
+    if bundle.vault.cipher_profile != CIPHER_PROFILE {
+        return Err(format!(
+            "Unsupported cipher profile: {}",
+            bundle.vault.cipher_profile
+        ));
+    }
+    if bundle.vault.aad_profile != AAD_PROFILE {
+        return Err(format!(
+            "Unsupported AAD profile: {}",
+            bundle.vault.aad_profile
+        ));
+    }
+
+    let slot_info: Vec<serde_json::Value> = bundle.vault.key_slots.iter().map(|s| {
+        serde_json::json!({
+            "slot_id": s.slot_id,
+            "slot_type": s.slot_type,
+            "kdf_profile": s.kdf_profile,
+        })
+    }).collect();
+
+    Ok(serde_json::json!({
+        "valid": true,
+        "bundle_version": bundle.bundleVersion,
+        "format_identifier": bundle.format_identifier,
+        "version": bundle.vault.version,
+        "network": bundle.vault.network,
+        "cipher_profile": bundle.vault.cipher_profile,
+        "key_slots": slot_info,
+        "created": bundle.vault.created,
+        "modified": bundle.vault.modified,
+    }))
+}
+
+pub fn import_bundle_replace_from_path(path: &str, passphrase: Option<&str>) -> Result<serde_json::Value, String> {
+    let src = PathBuf::from(path);
+    if !src.exists() {
+        return Err("Import file does not exist".to_string());
+    }
+    let content = fs::read_to_string(&src).map_err(|e| format!("Cannot read import file: {e}"))?;
+
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Import file is not valid JSON: {e}"))?;
+
+    let bundle: VaultBundle = if value.get("bundleVersion").is_some()
+        || (value.get("bundle_version").is_some() && value.get("vault").is_some())
+    {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("Invalid vault bundle: {e}"))?
+    } else {
+        let envelope: VaultEnvelope = serde_json::from_value(value.clone())
+            .map_err(|e| format!("Invalid vault envelope: {e}"))?;
+        VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        }
+    };
+
+    if bundle.bundleVersion < 1 || bundle.bundleVersion > CURRENT_BUNDLE_VERSION {
+        return Err(format!(
+            "Unsupported bundle version: {}. Supported: 1-{}",
+            bundle.bundleVersion, CURRENT_BUNDLE_VERSION
+        ));
+    }
+    if bundle.format_identifier != FORMAT_IDENTIFIER {
+        return Err(format!(
+            "Unknown vault format: {}",
+            bundle.format_identifier
+        ));
+    }
+    validate_network(bundle.vault.network.as_deref())?;
+    if bundle.vault.cipher_profile != CIPHER_PROFILE {
+        return Err(format!("Unsupported cipher profile: {}", bundle.vault.cipher_profile));
+    }
+    if bundle.vault.aad_profile != AAD_PROFILE {
+        return Err(format!("Unsupported AAD profile: {}", bundle.vault.aad_profile));
+    }
+
+    if let Some(pp) = passphrase {
+        let valid = verify_vault_passphrase_with_bundle(pp, &bundle)?;
+        if !valid {
+            return Err("Incorrect passphrase for imported vault".to_string());
+        }
+    }
+
+    save_bundle_atomic(&bundle)?;
+
+    Ok(serde_json::json!({
+        "imported": true,
+        "bundle_version": bundle.bundleVersion,
+        "version": bundle.vault.version,
+        "network": bundle.vault.network,
+        "modified": bundle.vault.modified,
+    }))
+}
+
+fn verify_vault_passphrase_with_bundle(passphrase: &str, bundle: &VaultBundle) -> Result<bool, String> {
+    match decrypt_vault_envelope(passphrase, &bundle.vault) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+pub fn check_provider_token_records(passphrase: &str) -> Result<serde_json::Value, String> {
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(passphrase, &bundle.vault)?;
+    let pinata_record = payload.secrets.get(RECORD_ID_PINATA);
+    let filebase_record = payload.secrets.get(RECORD_ID_FILEBASE);
+    let pinata_endpoint = pinata_record
+        .and_then(|r| r.metadata.as_ref())
+        .and_then(|m| m.get("endpoint"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://api.pinata.cloud");
+    let filebase_endpoint = filebase_record
+        .and_then(|r| r.metadata.as_ref())
+        .and_then(|m| m.get("endpoint"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://rpc.filebase.io");
+    Ok(serde_json::json!({
+        "providers": {
+            "pinata": {
+                "has_token": pinata_record.is_some() && !pinata_record.unwrap().value.is_empty(),
+                "endpoint": pinata_endpoint,
+            },
+            "filebase": {
+                "has_token": filebase_record.is_some() && !filebase_record.unwrap().value.is_empty(),
+                "endpoint": filebase_endpoint,
+            }
+        }
+    }))
+}
+
 #[tauri::command]
 pub fn vault_get_vault_path() -> Result<String, String> {
     vault_path().map(|p| p.to_string_lossy().to_string())
@@ -962,6 +1157,481 @@ pub fn vault_update_tokens(
 #[tauri::command]
 pub fn vault_verify_passphrase(passphrase: String) -> Result<bool, String> {
     verify_vault_passphrase(&passphrase)
+}
+
+#[tauri::command]
+pub fn vault_export_bundle_to_path(path: String) -> Result<String, String> {
+    export_bundle_to_path(&path)
+}
+
+#[tauri::command]
+pub fn vault_validate_import_bundle(path: String) -> Result<serde_json::Value, String> {
+    validate_import_bundle_from_path(&path)
+}
+
+#[tauri::command]
+pub fn vault_import_bundle_replace(path: String, passphrase: Option<String>) -> Result<serde_json::Value, String> {
+    import_bundle_replace_from_path(&path, passphrase.as_deref())
+}
+
+#[tauri::command]
+pub fn vault_remove_provider_token(provider_id: String, passphrase: Option<String>) -> Result<serde_json::Value, String> {
+    let record_id = match provider_id.as_str() {
+        "pinata" => RECORD_ID_PINATA,
+        "filebase" => RECORD_ID_FILEBASE,
+        other => return Err(format!("Unknown provider id: {other}. Supported: pinata, filebase")),
+    };
+    let effective_passphrase = if let Some(ref pp) = passphrase {
+        pp.clone()
+    } else {
+        return Err("Passphrase is required to remove a provider token".to_string());
+    };
+    remove_provider_token_from_vault(&effective_passphrase, record_id)?;
+    Ok(serde_json::json!({
+        "removed": true,
+        "provider_id": provider_id,
+        "record_id": record_id,
+    }))
+}
+
+#[tauri::command]
+pub fn vault_get_provider_records_status(passphrase: String) -> Result<serde_json::Value, String> {
+    check_provider_token_records(&passphrase)
+}
+
+// ─── Wallet Migration Record Helpers ─────────────────────────────────────
+
+const WALLET_MIGRATION_RECORD_PREFIX: &str = "wallet.core_migration_envelope.";
+
+fn vault_tmp_dir() -> Result<PathBuf, String> {
+    let dir = commander_dir()?.join("tmp");
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create vault tmp dir: {e}"))?;
+    Ok(dir)
+}
+
+struct TempFileGuard {
+    path: PathBuf,
+}
+
+impl TempFileGuard {
+    fn new(prefix: &str) -> Result<Self, String> {
+        let dir = vault_tmp_dir()?;
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        let path = dir.join(format!("{prefix}_{nanos}.json"));
+        Ok(Self { path })
+    }
+
+    fn path_str(&self) -> String {
+        self.path.to_string_lossy().to_string()
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn clean_stale_vault_temp_files() {
+    if let Ok(dir) = vault_tmp_dir() {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("vault_migration_temp_")
+                    || name_str.starts_with("vault_import_validate_")
+                    || name_str.starts_with("vault_restore_temp_")
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+}
+
+fn generate_collision_safe_record_id(prefix: &str, content: &str) -> String {
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+    let mut hasher = Sha256::new();
+    sha2::Digest::update(&mut hasher, content.as_bytes());
+    sha2::Digest::update(&mut hasher, nanos.to_le_bytes());
+    let hash = sha2::Digest::finalize(hasher);
+    let hash_hex = hex::encode(&hash[..4]);
+    format!("{WALLET_MIGRATION_RECORD_PREFIX}{prefix}-{nanos}-{hash_hex}")
+}
+
+fn validate_wallet_migration_record_id(record_id: &str) -> Result<(), String> {
+    if !record_id.starts_with(WALLET_MIGRATION_RECORD_PREFIX) {
+        return Err(format!(
+            "Invalid wallet migration record id: {record_id}. Must start with {WALLET_MIGRATION_RECORD_PREFIX}"
+        ));
+    }
+    let suffix = &record_id[WALLET_MIGRATION_RECORD_PREFIX.len()..];
+    if suffix.is_empty() {
+        return Err("Wallet migration record id must have a suffix after the prefix".to_string());
+    }
+    if suffix.len() > 64 {
+        return Err("Wallet migration record id suffix must not exceed 64 characters".to_string());
+    }
+    if !suffix.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("Wallet migration record id suffix must contain only alphanumeric, underscore, or hyphen".to_string());
+    }
+    Ok(())
+}
+
+fn validate_label(label: &str) -> Result<String, String> {
+    let trimmed = label.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Label is required".to_string());
+    }
+    if trimmed.len() > MAX_LABEL_LENGTH {
+        return Err(format!("Label must not exceed {MAX_LABEL_LENGTH} characters"));
+    }
+    Ok(trimmed)
+}
+
+fn validate_import_file(path: &PathBuf) -> Result<String, String> {
+    if !path.exists() {
+        return Err("Import file does not exist".to_string());
+    }
+    if path.is_dir() {
+        return Err("Import path is a directory, not a file".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|e| format!("Cannot read file metadata: {e}"))?;
+    let size = metadata.len();
+    if size > MAX_IMPORT_FILE_SIZE {
+        return Err(format!(
+            "Import file is too large: {} bytes (max {})",
+            size, MAX_IMPORT_FILE_SIZE
+        ));
+    }
+    if size == 0 {
+        return Err("Import file is empty".to_string());
+    }
+    let content = fs::read_to_string(path).map_err(|e| format!("Cannot read import file: {e}"))?;
+    Ok(content)
+}
+
+fn validate_migration_envelope_file(
+    path: &str,
+    migration_passphrase: &str,
+) -> Result<serde_json::Value, String> {
+    crate::modules::commands::validate_wallet_migration(
+        path.to_string(),
+        migration_passphrase.to_string(),
+    )
+}
+
+fn extract_validation_metadata(validation: &serde_json::Value) -> serde_json::Value {
+    let restorable = validation.get("restorable").and_then(|v| v.as_bool()).unwrap_or(false);
+    let private_keys = validation.get("private_keys_included").and_then(|v| v.as_bool()).unwrap_or(false);
+    let chain = validation.get("chain").cloned().unwrap_or(serde_json::Value::Null);
+    let kdf = validation.get("envelope_kdf_profile").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let cipher = validation.get("envelope_cipher_profile").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let aad = validation.get("envelope_aad_profile").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let coin_type = validation.get("envelope_coin_type").and_then(|v| v.as_i64()).unwrap_or(-1);
+
+    let mut meta = serde_json::json!({
+        "value_kind": "embedded_encrypted_json",
+        "restorable": restorable,
+        "private_keys_included": private_keys,
+        "envelope_kdf_profile": kdf,
+        "envelope_cipher_profile": cipher,
+        "envelope_aad_profile": aad,
+    });
+    if let Some(obj) = meta.as_object_mut() {
+        if !chain.is_null() {
+            obj.insert("chain".to_string(), chain);
+        }
+        if coin_type >= 0 {
+            obj.insert("envelope_coin_type".to_string(), serde_json::Value::Number(coin_type.into()));
+        }
+    }
+    meta
+}
+
+pub fn insert_wallet_migration_record(
+    passphrase: &str,
+    record_id: &str,
+    label: &str,
+    value: &str,
+    metadata: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    validate_wallet_migration_record_id(record_id)?;
+    let label = validate_label(label)?;
+    if value.trim().is_empty() {
+        return Err("Migration envelope value is required".to_string());
+    }
+
+    let mut bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let dek = unwrap_dek_with_passphrase(passphrase, &bundle.vault)?;
+    let mut payload = decrypt_payload_with_dek(dek.as_slice(), &bundle.vault)?;
+
+    if payload.secrets.contains_key(record_id) {
+        return Err(format!(
+            "A wallet migration record with id {record_id} already exists. Use a different id or remove the existing record first."
+        ));
+    }
+
+    let now = chrono::Utc::now().timestamp();
+
+    let record = SecretRecord {
+        record_id: record_id.to_string(),
+        record_type: RECORD_TYPE_WALLET_CORE_MIGRATION.to_string(),
+        label: label.clone(),
+        value: value.to_string(),
+        metadata: Some(metadata),
+        tags: Some(vec!["wallet".to_string(), "migration".to_string()]),
+        origin_app: Some(APP_IDENTIFIER.to_string()),
+        derivation_profiles: None,
+        network: Some(bundle.vault.network.clone().unwrap_or_else(|| "mainnet".to_string())),
+        created: now,
+        modified: now,
+    };
+
+    payload.secrets.insert(record_id.to_string(), record);
+
+    bundle.vault.modified = now;
+    bundle.vault.payload = encrypt_payload_with_dek(dek.as_slice(), &payload, &bundle.vault)?;
+    save_bundle_atomic(&bundle)?;
+
+    Ok(serde_json::json!({
+        "inserted": true,
+        "record_id": record_id,
+        "record_type": RECORD_TYPE_WALLET_CORE_MIGRATION,
+        "label": label,
+        "modified": now,
+    }))
+}
+
+pub fn list_wallet_migration_records(passphrase: &str) -> Result<Vec<serde_json::Value>, String> {
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(passphrase, &bundle.vault)?;
+
+    let records: Vec<serde_json::Value> = payload.secrets.iter()
+        .filter(|(_, r)| r.record_type == RECORD_TYPE_WALLET_CORE_MIGRATION)
+        .map(|(_, r)| {
+            serde_json::json!({
+                "record_id": r.record_id,
+                "record_type": r.record_type,
+                "label": r.label,
+                "metadata": r.metadata,
+                "tags": r.tags,
+                "origin_app": r.origin_app,
+                "network": r.network,
+                "created": r.created,
+                "modified": r.modified,
+            })
+        })
+        .collect();
+
+    Ok(records)
+}
+
+pub fn export_wallet_migration_record_to_path(
+    passphrase: &str,
+    record_id: &str,
+    dest_path: &str,
+) -> Result<String, String> {
+    validate_wallet_migration_record_id(record_id)?;
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(passphrase, &bundle.vault)?;
+
+    let record = payload.secrets.get(record_id)
+        .ok_or(format!("No wallet migration record found for: {record_id}"))?;
+
+    if record.record_type != RECORD_TYPE_WALLET_CORE_MIGRATION {
+        return Err(format!("Record {record_id} is not a wallet migration record"));
+    }
+
+    let dest = PathBuf::from(dest_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Cannot create destination directory: {e}"))?;
+    }
+    fs::write(&dest, &record.value).map_err(|e| format!("Cannot write to destination: {e}"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+pub fn remove_wallet_migration_record(
+    passphrase: &str,
+    record_id: &str,
+) -> Result<serde_json::Value, String> {
+    validate_wallet_migration_record_id(record_id)?;
+    let mut bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let dek = unwrap_dek_with_passphrase(passphrase, &bundle.vault)?;
+    let mut payload = decrypt_payload_with_dek(dek.as_slice(), &bundle.vault)?;
+
+    let removed = payload.secrets.remove(record_id);
+    if removed.is_none() {
+        return Err(format!("No wallet migration record found for: {record_id}"));
+    }
+    let removed = removed.unwrap();
+    if removed.record_type != RECORD_TYPE_WALLET_CORE_MIGRATION {
+        payload.secrets.insert(record_id.to_string(), removed);
+        return Err(format!("Record {record_id} is not a wallet migration record"));
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    bundle.vault.modified = now;
+    bundle.vault.payload = encrypt_payload_with_dek(dek.as_slice(), &payload, &bundle.vault)?;
+    save_bundle_atomic(&bundle)?;
+
+    Ok(serde_json::json!({
+        "removed": true,
+        "record_id": record_id,
+        "label": removed.label,
+    }))
+}
+
+// ─── Wallet Migration Record Tauri Commands ─────────────────────────────
+
+#[tauri::command]
+pub fn vault_import_wallet_migration_record_from_path(
+    path: String,
+    label: String,
+    migration_passphrase: Option<String>,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let src = PathBuf::from(&path);
+    let content = validate_import_file(&src)?;
+
+    let _: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Import file is not valid JSON: {e}"))?;
+
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+
+    let temp = TempFileGuard::new("vault_import_validate")?;
+    fs::write(&temp.path, &content).map_err(|e| format!("Cannot write temp file: {e}"))?;
+
+    let mig_pass = migration_passphrase.unwrap_or_default();
+    let validation = validate_migration_envelope_file(&temp.path_str(), &mig_pass)
+        .map_err(|e| format!("Migration envelope validation failed: {e}. The file may not be a valid Core Next migration envelope, or the migration passphrase may be incorrect."))?;
+
+    let valid = validation.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !valid {
+        return Err("Migration envelope validation reported the file as invalid. It cannot be stored as a restorable wallet record.".to_string());
+    }
+
+    let mut metadata = extract_validation_metadata(&validation);
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.insert("source".to_string(), serde_json::Value::String("file-import".to_string()));
+        obj.insert("imported_at".to_string(), serde_json::Value::Number(chrono::Utc::now().timestamp().into()));
+        obj.insert("original_filename".to_string(), serde_json::Value::String(
+            src.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+        ));
+    }
+
+    let record_id = generate_collision_safe_record_id("import", &content);
+    let label = validate_label(&label)?;
+
+    insert_wallet_migration_record(&passphrase, &record_id, &label, &content, metadata)
+}
+
+#[tauri::command]
+pub fn vault_export_current_wallet_migration_record(
+    label: String,
+    include_private: bool,
+    migration_passphrase: String,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if !include_private {
+        return Err("Only private (restorable) migration envelopes can be stored in the vault".to_string());
+    }
+    if migration_passphrase.len() < 8 {
+        return Err("Migration passphrase must be at least 8 characters".to_string());
+    }
+    if migration_passphrase.len() > 1024 {
+        return Err("Migration passphrase must not exceed 1024 characters".to_string());
+    }
+
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    let label = validate_label(&label)?;
+
+    let temp = TempFileGuard::new("vault_migration_temp")?;
+
+    let export_result = crate::modules::commands::export_wallet_migration(
+        temp.path_str(),
+        true,
+        true,
+        migration_passphrase.clone(),
+    ).map_err(|e| format!("Failed to export wallet migration: {e}"))?;
+
+    let content = fs::read_to_string(&temp.path)
+        .map_err(|e| format!("Cannot read temp migration file: {e}"))?;
+
+    let validation = validate_migration_envelope_file(&temp.path_str(), &migration_passphrase)
+        .map_err(|e| format!("Migration envelope validation after export failed: {e}"))?;
+
+    let valid = validation.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !valid {
+        return Err("Exported migration envelope failed validation. It cannot be stored as a restorable wallet record.".to_string());
+    }
+
+    let mut metadata = extract_validation_metadata(&validation);
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.insert("source".to_string(), serde_json::Value::String("core-next-exportwalletmigration".to_string()));
+        obj.insert("exported_at".to_string(), serde_json::Value::Number(chrono::Utc::now().timestamp().into()));
+        obj.insert("label".to_string(), serde_json::Value::String(label.clone()));
+    }
+
+    let record_id = generate_collision_safe_record_id("export", &content);
+
+    let _result = insert_wallet_migration_record(&passphrase, &record_id, &label, &content, metadata)?;
+
+    Ok(serde_json::json!({
+        "exported_to_vault": true,
+        "record_id": record_id,
+        "label": label,
+        "migration_filename": export_result.get("filename").and_then(|v| v.as_str()).unwrap_or(""),
+    }))
+}
+
+#[tauri::command]
+pub fn vault_restore_wallet_migration_record(
+    record_id: String,
+    wallet_name: String,
+    migration_passphrase: String,
+    birth_height: Option<i64>,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+
+    let temp = TempFileGuard::new("vault_restore_temp")?;
+
+    export_wallet_migration_record_to_path(&passphrase, &record_id, &temp.path_str())
+        .map_err(|e| format!("Cannot export record to temp file: {e}"))?;
+
+    let wallet_name_for_result = wallet_name.clone();
+    let restore_result = crate::modules::commands::restore_wallet_migration(
+        temp.path_str(),
+        wallet_name,
+        migration_passphrase,
+        birth_height,
+    ).map_err(|e| format!("Failed to restore wallet migration: {e}"))?;
+
+    Ok(serde_json::json!({
+        "restored": true,
+        "record_id": record_id,
+        "wallet_name": restore_result.get("wallet_name").and_then(|v| v.as_str()).unwrap_or(&wallet_name_for_result),
+        "wallet_arg": restore_result.get("wallet_arg").and_then(|v| v.as_str()).unwrap_or(""),
+    }))
+}
+
+#[tauri::command]
+pub fn vault_list_wallet_migration_records(
+    vault_passphrase: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    clean_stale_vault_temp_files();
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    list_wallet_migration_records(&passphrase)
+}
+
+#[tauri::command]
+pub fn vault_remove_wallet_migration_record(
+    record_id: String,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    remove_wallet_migration_record(&passphrase, &record_id)
 }
 
 #[cfg(test)]
@@ -2057,5 +2727,633 @@ mod tests {
         assert_eq!(payload_filebase_token(&decrypted), "filebase-original");
 
 
+    }
+
+    // ─── Export / Import tests ────────────────────────────────────────────
+
+    #[test]
+    fn export_bundle_copies_exact_file() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata-export", "filebase-export");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let export_path = _guard.dir.join("exported_vault.json");
+        let result = export_bundle_to_path(export_path.to_str().unwrap()).unwrap();
+        assert_eq!(result, export_path.to_string_lossy());
+
+        let original = fs::read_to_string(vault_path().unwrap()).unwrap();
+        let exported = fs::read_to_string(&export_path).unwrap();
+        assert_eq!(original, exported);
+
+        let exported_value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(exported_value["bundleVersion"], CURRENT_BUNDLE_VERSION);
+    }
+
+    #[test]
+    fn export_bundle_fails_when_no_vault() {
+        let _guard = setup_test_vault_dir();
+        let result = export_bundle_to_path("/tmp/test_export_no_vault.json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No vault exists"));
+    }
+
+    #[test]
+    fn validate_import_accepts_valid_bundle() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        let import_path = _guard.dir.join("import_vault.json");
+        let content = serde_json::to_string_pretty(&bundle).unwrap();
+        fs::write(&import_path, content).unwrap();
+
+        let result = validate_import_bundle_from_path(import_path.to_str().unwrap()).unwrap();
+        assert_eq!(result["valid"], true);
+        assert_eq!(result["bundle_version"], CURRENT_BUNDLE_VERSION);
+        assert_eq!(result["network"], "mainnet");
+    }
+
+    #[test]
+    fn validate_import_rejects_wrong_format() {
+        let _guard = setup_test_vault_dir();
+        let import_path = _guard.dir.join("bad_format.json");
+        fs::write(&import_path, r#"{"bundleVersion":3,"format_identifier":"foreign-format","vault":{"version":1,"schema_identifier":"x","app_identifier":"x","network":"mainnet","cipher_profile":"aes-256-gcm-v1","aad_profile":"commander-envelope-v1","payload":{"payload_schema":"commander-secrets-v1","iv":"ab","ciphertext":"cd"},"key_slots":[],"created":1,"modified":1}}"#).unwrap();
+
+        let result = validate_import_bundle_from_path(import_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown vault format"));
+    }
+
+    #[test]
+    fn validate_import_rejects_nonexistent_file() {
+        let result = validate_import_bundle_from_path("/tmp/nonexistent_vault_import.json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn validate_import_rejects_invalid_json() {
+        let _guard = setup_test_vault_dir();
+        let import_path = _guard.dir.join("invalid.json");
+        fs::write(&import_path, "not json at all").unwrap();
+        let result = validate_import_bundle_from_path(import_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not valid JSON"));
+    }
+
+    #[test]
+    fn import_bundle_replaces_vault() {
+        let _guard = setup_test_vault_dir();
+        let passphrase1 = "first-passphrase";
+        let payload1 = make_provider_payload("pinata1", "filebase1");
+        let envelope1 = encrypt_vault_envelope(passphrase1, &payload1, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle1 = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope1,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle1).unwrap();
+
+        let passphrase2 = "second-passphrase";
+        let payload2 = make_provider_payload("pinata2", "filebase2");
+        let envelope2 = encrypt_vault_envelope(passphrase2, &payload2, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle2 = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope2,
+            meta: None,
+        };
+        let import_path = _guard.dir.join("import_vault.json");
+        let content = serde_json::to_string_pretty(&bundle2).unwrap();
+        fs::write(&import_path, content).unwrap();
+
+        let result = import_bundle_replace_from_path(import_path.to_str().unwrap(), None).unwrap();
+        assert_eq!(result["imported"], true);
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase2, &loaded.vault).unwrap();
+        assert_eq!(payload_pinata_token(&decrypted), "pinata2");
+        assert_eq!(payload_filebase_token(&decrypted), "filebase2");
+
+        let result_wrong = decrypt_vault_envelope(passphrase1, &loaded.vault);
+        assert!(result_wrong.is_err());
+    }
+
+    #[test]
+    fn import_bundle_with_passphrase_verification() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "correct-passphrase";
+        let payload = make_provider_payload("pinata-verify", "filebase-verify");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        let import_path = _guard.dir.join("import_vault.json");
+        let content = serde_json::to_string_pretty(&bundle).unwrap();
+        fs::write(&import_path, content).unwrap();
+
+        let result = import_bundle_replace_from_path(import_path.to_str().unwrap(), Some("correct-passphrase")).unwrap();
+        assert_eq!(result["imported"], true);
+
+        let result_wrong = import_bundle_replace_from_path(import_path.to_str().unwrap(), Some("wrong-passphrase"));
+        assert!(result_wrong.is_err());
+        assert!(result_wrong.unwrap_err().contains("Incorrect passphrase"));
+    }
+
+    #[test]
+    fn import_bundle_rejects_invalid_network() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("token", "token");
+        let mut envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        envelope.network = Some("invalidnet".to_string());
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        let import_path = _guard.dir.join("import_bad_network.json");
+        let content = serde_json::to_string_pretty(&bundle).unwrap();
+        fs::write(&import_path, content).unwrap();
+
+        let result = validate_import_bundle_from_path(import_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid network"));
+    }
+
+    #[test]
+    fn import_bundle_rejects_unsupported_version() {
+        let _guard = setup_test_vault_dir();
+        let import_path = _guard.dir.join("import_bad_version.json");
+        fs::write(&import_path, r#"{"bundleVersion":999,"format_identifier":"hemp0x-unified-vault-bundle","vault":{"version":1,"schema_identifier":"hemp0x-commander-vault","app_identifier":"hemp0x-commander","network":"mainnet","cipher_profile":"aes-256-gcm-v1","aad_profile":"commander-envelope-v1","payload":{"payload_schema":"commander-secrets-v1","iv":"ab","ciphertext":"cd"},"key_slots":[],"created":1,"modified":1}}"#).unwrap();
+
+        let result = validate_import_bundle_from_path(import_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unsupported bundle version"));
+    }
+
+    // ─── Provider token status tests ─────────────────────────────────────
+
+    #[test]
+    fn check_provider_records_returns_correct_status() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata-token", "filebase-token");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let status = check_provider_token_records(passphrase).unwrap();
+        assert_eq!(status["providers"]["pinata"]["has_token"], true);
+        assert_eq!(status["providers"]["filebase"]["has_token"], true);
+    }
+
+    #[test]
+    fn check_provider_records_after_remove() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata-token", "filebase-token");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        remove_provider_token_from_vault(passphrase, RECORD_ID_PINATA).unwrap();
+
+        let status = check_provider_token_records(passphrase).unwrap();
+        assert_eq!(status["providers"]["pinata"]["has_token"], false);
+        assert_eq!(status["providers"]["filebase"]["has_token"], true);
+    }
+
+    #[test]
+    fn check_provider_records_with_empty_vault() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = VaultPayload::default();
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let status = check_provider_token_records(passphrase).unwrap();
+        assert_eq!(status["providers"]["pinata"]["has_token"], false);
+        assert_eq!(status["providers"]["filebase"]["has_token"], false);
+    }
+
+    // ─── Wallet migration record tests ──────────────────────────────────
+
+    fn make_migration_envelope_json() -> String {
+        serde_json::json!({
+            "encrypted": true,
+            "content": "base64-encrypted-migration-envelope-data",
+            "version": "1.0",
+            "chain": {
+                "network": "mainnet",
+                "matches_current_chain": true
+            },
+            "private_keys_included": true,
+            "restorable": true
+        }).to_string()
+    }
+
+    fn make_migration_metadata() -> serde_json::Value {
+        serde_json::json!({
+            "value_kind": "embedded_encrypted_json",
+            "source": "core-next-exportwalletmigration",
+            "restorable": true,
+            "private_keys_included": true,
+            "envelope_kdf_profile": "pbkdf2-hmac-sha512-v1",
+            "envelope_cipher_profile": "aes-256-gcm-v1",
+            "envelope_aad_profile": "commander-envelope-v1",
+            "envelope_coin_type": 420,
+            "label": "Main wallet backup",
+            "wallet_name_hint": "default"
+        })
+    }
+
+    #[test]
+    fn wallet_migration_record_insert_and_list() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata-token", "filebase-token");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let record_id = "wallet.core_migration_envelope.test-1";
+        let label = "Test Wallet Backup";
+        let value = make_migration_envelope_json();
+        let metadata = make_migration_metadata();
+
+        let result = insert_wallet_migration_record(passphrase, record_id, label, &value, metadata.clone()).unwrap();
+        assert_eq!(result["inserted"], true);
+        assert_eq!(result["record_id"], record_id);
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["record_id"], record_id);
+        assert_eq!(records[0]["label"], label);
+        assert_eq!(records[0]["record_type"], RECORD_TYPE_WALLET_CORE_MIGRATION);
+        assert!(records[0]["metadata"].is_object());
+        assert!(records[0].get("value").is_none());
+    }
+
+    #[test]
+    fn wallet_migration_record_list_does_not_return_value() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let secret_value = "super-secret-migration-envelope-data";
+        let value = serde_json::json!({"encrypted": true, "content": secret_value}).to_string();
+        insert_wallet_migration_record(passphrase, "wallet.core_migration_envelope.test-2", "Test", &value, make_migration_metadata()).unwrap();
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        let json = serde_json::to_string(&records).unwrap();
+        assert!(!json.contains(secret_value));
+        for record in &records {
+            assert!(record.get("value").is_none());
+        }
+    }
+
+    #[test]
+    fn wallet_migration_record_insert_preserves_provider_tokens() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata-original", "filebase-original");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        insert_wallet_migration_record(passphrase, "wallet.core_migration_envelope.test-3", "Test", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        assert_eq!(payload_pinata_token(&decrypted), "pinata-original");
+        assert_eq!(payload_filebase_token(&decrypted), "filebase-original");
+    }
+
+    #[test]
+    fn wallet_migration_record_export_to_path() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let value = make_migration_envelope_json();
+        let record_id = "wallet.core_migration_envelope.test-4";
+        insert_wallet_migration_record(passphrase, record_id, "Test", &value, make_migration_metadata()).unwrap();
+
+        let export_path = _guard.dir.join("exported_migration.json");
+        let result = export_wallet_migration_record_to_path(passphrase, record_id, export_path.to_str().unwrap()).unwrap();
+        assert_eq!(result, export_path.to_string_lossy());
+
+        let exported = fs::read_to_string(&export_path).unwrap();
+        assert_eq!(exported, value);
+    }
+
+    #[test]
+    fn wallet_migration_record_remove() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let record_id = "wallet.core_migration_envelope.test-5";
+        insert_wallet_migration_record(passphrase, record_id, "Test", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+
+        let result = remove_wallet_migration_record(passphrase, record_id).unwrap();
+        assert_eq!(result["removed"], true);
+        assert_eq!(result["record_id"], record_id);
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        assert_eq!(records.len(), 0);
+    }
+
+    #[test]
+    fn wallet_migration_record_remove_nonexistent_fails() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let result = remove_wallet_migration_record(passphrase, "wallet.core_migration_envelope.nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No wallet migration record found"));
+    }
+
+    #[test]
+    fn wallet_migration_record_invalid_id_rejected() {
+        let result = validate_wallet_migration_record_id("provider.pinata.api_token");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Must start with"));
+
+        let result = validate_wallet_migration_record_id("wallet.core_migration_envelope.");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must have a suffix"));
+
+        let result = validate_wallet_migration_record_id("wallet.core_migration_envelope.bad/id");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("alphanumeric, underscore, or hyphen"));
+    }
+
+    #[test]
+    fn wallet_migration_record_remove_only_target_record() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        insert_wallet_migration_record(passphrase, "wallet.core_migration_envelope.keep", "Keep", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+        insert_wallet_migration_record(passphrase, "wallet.core_migration_envelope.remove", "Remove", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+
+        remove_wallet_migration_record(passphrase, "wallet.core_migration_envelope.remove").unwrap();
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["record_id"], "wallet.core_migration_envelope.keep");
+    }
+
+    #[test]
+    fn wallet_migration_record_unknown_records_survive() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let mut payload = make_provider_payload("pinata", "filebase");
+        let future_record = make_future_record("wallet.bip39.main", RECORD_TYPE_WALLET_BIP39, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about");
+        payload.secrets.insert(future_record.record_id.clone(), future_record.clone());
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        insert_wallet_migration_record(passphrase, "wallet.core_migration_envelope.test-6", "Test", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        assert!(decrypted.secrets.contains_key("wallet.bip39.main"));
+        assert!(decrypted.secrets.contains_key("wallet.core_migration_envelope.test-6"));
+    }
+
+    // ─── Hardening tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn collision_safe_record_ids_are_unique() {
+        let content1 = make_migration_envelope_json();
+        let content2 = serde_json::json!({"encrypted": true, "content": "different-data", "version": "1.0"}).to_string();
+        let id1 = generate_collision_safe_record_id("import", &content1);
+        let id2 = generate_collision_safe_record_id("import", &content2);
+        assert_ne!(id1, id2);
+        assert!(id1.starts_with(WALLET_MIGRATION_RECORD_PREFIX));
+        assert!(id2.starts_with(WALLET_MIGRATION_RECORD_PREFIX));
+    }
+
+    #[test]
+    fn insert_rejects_duplicate_record_id() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let record_id = "wallet.core_migration_envelope.test-dup";
+        insert_wallet_migration_record(passphrase, record_id, "First", &make_migration_envelope_json(), make_migration_metadata()).unwrap();
+
+        let result = insert_wallet_migration_record(passphrase, record_id, "Second", &make_migration_envelope_json(), make_migration_metadata());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn label_validation_rejects_empty() {
+        let result = validate_label("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("required"));
+
+        let result = validate_label("   ");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("required"));
+    }
+
+    #[test]
+    fn label_validation_rejects_too_long() {
+        let long_label = "x".repeat(MAX_LABEL_LENGTH + 1);
+        let result = validate_label(&long_label);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not exceed"));
+    }
+
+    #[test]
+    fn label_validation_accepts_valid() {
+        let result = validate_label("Main Wallet Backup");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Main Wallet Backup");
+
+        let result = validate_label("  Trimmed Label  ");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Trimmed Label");
+    }
+
+    #[test]
+    fn temp_file_guard_cleans_up() {
+        let guard = TempFileGuard::new("test_cleanup").unwrap();
+        let path = guard.path.clone();
+        fs::write(&path, "test content").unwrap();
+        assert!(path.exists());
+        drop(guard);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn import_file_validation_rejects_empty() {
+        let _guard = setup_test_vault_dir();
+        let empty_path = _guard.dir.join("empty.json");
+        fs::write(&empty_path, "").unwrap();
+        let result = validate_import_file(&empty_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn import_file_validation_rejects_too_large() {
+        let _guard = setup_test_vault_dir();
+        let large_path = _guard.dir.join("large.json");
+        let large_content = "x".repeat((MAX_IMPORT_FILE_SIZE + 1) as usize);
+        fs::write(&large_path, &large_content).unwrap();
+        let result = validate_import_file(&large_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn import_file_validation_accepts_valid() {
+        let _guard = setup_test_vault_dir();
+        let valid_path = _guard.dir.join("valid.json");
+        fs::write(&valid_path, r#"{"encrypted":true}"#).unwrap();
+        let result = validate_import_file(&valid_path).unwrap();
+        assert_eq!(result, r#"{"encrypted":true}"#);
+    }
+
+    #[test]
+    fn extract_validation_metadata_includes_required_fields() {
+        let validation = serde_json::json!({
+            "valid": true,
+            "restorable": true,
+            "private_keys_included": true,
+            "chain": {"network": "mainnet", "matches_current_chain": true},
+            "envelope_kdf_profile": "pbkdf2-hmac-sha512-v1",
+            "envelope_cipher_profile": "aes-256-gcm-v1",
+            "envelope_aad_profile": "commander-envelope-v1",
+            "envelope_coin_type": 420
+        });
+        let meta = extract_validation_metadata(&validation);
+        assert_eq!(meta["restorable"], true);
+        assert_eq!(meta["private_keys_included"], true);
+        assert_eq!(meta["envelope_kdf_profile"], "pbkdf2-hmac-sha512-v1");
+        assert_eq!(meta["envelope_cipher_profile"], "aes-256-gcm-v1");
+        assert_eq!(meta["envelope_aad_profile"], "commander-envelope-v1");
+        assert_eq!(meta["envelope_coin_type"], 420);
+        assert!(meta["chain"].is_object());
+    }
+
+    #[test]
+    fn extract_validation_metadata_handles_missing_fields() {
+        let validation = serde_json::json!({
+            "valid": true,
+            "restorable": false
+        });
+        let meta = extract_validation_metadata(&validation);
+        assert_eq!(meta["restorable"], false);
+        assert_eq!(meta["private_keys_included"], false);
+        assert_eq!(meta["envelope_kdf_profile"], "unknown");
+        assert_eq!(meta["envelope_cipher_profile"], "unknown");
+        assert_eq!(meta["envelope_aad_profile"], "unknown");
     }
 }

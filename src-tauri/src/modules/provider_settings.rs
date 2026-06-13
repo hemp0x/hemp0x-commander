@@ -367,6 +367,36 @@ pub fn ipfs_vault_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+pub fn ipfs_vault_provider_status() -> Result<serde_json::Value, String> {
+    let passphrase = get_cached_passphrase()
+        .ok_or("Vault is locked. Unlock it first.")?;
+    vault::check_provider_token_records(&passphrase)
+}
+
+#[tauri::command]
+pub fn ipfs_vault_import_bundle_replace(path: String, passphrase: Option<String>) -> Result<serde_json::Value, String> {
+    let result = vault::import_bundle_replace_from_path(&path, passphrase.as_deref())?;
+    clear_vault_passphrase();
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn ipfs_vault_remove_provider_token(provider_id: String) -> Result<serde_json::Value, String> {
+    let passphrase = get_cached_passphrase()
+        .ok_or("Vault is locked. Unlock it first.")?;
+    let record_id = match provider_id.as_str() {
+        "pinata" => "provider.pinata.api_token",
+        "filebase" => "provider.filebase.token",
+        other => return Err(format!("Unknown provider id: {other}")),
+    };
+    vault::remove_provider_token_from_vault(&passphrase, record_id)?;
+    Ok(serde_json::json!({
+        "removed": true,
+        "provider_id": provider_id,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

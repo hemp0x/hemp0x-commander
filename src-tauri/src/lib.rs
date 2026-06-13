@@ -252,6 +252,9 @@ pub fn run() {
             provider_settings::ipfs_lock_vault,
             provider_settings::ipfs_vault_status,
             provider_settings::ipfs_migrate_provider_tokens_to_vault,
+            provider_settings::ipfs_vault_provider_status,
+            provider_settings::ipfs_vault_remove_provider_token,
+            provider_settings::ipfs_vault_import_bundle_replace,
             // Stratum Commands
             stratum::start_stratum_server,
             stratum::stop_stratum_server,
@@ -282,11 +285,16 @@ pub fn run() {
             // Vault Commands
             vault::vault_get_info,
             vault::vault_setup,
-            vault::vault_verify_passphrase,
-            vault::vault_update_tokens,
             vault::vault_get_supported_record_types,
             vault::vault_get_supported_derivation_profiles,
             vault::vault_get_vault_path,
+            vault::vault_export_bundle_to_path,
+            vault::vault_validate_import_bundle,
+            vault::vault_import_wallet_migration_record_from_path,
+            vault::vault_export_current_wallet_migration_record,
+            vault::vault_restore_wallet_migration_record,
+            vault::vault_list_wallet_migration_records,
+            vault::vault_remove_wallet_migration_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -699,6 +699,186 @@
     let migrationRestoreConfirm = "";
     const RESTORE_CONFIRM = "RESTORE WALLET";
 
+    // --- UNIFIED VAULT WALLET RECORDS ---
+    let vaultWalletRecords = [];
+    let vaultWalletRecordsLoading = false;
+    let vaultWalletRecordsError = "";
+    let vaultWalletRecordsMsg = "";
+
+    let vaultListPassphrase = "";
+    let selectedRecordId = "";
+
+    let vaultImportPath = "";
+    let vaultImportLabel = "";
+    let vaultImportPassphrase = "";
+    let vaultImportMigrationPassphrase = "";
+    let vaultImportWorking = false;
+
+    let vaultExportLabel = "";
+    let vaultExportPassphrase = "";
+    let vaultExportVaultPassphrase = "";
+    let vaultExportWorking = false;
+
+    let vaultRestoreRecordId = "";
+    let vaultRestoreWalletName = "";
+    let vaultRestorePassphrase = "";
+    let vaultRestoreVaultPassphrase = "";
+    let vaultRestoreBirth = "";
+    let vaultRestoreConfirm = "";
+    let vaultRestoreWorking = false;
+    const VAULT_RESTORE_CONFIRM = "RESTORE WALLET";
+
+    let vaultRemoveRecordId = "";
+    let vaultRemovePassphrase = "";
+    let vaultRemoveWorking = false;
+
+    async function loadVaultWalletRecords() {
+        vaultWalletRecordsLoading = true;
+        vaultWalletRecordsError = "";
+        try {
+            vaultWalletRecords = await core.invoke("vault_list_wallet_migration_records", {
+                vaultPassphrase: vaultListPassphrase || null,
+            });
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+            vaultWalletRecords = [];
+        }
+        vaultWalletRecordsLoading = false;
+    }
+
+    function selectRecord(recordId) {
+        selectedRecordId = recordId;
+        vaultRestoreRecordId = recordId;
+        vaultRemoveRecordId = recordId;
+    }
+
+    async function vaultImportMigrationFile() {
+        vaultWalletRecordsError = "";
+        vaultWalletRecordsMsg = "";
+        try {
+            const selected = await open({
+                title: "Select Migration Envelope File",
+                multiple: false,
+                filters: [{ name: "Migration Files", extensions: ["json"] }],
+            });
+            if (!selected) return;
+            vaultImportPath = selected;
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+        }
+    }
+
+    async function executeVaultImport() {
+        if (!vaultImportPath || !vaultImportLabel || !vaultImportPassphrase) {
+            vaultWalletRecordsError = "File, label, and vault passphrase are required.";
+            return;
+        }
+        vaultImportWorking = true;
+        vaultWalletRecordsError = "";
+        vaultWalletRecordsMsg = "";
+        try {
+            const result = await core.invoke("vault_import_wallet_migration_record_from_path", {
+                path: vaultImportPath,
+                label: vaultImportLabel,
+                migrationPassphrase: vaultImportMigrationPassphrase || null,
+                vaultPassphrase: vaultImportPassphrase,
+            });
+            vaultWalletRecordsMsg = `Imported: ${result.label} (${result.record_id})`;
+            const listPassphrase = vaultImportPassphrase;
+            vaultImportPath = "";
+            vaultImportLabel = "";
+            vaultImportPassphrase = "";
+            vaultImportMigrationPassphrase = "";
+            vaultListPassphrase = listPassphrase;
+            await loadVaultWalletRecords();
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+        }
+        vaultImportWorking = false;
+    }
+
+    async function executeVaultExport() {
+        if (!vaultExportLabel || !vaultExportPassphrase || !vaultExportVaultPassphrase) {
+            vaultWalletRecordsError = "Label, migration passphrase, and vault passphrase are required.";
+            return;
+        }
+        vaultExportWorking = true;
+        vaultWalletRecordsError = "";
+        vaultWalletRecordsMsg = "";
+        try {
+            const result = await core.invoke("vault_export_current_wallet_migration_record", {
+                label: vaultExportLabel,
+                includePrivate: true,
+                migrationPassphrase: vaultExportPassphrase,
+                vaultPassphrase: vaultExportVaultPassphrase,
+            });
+            vaultWalletRecordsMsg = `Exported to vault: ${result.label} (${result.record_id})`;
+            vaultExportLabel = "";
+            vaultExportPassphrase = "";
+            vaultListPassphrase = vaultExportVaultPassphrase;
+            await loadVaultWalletRecords();
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+        }
+        vaultExportWorking = false;
+    }
+
+    async function executeVaultRestore() {
+        if (vaultRestoreConfirm !== VAULT_RESTORE_CONFIRM) {
+            vaultWalletRecordsError = "Type RESTORE WALLET to confirm.";
+            return;
+        }
+        if (!vaultRestoreRecordId || !vaultRestoreWalletName || !vaultRestorePassphrase || !vaultRestoreVaultPassphrase) {
+            vaultWalletRecordsError = "All fields are required.";
+            return;
+        }
+        vaultRestoreWorking = true;
+        vaultWalletRecordsError = "";
+        vaultWalletRecordsMsg = "";
+        try {
+            const result = await core.invoke("vault_restore_wallet_migration_record", {
+                recordId: vaultRestoreRecordId,
+                walletName: vaultRestoreWalletName,
+                migrationPassphrase: vaultRestorePassphrase,
+                birthHeight: vaultRestoreBirth ? Number(vaultRestoreBirth) : null,
+                vaultPassphrase: vaultRestoreVaultPassphrase,
+            });
+            vaultWalletRecordsMsg = `Wallet restored: ${result.wallet_name}`;
+            vaultRestoreRecordId = "";
+            vaultRestoreWalletName = "";
+            vaultRestorePassphrase = "";
+            vaultRestoreBirth = "";
+            vaultRestoreConfirm = "";
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+        }
+        vaultRestoreWorking = false;
+    }
+
+    async function executeVaultRemove() {
+        if (!vaultRemoveRecordId || !vaultRemovePassphrase) {
+            vaultWalletRecordsError = "Record ID and vault passphrase are required.";
+            return;
+        }
+        vaultRemoveWorking = true;
+        vaultWalletRecordsError = "";
+        vaultWalletRecordsMsg = "";
+        try {
+            const result = await core.invoke("vault_remove_wallet_migration_record", {
+                recordId: vaultRemoveRecordId,
+                vaultPassphrase: vaultRemovePassphrase,
+            });
+            vaultWalletRecordsMsg = `Removed: ${result.label} (${result.record_id})`;
+            vaultRemoveRecordId = "";
+            vaultRemovePassphrase = "";
+            selectedRecordId = "";
+            await loadVaultWalletRecords();
+        } catch (err) {
+            vaultWalletRecordsError = String(err);
+        }
+        vaultRemoveWorking = false;
+    }
+
     async function migrateExport() {
         if (migrationWorking) return;
         migrationError = "";
@@ -973,16 +1153,16 @@
     </div>
 </div>
 
-<!-- ================= MIGRATION TOOLS ================= -->
+<!-- ================= CORE WALLET MIGRATION ================= -->
 <div class="glass-panel panel-soft" style="margin: 1rem 0; padding: 0;">
     <header class="card-header">
-        <span class="card-title">MIGRATION TOOLS</span>
+        <span class="card-title">CORE WALLET MIGRATION</span>
     </header>
     <div style="padding: 1.5rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
         <!-- EXPORT -->
         <div style="display:flex; flex-direction:column; gap: 0.75rem;">
             <h4 style="color:var(--color-primary); margin:0; font-size:0.8rem;">EXPORT MIGRATION PACKAGE</h4>
-            <p class="desc">Creates a Core Next migration envelope for portable wallet backup. Public-only exports are for metadata checks and cannot restore a wallet. Private exports are encrypted and restorable. <em>Note: This backs up your wallet.dat keys. App secrets (provider tokens) are stored separately in an encrypted vault file (vault.json) with its own passphrase. Backing up wallet.dat does not back up the vault.</em></p>
+            <p class="desc">Creates a Core Next migration envelope for portable wallet.dat backup. Public-only exports are for metadata checks and cannot restore a wallet. Private exports are encrypted and restorable.</p>
             <button class="cyber-btn ghost wide" on:click={migrateSelectExportPath}>
                 {migrationExportPath ? migrationExportPath.split('/').pop().split('\\').pop() : "CHOOSE DESTINATION"}
             </button>
@@ -1078,6 +1258,141 @@
                 <p style="color:#ff5555; font-size:0.7rem; margin:0;">{migrationError}</p>
             {/if}
         </div>
+    </div>
+</div>
+
+<!-- ================= UNIFIED VAULT WALLET RECORDS ================= -->
+<div class="glass-panel panel-soft" style="margin: 1rem 0; padding: 0;">
+    <header class="card-header">
+        <span class="card-title">UNIFIED VAULT WALLET RECORDS</span>
+    </header>
+    <div style="padding: 1.5rem;">
+        <p class="desc" style="margin-bottom: 0.75rem;">
+            The unified vault (<code style="color:var(--color-primary);">vault.json</code>) can now store encrypted Core Next wallet migration envelopes as <code style="color:var(--color-primary);">wallet.core_migration_envelope</code> records. This is the transition path toward unified wallet vault storage.
+        </p>
+        <p class="desc" style="margin-bottom: 0.75rem;">
+            <strong style="color:#ffaa00;">wallet.dat is still the live Core wallet today.</strong> Vault wallet records are portable encrypted migration envelopes. Restoring from a vault record creates/restores a Core wallet via Core Next migration RPC.
+        </p>
+
+        <!-- Import from file -->
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+            <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem;">IMPORT MIGRATION FILE INTO VAULT</h4>
+            <p class="desc" style="margin-bottom:0.5rem;">Import an existing Core Next migration envelope file into the vault. The file will be validated before storing.</p>
+            <div style="display:flex; gap:0.4rem; margin-bottom:0.5rem;">
+                <button class="cyber-btn ghost small" on:click={vaultImportMigrationFile}>
+                    {vaultImportPath ? vaultImportPath.split('/').pop().split('\\').pop() : "SELECT FILE"}
+                </button>
+            </div>
+            <input type="text" class="input-glass" placeholder="Label (e.g. Main wallet backup)" bind:value={vaultImportLabel} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Migration envelope passphrase (if encrypted)" bind:value={vaultImportMigrationPassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Vault passphrase" bind:value={vaultImportPassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <button class="cyber-btn small" on:click={executeVaultImport} disabled={vaultImportWorking || !vaultImportPath || !vaultImportLabel || !vaultImportPassphrase}>
+                {vaultImportWorking ? "IMPORTING..." : "[ IMPORT TO VAULT ]"}
+            </button>
+        </div>
+
+        <!-- Export active wallet to vault -->
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+            <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem;">EXPORT ACTIVE WALLET TO VAULT</h4>
+            <p class="desc" style="margin-bottom:0.5rem;">Export the active Core wallet migration envelope directly into the vault. Requires a migration envelope passphrase.</p>
+            <input type="text" class="input-glass" placeholder="Label (e.g. Main wallet backup)" bind:value={vaultExportLabel} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Migration envelope passphrase (min 8 chars)" bind:value={vaultExportPassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Vault passphrase" bind:value={vaultExportVaultPassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <button class="cyber-btn small" on:click={executeVaultExport} disabled={vaultExportWorking || !vaultExportLabel || !vaultExportPassphrase || !vaultExportVaultPassphrase}>
+                {vaultExportWorking ? "EXPORTING..." : "[ EXPORT TO VAULT ]"}
+            </button>
+        </div>
+
+        <!-- Stored records list -->
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+            <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem;">STORED WALLET RECORDS</h4>
+            <div style="display:flex; gap:0.4rem; margin-bottom:0.5rem;">
+                <input type="password" class="input-glass" placeholder="Vault passphrase" bind:value={vaultListPassphrase} style="font-size:0.75rem; padding:0.5rem; flex:1;"/>
+                <button class="cyber-btn ghost small" on:click={loadVaultWalletRecords} disabled={vaultWalletRecordsLoading || !vaultListPassphrase}>
+                    {vaultWalletRecordsLoading ? "LOADING..." : "REFRESH"}
+                </button>
+            </div>
+            {#if vaultWalletRecords.length > 0}
+                <div style="max-height:200px; overflow-y:auto; margin-bottom:0.5rem;">
+                    {#each vaultWalletRecords as rec}
+                        <div
+                            class="vault-record-row"
+                            class:selected={selectedRecordId === rec.record_id}
+                            style="display:flex; align-items:center; gap:0.5rem; padding:0.35rem 0.4rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.65rem; cursor:pointer;"
+                            on:click={() => selectRecord(rec.record_id)}
+                            on:keydown={(e) => e.key === 'Enter' && selectRecord(rec.record_id)}
+                            role="button"
+                            tabindex="0"
+                        >
+                            <span style="color:var(--color-primary); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title={rec.record_id}>{rec.record_id}</span>
+                            <span style="color:#888;">{rec.label}</span>
+                            <span style="color:#666; font-size:0.55rem;">{rec.metadata?.source ?? "?"}</span>
+                        </div>
+                    {/each}
+                </div>
+            {:else if !vaultWalletRecordsLoading}
+                <p class="desc" style="margin:0;">No wallet migration records stored in the vault.</p>
+            {/if}
+        </div>
+
+        <!-- Restore from vault record -->
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+            <h4 style="color:var(--color-danger, #ff5555); margin:0 0 0.5rem; font-size:0.75rem;">RESTORE WALLET FROM VAULT RECORD</h4>
+            <p class="desc" style="color:#ffaa00; margin-bottom:0.5rem;"><strong>WARNING:</strong> Backup your current wallet first. This creates a new wallet. Restart required.</p>
+            <input type="text" class="input-glass" placeholder="Record ID" bind:value={vaultRestoreRecordId} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="text" class="input-glass" placeholder="New Wallet Name" bind:value={vaultRestoreWalletName} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Migration envelope passphrase" bind:value={vaultRestorePassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="password" class="input-glass" placeholder="Vault passphrase" bind:value={vaultRestoreVaultPassphrase} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="number" min="0" step="1" class="input-glass" placeholder="Birth Height (optional)" bind:value={vaultRestoreBirth} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <input type="text" class="input-glass" placeholder="Type RESTORE WALLET to confirm" bind:value={vaultRestoreConfirm} style="font-size:0.75rem; padding:0.5rem; margin-bottom:0.4rem;"/>
+            <button class="cyber-btn danger small" on:click={executeVaultRestore} disabled={vaultRestoreWorking || !vaultRestoreRecordId || !vaultRestoreWalletName || !vaultRestorePassphrase || !vaultRestoreVaultPassphrase || vaultRestoreConfirm !== VAULT_RESTORE_CONFIRM}>
+                {vaultRestoreWorking ? "RESTORING..." : "[ RESTORE WALLET ]"}
+            </button>
+        </div>
+
+        <!-- Remove record -->
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
+            <h4 style="color:var(--color-danger, #ff5555); margin:0 0 0.5rem; font-size:0.75rem;">REMOVE VAULT WALLET RECORD</h4>
+            <p class="desc" style="margin-bottom:0.5rem;">Remove a wallet migration record from the vault. This does not affect the Core wallet.</p>
+            <div style="display:flex; gap:0.4rem; margin-bottom:0.5rem;">
+                <input type="text" class="input-glass" placeholder="Record ID" bind:value={vaultRemoveRecordId} style="font-size:0.75rem; padding:0.5rem; flex:1;"/>
+                <input type="password" class="input-glass" placeholder="Vault passphrase" bind:value={vaultRemovePassphrase} style="font-size:0.75rem; padding:0.5rem; flex:1;"/>
+            </div>
+            <button class="cyber-btn ghost danger small" on:click={executeVaultRemove} disabled={vaultRemoveWorking || !vaultRemoveRecordId || !vaultRemovePassphrase}>
+                {vaultRemoveWorking ? "REMOVING..." : "[ REMOVE RECORD ]"}
+            </button>
+        </div>
+
+        {#if vaultWalletRecordsError}
+            <p style="color:#ff5555; font-size:0.7rem; margin:0.5rem 0 0;">{vaultWalletRecordsError}</p>
+        {/if}
+        {#if vaultWalletRecordsMsg}
+            <p style="color:var(--color-primary); font-size:0.7rem; margin:0.5rem 0 0;">{vaultWalletRecordsMsg}</p>
+        {/if}
+    </div>
+</div>
+
+<!-- ================= APP SECRETS VAULT ================= -->
+<div class="glass-panel panel-soft" style="margin: 1rem 0; padding: 0;">
+    <header class="card-header">
+        <span class="card-title">APP SECRETS VAULT</span>
+    </header>
+    <div style="padding: 1.5rem;">
+        <p class="desc" style="margin-bottom: 0.75rem;">
+            Commander stores app secrets (such as IPFS provider tokens for Pinata and Filebase) and encrypted Core Next wallet migration envelopes in an encrypted vault file: <code style="color:var(--color-primary);">vault.json</code>. This is separate from your <code style="color:var(--color-primary);">wallet.dat</code> file, which holds your wallet keys and funds.
+        </p>
+        <p class="desc" style="margin-bottom: 0.75rem;">
+            A full Commander backup may require both files. They use separate passphrases and are managed independently. Vault wallet records are managed in the <strong style="color:var(--color-primary);">Unified Vault Wallet Records</strong> section above.
+        </p>
+        <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+            <div style="display:grid; grid-template-columns:auto 1fr; gap:0.4rem 1rem; font-size:0.7rem;">
+                <span style="color:#888;">wallet.dat</span><span style="color:#aaa;">Core wallet keys and funds — managed on this page</span>
+                <span style="color:#888;">vault.json</span><span style="color:#aaa;">App/provider secrets + wallet migration records — managed on this page and in IPFS Settings</span>
+            </div>
+        </div>
+        <p class="desc">
+            Vault backup, restore, and provider-token management are in <strong style="color:var(--color-primary);">IPFS Settings</strong> under the Vault section.
+        </p>
     </div>
 </div>
 

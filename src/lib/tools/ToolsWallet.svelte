@@ -1112,6 +1112,85 @@
         return `${(num / (1024 * 1024)).toFixed(2)} MB`;
     }
 
+    // --- WEBCOM / HEMP0X VAULT INTEROP (63) ---
+
+    let webcomInteropSummary = null;
+    let webcomInteropLoading = false;
+    let webcomInteropError = "";
+
+    let abImportWorking = false;
+    let abImportResult = null;
+    let abImportError = "";
+
+    let abExportWorking = false;
+    let abExportResult = null;
+    let abExportError = "";
+
+    let abSummary = null;
+    let abSummaryLoading = false;
+
+    async function loadWebcomInteropSummary() {
+        if (!tauriReady || !vaultUnlocked) return;
+        webcomInteropLoading = true;
+        webcomInteropError = "";
+        try {
+            webcomInteropSummary = await core.invoke("ipfs_vault_get_webcom_interop_summary", {
+                vaultPassphrase: null,
+            });
+        } catch (err) {
+            webcomInteropSummary = null;
+            webcomInteropError = String(err);
+        }
+        webcomInteropLoading = false;
+    }
+
+    async function loadAddressBookSummary() {
+        if (!tauriReady || !vaultUnlocked) return;
+        abSummaryLoading = true;
+        try {
+            abSummary = await core.invoke("ipfs_vault_get_address_book_record_summary", {
+                vaultPassphrase: null,
+            });
+        } catch {
+            abSummary = null;
+        }
+        abSummaryLoading = false;
+    }
+
+    async function executeAbImport() {
+        abImportWorking = true;
+        abImportError = "";
+        abImportResult = null;
+        try {
+            abImportResult = await core.invoke("ipfs_vault_import_address_book_record", {
+                vaultPassphrase: null,
+            });
+            await loadAddressBookSummary();
+            showToast(`Imported ${abImportResult.imported} address book entries`, "success");
+        } catch (err) {
+            abImportError = String(err);
+            showToast(`Address book import failed: ${err}`, "error");
+        }
+        abImportWorking = false;
+    }
+
+    async function executeAbExport() {
+        abExportWorking = true;
+        abExportError = "";
+        abExportResult = null;
+        try {
+            abExportResult = await core.invoke("ipfs_vault_export_address_book_record", {
+                vaultPassphrase: null,
+            });
+            await loadAddressBookSummary();
+            showToast(`Exported ${abExportResult.hemp_entries} address book entries`, "success");
+        } catch (err) {
+            abExportError = String(err);
+            showToast(`Address book export failed: ${err}`, "error");
+        }
+        abExportWorking = false;
+    }
+
     function formatUnixShort(ts) {
         const n = Number(ts);
         if (!n) return "—";
@@ -1354,10 +1433,6 @@
         vaultWalletRecordsLoading = true;
         vaultWalletRecordsError = "";
         try {
-            // Prefer the cached vault session if unlocked; fall back to
-            // the explicit per-call passphrase field for users who
-            // deliberately keep the vault locked and re-enter it
-            // each time.
             const explicit = vaultListPassphrase && !vaultUnlocked ? vaultListPassphrase : null;
             vaultWalletRecords = await core.invoke(
                 "ipfs_vault_list_wallet_migration_records",
@@ -1369,6 +1444,8 @@
         }
         vaultWalletRecordsLoading = false;
         vaultWalletRecordsLoaded = true;
+        loadWebcomInteropSummary();
+        loadAddressBookSummary();
     }
 
     async function vaultImportMigrationFile() {
@@ -2267,30 +2344,30 @@
                                     role="button"
                                     tabindex="0"
                                 >
-                                    <div style="flex:1; min-width:0;">
-                                        <div style="color:var(--color-primary); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{rec.label}</div>
-                                        <div style="color:#888; font-size:0.6rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title={rec.record_id}>
-                                            {rec.metadata?.source === "core-next-exportwalletmigration" ? "Active wallet export" : rec.metadata?.source ?? "Imported file"}
-                                            {#if rec.modified} • {new Date(rec.modified * 1000).toLocaleString()}{/if}
-                                        </div>
-                                    </div>
-                                    <div style="display:flex; gap:0.25rem;">
-                                        {#if rec.metadata?.recovery_mode === "vault_passphrase"}
-                                            <span style="color:var(--color-primary); font-size:0.6rem; border:1px solid rgba(0,255,65,0.3); padding:1px 4px; border-radius:3px;" title="Recovery uses vault passphrase">VAULT RECOVERY</span>
-                                        {:else if rec.metadata?.recovery_mode === "separate_passphrase"}
-                                            <span style="color:#ffaa00; font-size:0.6rem; border:1px solid rgba(255,170,0,0.3); padding:1px 4px; border-radius:3px;" title="Recovery requires separate password">SEPARATE PW</span>
-                                        {/if}
+	                                    <div style="flex:1; min-width:0;">
+	                                        <div style="color:var(--color-primary); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{rec.label}</div>
+	                                        <div style="color:#888; font-size:0.6rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title={rec.record_id}>
+	                                            {rec.metadata?.source === "core-next-exportwalletmigration" ? "Active wallet export" : rec.metadata?.source ?? "Imported file"}
+	                                            {#if rec.modified} • {new Date(rec.modified * 1000).toLocaleString()}{/if}
+	                                        </div>
+	                                        <div style="display:flex; gap:0.25rem;">
+	                                            {#if rec.metadata?.recovery_mode === "vault_passphrase"}
+	                                                <span style="color:var(--color-primary); font-size:0.6rem; border:1px solid rgba(0,255,65,0.3); padding:1px 4px; border-radius:3px;" title="Recovery uses vault passphrase">VAULT RECOVERY</span>
+	                                        {:else if rec.metadata?.recovery_mode === "separate_passphrase"}
+	                                            <span style="color:#ffaa00; font-size:0.6rem; border:1px solid rgba(255,170,0,0.3); padding:1px 4px; border-radius:3px;" title="Recovery requires separate password">SEPARATE PW</span>
+	                                        {/if}
                                         {#if rec.metadata?.restorable}
                                             <span style="color:var(--color-primary); font-size:0.6rem; border:1px solid rgba(0,255,65,0.4); padding:1px 4px; border-radius:3px;">RESTORABLE</span>
                                         {:else}
                                             <span style="color:#888; font-size:0.6rem; border:1px solid rgba(255,255,255,0.1); padding:1px 4px; border-radius:3px;">PUBLIC ONLY</span>
-                                        {/if}
-                                        {#if rec.metadata?.private_keys_included}
-                                            <span style="color:#ffaa00; font-size:0.6rem; border:1px solid rgba(255,170,0,0.4); padding:1px 4px; border-radius:3px;">PRIVATE</span>
-                                        {/if}
-                                    </div>
-                                </div>
-                            {/each}
+	                                        {/if}
+	                                        {#if rec.metadata?.private_keys_included}
+	                                            <span style="color:#ffaa00; font-size:0.6rem; border:1px solid rgba(255,170,0,0.4); padding:1px 4px; border-radius:3px;">PRIVATE</span>
+	                                        {/if}
+	                                    </div>
+	                                </div>
+	                            </div>
+	                            {/each}
                         </div>
                     {/if}
 
@@ -2510,6 +2587,123 @@
                                 {/if}
                             </div>
                         </div>
+                    </div>
+
+                    <!-- WebCom / Hemp0x Vault Interop (63) -->
+                    <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
+                        <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem;">HEMP0X VAULT INTEROP</h4>
+                        <p class="desc" style="margin:0 0 0.75rem;">WebCom wallet records, shared address book, and portable vault metadata.</p>
+
+                        {#if !vaultUnlocked}
+                            <p class="desc" style="margin:0; color:#888;">Unlock the vault to view interop data.</p>
+                        {:else if webcomInteropLoading}
+                            <p class="desc" style="margin:0; color:#666;">Loading interop summary...</p>
+                        {:else if webcomInteropError}
+                            <p class="desc" style="margin:0; color:#ff5555;">{webcomInteropError}</p>
+                        {:else if webcomInteropSummary}
+                            <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                                {#if webcomInteropSummary.present_record_count > 0}
+                                    <p class="desc" style="margin:0; color:#888;">
+                                        {webcomInteropSummary.present_record_count} of {webcomInteropSummary.known_record_count} known WebCom records detected.
+                                    </p>
+                                {/if}
+                                {#each webcomInteropSummary.items as item}
+                                    {#if item.exists}
+                                        <div style="background:rgba(0,255,65,0.04); border:1px solid rgba(0,255,65,0.1); border-radius:4px; padding:0.4rem 0.6rem; font-size:0.65rem;">
+                                            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
+                                                <span style="color:#aaa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{item.record_id}</span>
+                                                <span style="color:var(--color-primary); font-weight:600;">{item.label}</span>
+                                            </div>
+                                            <div style="display:flex; gap:0.75rem; margin-top:0.15rem; color:#888; flex-wrap:wrap;">
+                                                {#if item.origin_app}<span>from: {item.origin_app}</span>{/if}
+                                                {#if item.network}<span>net: {item.network}</span>{/if}
+                                            </div>
+                                            {#if item.derivation_profiles && Object.keys(item.derivation_profiles).length > 0}
+                                                <div style="margin-top:0.2rem; color:#666;">
+                                                    Derivation:
+                                                    {#each Object.entries(item.derivation_profiles) as [k, v]}
+                                                        <span style="margin-left:0.3rem; color:var(--color-primary);">{k}:{v}</span>
+                                                    {/each}
+                                                </div>
+                                            {/if}
+                                            {#if item.account != null}
+                                                <div style="margin-top:0.1rem; color:#666;">
+                                                    Account: {item.account} | External: {item.external_count} | Change: {item.change_count}
+                                                </div>
+                                            {/if}
+                                            {#if item.seed_type}
+                                                <div style="margin-top:0.1rem; color:#666;">Seed: {item.seed_type}</div>
+                                            {/if}
+                                            {#if item.value_kind}
+                                                <div style="margin-top:0.1rem; color:#888;">
+                                                    {#if item.record_id === "app_setting.webcom.swap_secrets"}
+                                                        Swap secrets preserved (opaque)
+                                                    {:else}
+                                                        Value kind: {item.value_kind}
+                                                    {/if}
+                                                </div>
+                                            {/if}
+                                        </div>
+                                    {:else}
+                                        <div style="color:#555; font-size:0.65rem;">{item.record_id} - not present</div>
+                                    {/if}
+                                {/each}
+                            </div>
+                        {:else}
+                            <p class="desc" style="margin:0; color:#888;">No WebCom records detected.</p>
+                        {/if}
+
+                        <div class="laser-divider" style="margin:0.6rem 0;"></div>
+
+                        <h5 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.7rem;">SHARED ADDRESS BOOK</h5>
+                        {#if !vaultUnlocked}
+                            <p class="desc" style="margin:0; color:#888;">Unlock vault to manage address book.</p>
+                        {:else if abSummaryLoading}
+                            <p class="desc" style="margin:0; color:#666;">...</p>
+                        {:else if abSummary && abSummary.exists}
+                            <p class="desc" style="margin:0 0 0.5rem; color:#888;">
+                                {abSummary.total_entries} entries ({abSummary.hemp_entries} Hemp, {abSummary.bitcoin_entries} BTC)
+                            </p>
+                            <div class="btn-row" style="gap:0.5rem; flex-wrap:wrap;">
+                                <button class="cyber-btn ghost tiny" on:click={executeAbImport} disabled={abImportWorking}>
+                                    {abImportWorking ? "..." : "IMPORT ADDRESS BOOK FROM VAULT"}
+                                </button>
+                                <button class="cyber-btn ghost tiny" on:click={executeAbExport} disabled={abExportWorking}>
+                                    {abExportWorking ? "..." : "EXPORT ADDRESS BOOK TO VAULT"}
+                                </button>
+                            </div>
+                            {#if abImportError}
+                                <p style="color:#ff5555; font-size:0.65rem; margin:0.3rem 0 0;">{abImportError}</p>
+                            {/if}
+                            {#if abImportResult && !abImportError}
+                                <p style="color:var(--color-primary); font-size:0.65rem; margin:0.3rem 0 0;">
+                                    Imported: {abImportResult.imported} | Updated: {abImportResult.updated} | Skipped: {abImportResult.skipped}
+                                </p>
+                            {/if}
+                            {#if abExportError}
+                                <p style="color:#ff5555; font-size:0.65rem; margin:0.3rem 0 0;">{abExportError}</p>
+                            {/if}
+                            {#if abExportResult && !abExportError}
+                                <p style="color:var(--color-primary); font-size:0.65rem; margin:0.3rem 0 0;">
+                                    Exported {abExportResult.hemp_entries} entries
+                                </p>
+                            {/if}
+                        {:else if abSummary && !abSummary.exists}
+                            <p class="desc" style="margin:0 0 0.5rem; color:#888;">No address book record in vault.</p>
+                            <button class="cyber-btn ghost tiny" on:click={executeAbExport} disabled={abExportWorking}>
+                                {abExportWorking ? "..." : "EXPORT ADDRESS BOOK TO VAULT"}
+                            </button>
+                            {#if abExportError}
+                                <p style="color:#ff5555; font-size:0.65rem; margin:0.3rem 0 0;">{abExportError}</p>
+                            {/if}
+                            {#if abExportResult && !abExportError}
+                                <p style="color:var(--color-primary); font-size:0.65rem; margin:0.3rem 0 0;">
+                                    Exported {abExportResult.hemp_entries} entries
+                                </p>
+                            {/if}
+                        {:else}
+                            <p class="desc" style="margin:0; color:#888;">Address book summary unavailable.</p>
+                        {/if}
                     </div>
 
                     <!-- Advanced vault records -->

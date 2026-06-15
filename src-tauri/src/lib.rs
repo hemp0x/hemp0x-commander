@@ -300,6 +300,11 @@ pub fn run() {
             vault::vault_restore_wallet_migration_record,
             vault::vault_list_wallet_migration_records,
             vault::vault_remove_wallet_migration_record,
+            // Vault WebCom / Hemp0x Vault Interop Commands
+            vault::vault_get_webcom_interop_summary,
+            vault::vault_get_address_book_record_summary,
+            vault::vault_export_address_book_record,
+            vault::vault_import_address_book_record,
             // Vault cached-session wrappers for the Wallet page
             provider_settings::ipfs_vault_setup_and_unlock,
             provider_settings::ipfs_vault_unlock_status,
@@ -308,6 +313,11 @@ pub fn run() {
             provider_settings::ipfs_vault_restore_wallet_migration_record,
             provider_settings::ipfs_vault_remove_wallet_migration_record,
             provider_settings::ipfs_vault_import_wallet_migration_record_from_path,
+            // Vault WebCom / Hemp0x Vault Interop Cached-Session Wrappers
+            provider_settings::ipfs_vault_get_webcom_interop_summary,
+            provider_settings::ipfs_vault_get_address_book_record_summary,
+            provider_settings::ipfs_vault_export_address_book_record,
+            provider_settings::ipfs_vault_import_address_book_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

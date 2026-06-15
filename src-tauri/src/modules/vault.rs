@@ -50,9 +50,28 @@ const RECORD_TYPE_WALLET_WATCH_ONLY: &str = "wallet.watch_only";
 const RECORD_TYPE_PROTOCOL_NOSTR: &str = "protocol.nostr_key";
 const RECORD_TYPE_APP_SECRET: &str = "app.secret";
 const RECORD_TYPE_NOTE_SECURE: &str = "note.secure";
+const RECORD_TYPE_APP_SETTING_SWAP_SECRETS: &str = "app_setting.webcom.swap_secrets";
+const RECORD_TYPE_APP_SETTING_ADDRESS_BOOK: &str = "app_setting.hemp0x.address_book.v1";
 
 const RECORD_ID_PINATA: &str = "provider.pinata.api_token";
 const RECORD_ID_FILEBASE: &str = "provider.filebase.token";
+const RECORD_ID_WALLET_HEMP_PRIMARY: &str = "wallet.webcom.hemp.primary";
+const RECORD_ID_WALLET_BTC_LITE_PRIMARY: &str = "wallet.webcom.btc_lite.primary";
+const RECORD_ID_SWAP_SECRETS: &str = "app_setting.webcom.swap_secrets";
+const RECORD_ID_ADDRESS_BOOK: &str = "app_setting.hemp0x.address_book";
+
+/// Known WebCom record IDs for interop summary / preservation tracking.
+const KNOWN_WEBCOM_RECORD_IDS: &[&str] = &[
+    RECORD_ID_WALLET_HEMP_PRIMARY,
+    RECORD_ID_WALLET_BTC_LITE_PRIMARY,
+    RECORD_ID_SWAP_SECRETS,
+    RECORD_ID_ADDRESS_BOOK,
+];
+
+const ADDRESS_BOOK_SCHEMA: &str = "hemp0x.address_book";
+const ADDRESS_BOOK_SCHEMA_VERSION: i32 = 1;
+const ADDRESS_BOOK_CHAIN_HEMP: &str = "hemp0x";
+const ADDRESS_BOOK_CHAIN_BITCOIN: &str = "bitcoin";
 
 pub const VALID_NETWORKS: &[&str] = &["mainnet", "testnet", "regtest"];
 
@@ -274,6 +293,9 @@ fn setup_test_vault_dir() -> TestVaultDirGuard {
 impl Drop for TestVaultDirGuard {
     fn drop(&mut self) {
         TEST_VAULT_DIR.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+        crate::modules::files::TEST_COMMANDER_DIR.with(|cell| {
             *cell.borrow_mut() = None;
         });
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -2017,6 +2039,347 @@ pub fn vault_remove_wallet_migration_record(
 ) -> Result<serde_json::Value, String> {
     let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
     remove_wallet_migration_record(&passphrase, &record_id)
+}
+
+// ─── WebCom / Hemp0x Vault Interop Commands ─────────────────────────────
+
+#[tauri::command]
+pub fn vault_get_webcom_interop_summary(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(&passphrase, &bundle.vault)?;
+
+    let mut items: Vec<serde_json::Value> = Vec::new();
+
+    for record_id in KNOWN_WEBCOM_RECORD_IDS {
+        if let Some(record) = payload.secrets.get(*record_id) {
+            let mut summary = serde_json::json!({
+                "exists": true,
+                "record_id": record.record_id,
+                "record_type": record.record_type,
+                "label": record.label,
+                "origin_app": record.origin_app,
+                "network": record.network,
+                "created": record.created,
+                "modified": record.modified,
+                "has_value": !record.value.is_empty(),
+            });
+
+            if let Some(ref meta) = record.metadata {
+                if let Some(obj) = summary.as_object_mut() {
+                    if let Some(vk) = meta.get("value_kind") {
+                        obj.insert("value_kind".to_string(), vk.clone());
+                    }
+                    if let Some(schema) = meta.get("schema") {
+                        obj.insert("metadata_schema".to_string(), schema.clone());
+                    }
+                    if let Some(sv) = meta.get("schema_version") {
+                        obj.insert("metadata_schema_version".to_string(), sv.clone());
+                    }
+                }
+
+                if record.record_id == RECORD_ID_WALLET_HEMP_PRIMARY {
+                    if let Some(recovery) = meta.get("recovery") {
+                        if let Some(obj) = summary.as_object_mut() {
+                            if let Some(dp) = recovery.get("derivationProfiles") {
+                                obj.insert("derivation_profiles".to_string(), dp.clone());
+                            }
+                            if let Some(st) = recovery.get("seedType") {
+                                obj.insert("seed_type".to_string(), st.clone());
+                            }
+                            if let Some(ca) = recovery.get("createdAt") {
+                                obj.insert("recovery_created_at".to_string(), ca.clone());
+                            }
+                            if let Some(ua) = recovery.get("updatedAt") {
+                                obj.insert("recovery_updated_at".to_string(), ua.clone());
+                            }
+                            if let Some(net) = recovery.get("network") {
+                                obj.insert("recovery_network".to_string(), net.clone());
+                            }
+                        }
+                    }
+                    if let Some(obj) = summary.as_object_mut() {
+                        if let Some(acct) = meta.get("account") { obj.insert("account".to_string(), acct.clone()); }
+                        if let Some(ec) = meta.get("external_count") { obj.insert("external_count".to_string(), ec.clone()); }
+                        if let Some(cc) = meta.get("change_count") { obj.insert("change_count".to_string(), cc.clone()); }
+                    }
+                }
+
+                if record.record_id == RECORD_ID_WALLET_BTC_LITE_PRIMARY {
+                    if let Some(obj) = summary.as_object_mut() {
+                        if let Some(ba) = meta.get("btc_account") { obj.insert("btc_account".to_string(), ba.clone()); }
+                        if let Some(bec) = meta.get("btc_external_count") { obj.insert("btc_external_count".to_string(), bec.clone()); }
+                        if let Some(bdp) = meta.get("btc_derivation_profile") { obj.insert("btc_derivation_profile".to_string(), bdp.clone()); }
+                    }
+                }
+
+                if record.record_id == RECORD_ID_SWAP_SECRETS {
+                    if let Some(obj) = summary.as_object_mut() {
+                        if let Some(vk) = meta.get("value_kind") { obj.insert("value_kind".to_string(), vk.clone()); }
+                    }
+                }
+            }
+
+            if let Some(ref dp) = record.derivation_profiles {
+                if let Some(obj) = summary.as_object_mut() {
+                    obj.insert("derivation_profiles".to_string(), serde_json::to_value(dp).unwrap_or_default());
+                }
+            }
+
+            items.push(summary);
+        } else {
+            items.push(serde_json::json!({
+                "exists": false,
+                "record_id": record_id,
+            }));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "vault_locked": false,
+        "items": items,
+        "known_record_count": KNOWN_WEBCOM_RECORD_IDS.len(),
+        "present_record_count": items.iter().filter(|i| i["exists"].as_bool().unwrap_or(false)).count(),
+    }))
+}
+
+#[tauri::command]
+pub fn vault_get_address_book_record_summary(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(&passphrase, &bundle.vault)?;
+
+    if let Some(record) = payload.secrets.get(RECORD_ID_ADDRESS_BOOK) {
+        let value_str = &record.value;
+        if value_str.is_empty() {
+            return Ok(serde_json::json!({ "exists": false, "record_id": RECORD_ID_ADDRESS_BOOK, "error": "empty value" }));
+        }
+
+        match serde_json::from_str::<serde_json::Value>(value_str) {
+            Ok(parsed) => {
+                let schema = parsed.get("schema").and_then(|v| v.as_str()).unwrap_or("");
+                let schema_version = parsed.get("schema_version").and_then(|v| v.as_i64()).unwrap_or(0);
+                let exported_at = parsed.get("exported_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                let entries = parsed.get("entries").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+                let hemp_entries = parsed.get("entries").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter(|e| e.get("chain").and_then(|c| c.as_str()) == Some(ADDRESS_BOOK_CHAIN_HEMP)).count())
+                    .unwrap_or(0);
+                let btc_entries = parsed.get("entries").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter(|e| e.get("chain").and_then(|c| c.as_str()) == Some(ADDRESS_BOOK_CHAIN_BITCOIN)).count())
+                    .unwrap_or(0);
+
+                Ok(serde_json::json!({
+                    "exists": true,
+                    "record_id": RECORD_ID_ADDRESS_BOOK,
+                    "schema": schema,
+                    "schema_version": schema_version,
+                    "exported_at": exported_at,
+                    "total_entries": entries,
+                    "hemp_entries": hemp_entries,
+                    "bitcoin_entries": btc_entries,
+                }))
+            }
+            Err(_) => Ok(serde_json::json!({
+                "exists": true,
+                "record_id": RECORD_ID_ADDRESS_BOOK,
+                "error": "malformed value JSON",
+            })),
+        }
+    } else {
+        Ok(serde_json::json!({ "exists": false, "record_id": RECORD_ID_ADDRESS_BOOK }))
+    }
+}
+
+#[tauri::command]
+pub fn vault_export_address_book_record(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    let mut bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let dek = unwrap_dek_with_passphrase(&passphrase, &bundle.vault)?;
+    let mut payload = decrypt_payload_with_dek(dek.as_slice(), &bundle.vault)?;
+
+    let local_entries = crate::modules::files::load_address_book()
+        .map_err(|e| format!("Cannot load local address book: {e}"))?;
+
+    let now = chrono::Utc::now().timestamp();
+
+    let mut merged_entries: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for entry in &local_entries {
+        let normalized = entry.address.trim().to_string();
+        if !normalized.is_empty() && !seen.contains(&normalized) {
+            seen.insert(normalized.clone());
+            merged_entries.push(serde_json::json!({
+                "chain": ADDRESS_BOOK_CHAIN_HEMP,
+                "label": entry.label,
+                "address": entry.address,
+                "locked": entry.locked,
+            }));
+        }
+    }
+
+    if let Some(existing_record) = payload.secrets.get(RECORD_ID_ADDRESS_BOOK) {
+        if let Ok(existing_value) = serde_json::from_str::<serde_json::Value>(&existing_record.value) {
+            if let Some(existing_entries) = existing_value.get("entries").and_then(|v| v.as_array()) {
+                for e in existing_entries {
+                    let chain = e.get("chain").and_then(|c| c.as_str()).unwrap_or("");
+                    let addr = e.get("address").and_then(|a| a.as_str()).unwrap_or("").trim().to_string();
+                    if chain == ADDRESS_BOOK_CHAIN_BITCOIN && !addr.is_empty() && !seen.contains(&addr) {
+                        seen.insert(addr.clone());
+                        merged_entries.push(e.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let address_book_value = serde_json::json!({
+        "schema": ADDRESS_BOOK_SCHEMA,
+        "schema_version": ADDRESS_BOOK_SCHEMA_VERSION,
+        "exported_at": now,
+        "entries": merged_entries,
+    });
+
+    let record = SecretRecord {
+        record_id: RECORD_ID_ADDRESS_BOOK.to_string(),
+        record_type: RECORD_TYPE_APP_SETTING_ADDRESS_BOOK.to_string(),
+        label: "Hemp0x Address Book".to_string(),
+        value: serde_json::to_string(&address_book_value).map_err(|e| format!("Cannot serialize address book: {e}"))?,
+        metadata: Some(serde_json::json!({
+            "value_kind": "embedded_json",
+            "schema": ADDRESS_BOOK_SCHEMA,
+            "schema_version": ADDRESS_BOOK_SCHEMA_VERSION,
+        })),
+        tags: Some(vec!["hemp0x".to_string(), "address_book".to_string()]),
+        origin_app: Some(APP_IDENTIFIER.to_string()),
+        derivation_profiles: None,
+        network: Some(bundle.vault.network.clone().unwrap_or_else(|| "mainnet".to_string())),
+        created: now,
+        modified: now,
+    };
+
+    payload.secrets.insert(RECORD_ID_ADDRESS_BOOK.to_string(), record);
+    bundle.vault.modified = now;
+    bundle.vault.payload = encrypt_payload_with_dek(dek.as_slice(), &payload, &bundle.vault)?;
+    save_bundle_atomic(&bundle)?;
+
+    Ok(serde_json::json!({
+        "exported": true,
+        "record_id": RECORD_ID_ADDRESS_BOOK,
+        "hemp_entries": local_entries.len(),
+    }))
+}
+
+#[tauri::command]
+pub fn vault_import_address_book_record(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(&passphrase, &bundle.vault)?;
+
+    let record = payload.secrets.get(RECORD_ID_ADDRESS_BOOK)
+        .ok_or("No address book record found in vault")?;
+
+    let value_str = &record.value;
+    if value_str.is_empty() {
+        return Err("Address book record value is empty".to_string());
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(value_str)
+        .map_err(|e| format!("Malformed address book record: {e}"))?;
+
+    let schema = parsed.get("schema").and_then(|v| v.as_str()).unwrap_or("");
+    let schema_version = parsed.get("schema_version").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    if schema != ADDRESS_BOOK_SCHEMA || schema_version != ADDRESS_BOOK_SCHEMA_VERSION as i64 {
+        return Err(format!(
+            "Address book schema mismatch: expected {} v{}, got {} v{}",
+            ADDRESS_BOOK_SCHEMA, ADDRESS_BOOK_SCHEMA_VERSION, schema, schema_version
+        ));
+    }
+
+    let vault_entries = parsed.get("entries").and_then(|v| v.as_array())
+        .ok_or("Address book record has no entries array")?;
+
+    let mut local_entries = crate::modules::files::load_address_book()
+        .map_err(|e| format!("Cannot load local address book: {e}"))?;
+
+    let now = chrono::Utc::now().timestamp();
+    let mut existing_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, entry) in local_entries.iter().enumerate() {
+        let addr = entry.address.trim().to_string();
+        if !addr.is_empty() {
+            existing_map.insert(addr, i);
+        }
+    }
+
+    let mut imported = 0u32;
+    let mut updated = 0u32;
+    let mut skipped = 0u32;
+    let mut preserved_non_hemp = 0u32;
+
+    for e in vault_entries {
+        let chain = e.get("chain").and_then(|c| c.as_str()).unwrap_or("");
+        let addr = e.get("address").and_then(|a| a.as_str()).unwrap_or("").trim().to_string();
+        let label = e.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+        let locked = e.get("locked").and_then(|l| l.as_bool()).unwrap_or(false);
+
+        if addr.is_empty() {
+            skipped += 1;
+            continue;
+        }
+
+        if chain != ADDRESS_BOOK_CHAIN_HEMP {
+            preserved_non_hemp += 1;
+            continue;
+        }
+
+        if let Some(&idx) = existing_map.get(&addr) {
+            let existing = &local_entries[idx];
+            let merged_label = if label.is_empty() || (!existing.label.is_empty() && label != existing.label) {
+                existing.label.clone()
+            } else {
+                label.clone()
+            };
+            let merged_locked = locked || existing.locked;
+            if merged_label != existing.label || merged_locked != existing.locked {
+                local_entries[idx] = crate::modules::models::AddressBookEntry {
+                    label: merged_label,
+                    address: existing.address.clone(),
+                    locked: merged_locked,
+                    date: existing.date,
+                };
+                updated += 1;
+            }
+            continue;
+        }
+
+        local_entries.push(crate::modules::models::AddressBookEntry {
+            label,
+            address: addr.clone(),
+            locked,
+            date: now as u64,
+        });
+        existing_map.insert(addr, local_entries.len() - 1);
+        imported += 1;
+    }
+
+    crate::modules::files::save_address_book(local_entries)
+        .map_err(|e| format!("Cannot save local address book: {e}"))?;
+
+    Ok(serde_json::json!({
+        "imported": imported,
+        "updated": updated,
+        "skipped": skipped,
+        "preserved_non_hemp_entries": preserved_non_hemp,
+    }))
 }
 
 #[cfg(test)]
@@ -3897,6 +4260,349 @@ mod tests {
         let records = list_wallet_migration_records(passphrase).unwrap();
         let rec = records.iter().find(|r| r["record_id"] == record_id).unwrap();
         assert_eq!(rec["metadata"]["recovery_mode"], RECOVERY_MODE_VAULT_PASSPHRASE);
+    }
+
+    // ─── slice 63: WebCom / Hemp0x Vault Interop Tests ────────────────────
+
+    #[test]
+    fn interop_webcom_wallet_summary_does_not_return_value() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-interop-pass";
+        let mut payload = make_provider_payload("pinata", "filebase");
+        let mut dp = std::collections::HashMap::new();
+        dp.insert("hemp".to_string(), DERIVATION_HEMP_CANONICAL_420.to_string());
+        let hemp_wallet = SecretRecord {
+            record_id: RECORD_ID_WALLET_HEMP_PRIMARY.to_string(),
+            record_type: RECORD_TYPE_WALLET_BIP39.to_string(),
+            label: "WebCom Hemp Wallet".to_string(),
+            value: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            metadata: Some(serde_json::json!({
+                "account": 0,
+                "external_count": 20,
+                "change_count": 6,
+                "recovered_external_indices": [],
+                "recovery": {
+                    "schemaVersion": 1,
+                    "seedType": "bip39",
+                    "network": "mainnet",
+                    "derivationProfiles": {
+                        "hemp": DERIVATION_HEMP_CANONICAL_420,
+                        "btc": DERIVATION_BTC_BIP84,
+                    },
+                    "createdAt": 1718136000000_i64,
+                    "updatedAt": 1718136000000_i64,
+                },
+            })),
+            tags: None,
+            origin_app: Some("hemp0x-webcom".to_string()),
+            derivation_profiles: Some(dp),
+            network: Some("mainnet".to_string()),
+            created: 1718136000,
+            modified: 1718136000,
+        };
+        payload.secrets.insert(hemp_wallet.record_id.clone(), hemp_wallet);
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let summary = vault_get_webcom_interop_summary(Some(passphrase.to_string())).unwrap();
+        let items = summary["items"].as_array().unwrap();
+        let hemp_item = items.iter().find(|i| i["record_id"] == RECORD_ID_WALLET_HEMP_PRIMARY).unwrap();
+        assert_eq!(hemp_item["exists"], true);
+        assert_eq!(hemp_item["label"], "WebCom Hemp Wallet");
+        assert_eq!(hemp_item["origin_app"], "hemp0x-webcom");
+        assert_eq!(hemp_item["has_value"], true);
+        assert!(hemp_item.get("value").is_none());
+        assert!(hemp_item["derivation_profiles"].get("hemp").is_some());
+        assert_eq!(hemp_item["derivation_profiles"]["hemp"], DERIVATION_HEMP_CANONICAL_420);
+    }
+
+    #[test]
+    fn interop_address_book_export_creates_webcom_schema_v1() {
+        let _guard = setup_test_vault_dir();
+        crate::modules::files::TEST_COMMANDER_DIR.with(|cell| {
+            *cell.borrow_mut() = Some(_guard.dir.clone());
+        });
+        let passphrase = "test-ab-export";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let local_entries = vec![
+            crate::modules::models::AddressBookEntry { label: "Alice".into(), address: "Rtest".into(), locked: true, date: 1718136000 },
+            crate::modules::models::AddressBookEntry { label: "Bob".into(), address: "Rtest2".into(), locked: false, date: 1718136001 },
+        ];
+        crate::modules::files::save_address_book(local_entries).unwrap();
+
+        let result = vault_export_address_book_record(Some(passphrase.to_string())).unwrap();
+        assert_eq!(result["exported"], true);
+        assert_eq!(result["record_id"], RECORD_ID_ADDRESS_BOOK);
+        assert_eq!(result["hemp_entries"], 2);
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        let record = decrypted.secrets.get(RECORD_ID_ADDRESS_BOOK).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&record.value).unwrap();
+        assert_eq!(value["schema"], ADDRESS_BOOK_SCHEMA);
+        assert_eq!(value["schema_version"], ADDRESS_BOOK_SCHEMA_VERSION);
+        assert!(value["exported_at"].as_i64().unwrap() > 0);
+        let entries = value["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["chain"], ADDRESS_BOOK_CHAIN_HEMP);
+        assert_eq!(entries[0]["label"], "Alice");
+        assert_eq!(entries[0]["locked"], true);
+    }
+
+    #[test]
+    fn interop_address_book_export_preserves_existing_bitcoin_entries() {
+        let _guard = setup_test_vault_dir();
+        crate::modules::files::TEST_COMMANDER_DIR.with(|cell| {
+            *cell.borrow_mut() = Some(_guard.dir.clone());
+        });
+        let passphrase = "test-ab-export-btc";
+        let mut payload = make_provider_payload("pinata", "filebase");
+
+        let existing_ab = serde_json::json!({
+            "schema": ADDRESS_BOOK_SCHEMA,
+            "schema_version": ADDRESS_BOOK_SCHEMA_VERSION,
+            "exported_at": 1700000000_i64,
+            "entries": [
+                { "chain": "bitcoin", "label": "BtcFriend", "address": "bc1qtest", "locked": true },
+            ]
+        });
+        let existing_record = SecretRecord {
+            record_id: RECORD_ID_ADDRESS_BOOK.to_string(),
+            record_type: RECORD_TYPE_APP_SETTING_ADDRESS_BOOK.to_string(),
+            label: "Hemp0x Address Book".to_string(),
+            value: serde_json::to_string(&existing_ab).unwrap(),
+            metadata: Some(serde_json::json!({"value_kind": "embedded_json", "schema": ADDRESS_BOOK_SCHEMA, "schema_version": ADDRESS_BOOK_SCHEMA_VERSION})),
+            tags: Some(vec!["hemp0x".to_string(), "address_book".to_string()]),
+            origin_app: Some("hemp0x-webcom".to_string()),
+            derivation_profiles: None,
+            network: Some("mainnet".to_string()),
+            created: 1700000000,
+            modified: 1700000000,
+        };
+        payload.secrets.insert(RECORD_ID_ADDRESS_BOOK.to_string(), existing_record);
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let local_entries = vec![
+            crate::modules::models::AddressBookEntry { label: "Alice".into(), address: "Rtest".into(), locked: false, date: 1718136000 },
+        ];
+        crate::modules::files::save_address_book(local_entries).unwrap();
+
+        let _result = vault_export_address_book_record(Some(passphrase.to_string())).unwrap();
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        let record = decrypted.secrets.get(RECORD_ID_ADDRESS_BOOK).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&record.value).unwrap();
+        let entries = value["entries"].as_array().unwrap();
+        assert!(entries.iter().any(|e| e["chain"] == "bitcoin" && e["label"] == "BtcFriend"));
+        assert!(entries.iter().any(|e| e["chain"] == ADDRESS_BOOK_CHAIN_HEMP && e["label"] == "Alice"));
+    }
+
+    #[test]
+    fn interop_address_book_import_merges_without_deleting_local_entries() {
+        let _guard = setup_test_vault_dir();
+        crate::modules::files::TEST_COMMANDER_DIR.with(|cell| {
+            *cell.borrow_mut() = Some(_guard.dir.clone());
+        });
+        let passphrase = "test-ab-import-merge";
+
+        let existing_local = vec![
+            crate::modules::models::AddressBookEntry { label: "ExistingAlice".into(), address: "Rlocal".into(), locked: true, date: 1718136000 },
+        ];
+        crate::modules::files::save_address_book(existing_local).unwrap();
+
+        let vault_ab = serde_json::json!({
+            "schema": ADDRESS_BOOK_SCHEMA,
+            "schema_version": ADDRESS_BOOK_SCHEMA_VERSION,
+            "exported_at": 1700000000_i64,
+            "entries": [
+                { "chain": ADDRESS_BOOK_CHAIN_HEMP, "label": "NewBob", "address": serde_json::Value::String("Rnew".to_string()), "locked": false },
+                { "chain": ADDRESS_BOOK_CHAIN_HEMP, "label": "", "address": serde_json::Value::String("Rlocal".to_string()), "locked": false },
+            ]
+        });
+        let mut payload = make_provider_payload("pinata", "filebase");
+        payload.secrets.insert(RECORD_ID_ADDRESS_BOOK.to_string(), SecretRecord {
+            record_id: RECORD_ID_ADDRESS_BOOK.to_string(),
+            record_type: RECORD_TYPE_APP_SETTING_ADDRESS_BOOK.to_string(),
+            label: "Hemp0x Address Book".to_string(),
+            value: serde_json::to_string(&vault_ab).unwrap(),
+            metadata: Some(serde_json::json!({"value_kind": "embedded_json", "schema": ADDRESS_BOOK_SCHEMA, "schema_version": ADDRESS_BOOK_SCHEMA_VERSION})),
+            tags: Some(vec!["hemp0x".to_string(), "address_book".to_string()]),
+            origin_app: Some("hemp0x-webcom".to_string()),
+            derivation_profiles: None,
+            network: Some("mainnet".to_string()),
+            created: 1700000000,
+            modified: 1700000000,
+        });
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let result = vault_import_address_book_record(Some(passphrase.to_string())).unwrap();
+        assert_eq!(result["imported"], 1);
+        assert_eq!(result["skipped"], 0);
+        assert!(result["preserved_non_hemp_entries"].as_u64().unwrap_or(0) == 0);
+
+        let local = crate::modules::files::load_address_book().unwrap();
+        assert!(local.iter().any(|e| e.address == "Rnew"));
+        assert!(local.iter().any(|e| e.address == "Rlocal"));
+        let existing = local.iter().find(|e| e.address == "Rlocal").unwrap();
+        assert_eq!(existing.label, "ExistingAlice");
+        assert_eq!(existing.locked, true);
+    }
+
+    #[test]
+    fn interop_provider_tokens_survive_address_book_export() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-ab-export-providers";
+        let payload = make_provider_payload("pinata-original", "filebase-original");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let result = vault_export_address_book_record(Some(passphrase.to_string())).unwrap();
+        assert_eq!(result["exported"], true);
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        assert_eq!(payload_pinata_token(&decrypted), "pinata-original");
+        assert_eq!(payload_filebase_token(&decrypted), "filebase-original");
+    }
+
+    #[test]
+    fn interop_swap_secrets_survive_address_book_operations() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-swap-secrets-survive";
+        let mut payload = make_provider_payload("pinata", "filebase");
+
+        let swap_record = SecretRecord {
+            record_id: RECORD_ID_SWAP_SECRETS.to_string(),
+            record_type: RECORD_TYPE_APP_SETTING_SWAP_SECRETS.to_string(),
+            label: "WebCom Swap Secrets".to_string(),
+            value: r#"{"encrypted": true, "secrets": ["a", "b"]}"#.to_string(),
+            metadata: Some(serde_json::json!({"value_kind": "embedded_encrypted_json"})),
+            tags: None,
+            origin_app: Some("hemp0x-webcom".to_string()),
+            derivation_profiles: None,
+            network: Some("mainnet".to_string()),
+            created: 1700000000,
+            modified: 1700000000,
+        };
+        payload.secrets.insert(swap_record.record_id.clone(), swap_record);
+
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let _export = vault_export_address_book_record(Some(passphrase.to_string())).unwrap();
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        assert!(decrypted.secrets.contains_key(RECORD_ID_SWAP_SECRETS));
+        let survived = decrypted.secrets.get(RECORD_ID_SWAP_SECRETS).unwrap();
+        assert_eq!(survived.record_type, RECORD_TYPE_APP_SETTING_SWAP_SECRETS);
+        assert_eq!(survived.value, r#"{"encrypted": true, "secrets": ["a", "b"]}"#);
+    }
+
+    #[test]
+    fn interop_unknown_record_survives_address_book_operations() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-unknown-survives";
+        let future_id = "app_setting.future.feature.v42";
+        let mut payload = make_provider_payload("pinata", "filebase");
+        let future = make_future_record(future_id, RECORD_TYPE_APP_SECRET, "future-secret-value");
+        payload.secrets.insert(future_id.to_string(), future.clone());
+
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let _export = vault_export_address_book_record(Some(passphrase.to_string())).unwrap();
+
+        let loaded = load_bundle().unwrap().unwrap();
+        let decrypted = decrypt_vault_envelope(passphrase, &loaded.vault).unwrap();
+        assert!(decrypted.secrets.contains_key(future_id));
+        let survived = decrypted.secrets.get(future_id).unwrap();
+        assert_eq!(survived.value, "future-secret-value");
+        assert_eq!(survived.record_type, RECORD_TYPE_APP_SECRET);
+    }
+
+    #[test]
+    fn interop_malformed_address_book_record_returns_safe_error() {
+        let _guard = setup_test_vault_dir();
+        crate::modules::files::TEST_COMMANDER_DIR.with(|cell| {
+            *cell.borrow_mut() = Some(_guard.dir.clone());
+        });
+        let passphrase = "test-malformed-ab";
+
+        let existing_local = vec![
+            crate::modules::models::AddressBookEntry { label: "PreciousEntry".into(), address: "Rprecious".into(), locked: true, date: 1718136000 },
+        ];
+        crate::modules::files::save_address_book(existing_local).unwrap();
+
+        let mut payload = make_provider_payload("pinata", "filebase");
+        payload.secrets.insert(RECORD_ID_ADDRESS_BOOK.to_string(), SecretRecord {
+            record_id: RECORD_ID_ADDRESS_BOOK.to_string(),
+            record_type: RECORD_TYPE_APP_SETTING_ADDRESS_BOOK.to_string(),
+            label: "Hemp0x Address Book".to_string(),
+            value: "NOT VALID JSON".to_string(),
+            metadata: Some(serde_json::json!({"value_kind": "embedded_json"})),
+            tags: None,
+            origin_app: None,
+            derivation_profiles: None,
+            network: None,
+            created: 1700000000,
+            modified: 1700000000,
+        });
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let result = vault_import_address_book_record(Some(passphrase.to_string()));
+        assert!(result.is_err());
+
+        let local = crate::modules::files::load_address_book().unwrap();
+        assert_eq!(local.len(), 1);
+        assert_eq!(local[0].address, "Rprecious");
+        assert_eq!(local[0].label, "PreciousEntry");
+    }
+
+    #[test]
+    fn interop_webcom_interop_summary_shows_all_known_record_ids() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-summary-ids";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let summary = vault_get_webcom_interop_summary(Some(passphrase.to_string())).unwrap();
+        let items = summary["items"].as_array().unwrap();
+        assert_eq!(summary["known_record_count"], 4);
+        assert_eq!(summary["present_record_count"], 0);
+        for rid in KNOWN_WEBCOM_RECORD_IDS {
+            let item = items.iter().find(|i| i["record_id"] == *rid).unwrap();
+            assert_eq!(item["exists"], false);
+        }
+    }
+
+    #[test]
+    fn interop_webcom_interop_summary_requires_unlocked_vault() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-locked-summary";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle { bundleVersion: CURRENT_BUNDLE_VERSION, format_identifier: FORMAT_IDENTIFIER.to_string(), vault: envelope, meta: None };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let result = vault_get_webcom_interop_summary(None);
+        assert!(result.is_err());
     }
 
     #[test]

@@ -620,6 +620,40 @@ pub fn ipfs_vault_restore_wallet_migration_record(
     )
 }
 
+// ─── WebCom / Hemp0x Vault Interop Cached-Session Wrappers ─────────────────
+
+#[tauri::command]
+pub fn ipfs_vault_get_webcom_interop_summary(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_get_webcom_interop_summary(Some(passphrase))
+}
+
+#[tauri::command]
+pub fn ipfs_vault_get_address_book_record_summary(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_get_address_book_record_summary(Some(passphrase))
+}
+
+#[tauri::command]
+pub fn ipfs_vault_export_address_book_record(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_export_address_book_record(Some(passphrase))
+}
+
+#[tauri::command]
+pub fn ipfs_vault_import_address_book_record(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_import_address_book_record(Some(passphrase))
+}
+
 #[tauri::command]
 pub fn ipfs_vault_remove_wallet_migration_record(
     record_id: String,

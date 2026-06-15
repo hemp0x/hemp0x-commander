@@ -91,7 +91,20 @@ pub fn commander_settings_path() -> Result<PathBuf, String> {
   Ok(active_data_dir()?.join("commander").join("app_settings.json"))
 }
 
+#[cfg(test)]
+thread_local! {
+    pub static TEST_COMMANDER_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 pub fn commander_dir() -> Result<PathBuf, String> {
+  #[cfg(test)]
+  {
+    let override_path = TEST_COMMANDER_DIR.with(|cell| cell.borrow().clone());
+    if let Some(dir) = override_path {
+      fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+      return Ok(dir);
+    }
+  }
   let dir = active_data_dir()?.join("commander");
   fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
   Ok(dir)

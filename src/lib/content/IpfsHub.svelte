@@ -16,12 +16,6 @@
 
 <div class="ipfs-hub" in:fade={{ duration: 200 }}>
     <header class="hub-header">
-        <div class="hub-help-row">
-            <HelpHitbox title="IPFS In Commander">
-                <p>Library packages are local records in Commander. A CID points to content on IPFS and may be fetched through a public gateway.</p>
-                <p>Public gateways can reveal request metadata. Pinning keeps content available on your selected provider; unpinning removes that provider pin but cannot erase data already shared elsewhere.</p>
-            </HelpHitbox>
-        </div>
         <div class="hub-tabs">
             <button
                 class="hub-tab"
@@ -44,6 +38,12 @@
             >
                 SETTINGS
             </button>
+            <div class="hub-help-inline">
+                <HelpHitbox title="IPFS In Commander">
+                    <p>Library packages are local records in Commander. A CID points to content on IPFS and may be fetched through a public gateway.</p>
+                    <p>Public gateways can reveal request metadata. Pinning keeps content available on your selected provider; unpinning removes that provider pin but cannot erase data already shared elsewhere.</p>
+                </HelpHitbox>
+            </div>
         </div>
     </header>
 
@@ -78,14 +78,10 @@
         margin-bottom: 0.5rem;
         border-bottom: 1px solid rgba(0, 255, 65, 0.08);
     }
-    .hub-help-row {
-        display: flex;
-        justify-content: flex-end;
-        margin-bottom: 0.25rem;
-    }
     .hub-tabs {
         display: flex;
         gap: 1px;
+        align-items: center;
     }
     .hub-tab {
         background: transparent;
@@ -107,6 +103,12 @@
         color: var(--color-primary);
         border-bottom-color: var(--color-primary);
         text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
+    }
+    .hub-help-inline {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        padding-right: 0.25rem;
     }
     .hub-body {
         min-height: 0;

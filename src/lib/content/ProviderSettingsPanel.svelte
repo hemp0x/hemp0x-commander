@@ -1,28 +1,22 @@
 <script>
-    import { onMount } from "svelte";
+    import { onMount, onDestroy } from "svelte";
     import { fade } from "svelte/transition";
     import { core } from "@tauri-apps/api";
-    import { save, open } from "@tauri-apps/plugin-dialog";
+    import { open as shellOpen } from "@tauri-apps/plugin-shell";
+    import { vaultStatus } from "../../stores.js";
+    import eyeOpen from "../../assets/eye-open.png";
+    import eyeClosed from "../../assets/eye-closed.png";
 
     let cacheStatus = null;
     let cacheDir = "";
     let clearing = false;
     let clearMsg = "";
 
-    let vaultStatus = { exists: false, unlocked: false, has_plaintext_tokens: false, vault_path: "", info: null };
-    let vaultPassphrase = "";
-    let vaultUnlocking = false;
+    let vaultExists = false;
+    let vaultUnlocked = false;
+    let tokenPresence = null;
     let vaultMsg = "";
     let vaultError = "";
-    let showMigrateConfirm = false;
-
-    let providerRecords = null;
-    let showRestoreConfirm = false;
-    let restoreImportPath = "";
-    let restoreValidation = null;
-    let restoring = false;
-    let showRemoveTokenConfirm = false;
-    let removeTokenProvider = "";
     let removingToken = false;
 
     let providerSettings = {
@@ -55,6 +49,20 @@
     let selectedCids = [];
     let unpinningCid = "";
     let unpinningBulk = false;
+    let mounted = false;
+    let lastVaultUnlocked = null;
+    let showPinataToken = false;
+    let showFilebaseToken = false;
+
+    $: {
+        vaultExists = $vaultStatus.exists;
+        vaultUnlocked = $vaultStatus.unlocked;
+    }
+
+    $: if (mounted && lastVaultUnlocked !== vaultUnlocked) {
+        lastVaultUnlocked = vaultUnlocked;
+        refreshAfterVaultStateChange();
+    }
 
     function normalizeSettings(settings) {
         return {
@@ -62,12 +70,35 @@
             gateways: {
                 viewing_gateways: settings?.gateways?.viewing_gateways || [],
             },
-            pinata_api_token: settings?.pinata_api_token || "",
+            pinata_api_token: settings?.pinata_api_token === "[in vault]" ? "" : settings?.pinata_api_token || "",
             pinata_api_url: settings?.pinata_api_url || "https://api.pinata.cloud",
             kubo_endpoint: settings?.kubo_endpoint || "http://127.0.0.1:5001",
-            filebase_token: settings?.filebase_token || "",
+            filebase_token: settings?.filebase_token === "[in vault]" ? "" : settings?.filebase_token || "",
             filebase_endpoint: settings?.filebase_endpoint || "https://rpc.filebase.io",
         };
+    }
+
+    function friendlyError(err) {
+        const text = String(err || "");
+        if (/vault is locked/i.test(text) || /provider token vault is locked/i.test(text)) {
+            return "Unlock your vault to use saved provider tokens.";
+        }
+        if (/vault does not exist/i.test(text)) {
+            return "Create a vault in Tools → Wallet before saving provider tokens.";
+        }
+        return text;
+    }
+
+    function isVaultAccessError(err) {
+        const text = String(err || "");
+        return /vault is locked/i.test(text) || /provider token vault is locked/i.test(text);
+    }
+
+    async function refreshAfterVaultStateChange() {
+        await loadTokenPresence();
+        if (vaultUnlocked) {
+            await loadProviderSettings();
+        }
     }
 
     async function loadStatus() {
@@ -79,21 +110,11 @@
         }
     }
 
-    async function loadVaultStatus() {
+    async function loadTokenPresence() {
         try {
-            vaultStatus = await core.invoke("ipfs_vault_status");
+            tokenPresence = await core.invoke("ipfs_provider_token_presence");
         } catch {
-            vaultStatus = { exists: false, unlocked: false, info: null };
-        }
-    }
-
-    async function loadProviderRecordsAfterUnlock() {
-        if (vaultStatus.unlocked && vaultStatus.exists) {
-            try {
-                providerRecords = await core.invoke("ipfs_vault_provider_status");
-            } catch {
-                providerRecords = null;
-            }
+            tokenPresence = null;
         }
     }
 
@@ -102,7 +123,7 @@
             providerSettings = normalizeSettings(await core.invoke("ipfs_get_provider_settings"));
             gatewayInput = providerSettings.gateways.viewing_gateways.join("\n");
         } catch (err) {
-            settingsError = String(err);
+            settingsError = friendlyError(err);
         }
     }
 
@@ -138,217 +159,44 @@
             gatewayInput = providerSettings.gateways.viewing_gateways.join("\n");
             settingsEdited = false;
             settingsMsg = "Settings saved.";
+            await loadTokenPresence();
         } catch (err) {
-            settingsError = String(err);
+            settingsError = friendlyError(err);
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         settingsSaving = false;
     }
 
-    async function vaultUnlock() {
-        vaultUnlocking = true;
-        vaultError = "";
-        vaultMsg = "";
-        try {
-            const ok = await core.invoke("ipfs_unlock_vault", { passphrase: vaultPassphrase });
-            if (ok) {
-                vaultStatus = { ...vaultStatus, unlocked: true };
-                vaultMsg = "Vault unlocked. Provider tokens are now available for publish operations.";
-                await loadProviderRecordsAfterUnlock();
-                vaultPassphrase = "";
-            } else {
-                vaultError = "Incorrect passphrase.";
-            }
-        } catch (err) {
-            vaultError = String(err);
-        }
-        vaultUnlocking = false;
+    async function requestVaultUnlock() {
+        if (typeof window === "undefined") return;
+        window.dispatchEvent(new CustomEvent("commander-open-vault-unlock"));
     }
 
-    async function vaultLock() {
-        try {
-            await core.invoke("ipfs_lock_vault");
-            vaultStatus = { ...vaultStatus, unlocked: false };
-            providerRecords = null;
-            vaultMsg = "Vault locked.";
-        } catch (err) {
-            vaultError = String(err);
-        }
+    function navigateToWalletVault() {
+        if (typeof window === "undefined") return;
+        window.dispatchEvent(new CustomEvent("commander-open-tools-wallet"));
     }
 
-    async function vaultSetup() {
-        if (!vaultPassphrase || vaultPassphrase.length < 8) {
-            vaultError = "Passphrase must be at least 8 characters.";
-            return;
-        }
-        if (!confirm("WARNING: If you lose this passphrase, your encrypted tokens cannot be recovered. There is no reset. Are you sure you want to create a vault?")) {
-            return;
-        }
-        vaultUnlocking = true;
-        vaultError = "";
-        vaultMsg = "";
-        try {
-            const result = await core.invoke("vault_setup", { passphrase: vaultPassphrase });
-            await core.invoke("ipfs_unlock_vault", { passphrase: vaultPassphrase });
-            await loadVaultStatus();
-            vaultMsg = `Vault created (${result.kdf_profile}) and unlocked for this session.`;
-            vaultPassphrase = "";
-            if (vaultStatus.has_plaintext_tokens) {
-                vaultMsg += " Plaintext tokens detected — use Migrate to move them to the vault.";
-            }
-        } catch (err) {
-            vaultError = String(err);
-        }
-        vaultUnlocking = false;
+    function providerLabel(id) {
+        if (id === "pinata") return "Pinata";
+        if (id === "filebase") return "Filebase";
+        return id;
     }
 
-    async function confirmMigrate() {
-        showMigrateConfirm = true;
-    }
-
-    async function executeMigrate() {
-        showMigrateConfirm = false;
-        vaultUnlocking = true;
-        vaultError = "";
-        vaultMsg = "";
-        try {
-            const result = await core.invoke("ipfs_migrate_provider_tokens_to_vault", { passphrase: vaultPassphrase });
-            await loadVaultStatus();
-            await loadProviderSettings();
-            vaultMsg = result.message;
-            vaultPassphrase = "";
-            await loadProviderRecords();
-        } catch (err) {
-            vaultError = String(err);
-        }
-        vaultUnlocking = false;
-    }
-
-    async function cancelMigrate() {
-        showMigrateConfirm = false;
-        vaultPassphrase = "";
-    }
-
-    async function loadProviderRecords() {
-        if (!vaultStatus.exists || !vaultStatus.unlocked) {
-            providerRecords = null;
-            return;
-        }
-        try {
-            providerRecords = await core.invoke("ipfs_vault_provider_status");
-        } catch {
-            providerRecords = null;
-        }
-    }
-
-    async function vaultBackup() {
-        vaultMsg = "";
-        vaultError = "";
-        try {
-            const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-            const filePath = await save({
-                title: "Save Vault Backup",
-                defaultPath: `vault_backup_${ts}.json`,
-                filters: [{ name: "Vault Bundle", extensions: ["json"] }],
-            });
-            if (!filePath) return;
-            const result = await core.invoke("vault_export_bundle_to_path", { path: filePath });
-            vaultMsg = `Vault backed up to: ${result}`;
-        } catch (err) {
-            vaultError = String(err);
-        }
-    }
-
-    async function vaultRestoreSelect() {
-        vaultMsg = "";
-        vaultError = "";
-        restoreValidation = null;
-        try {
-            const selected = await open({
-                title: "Select Vault Backup to Restore",
-                multiple: false,
-                filters: [{ name: "Vault Bundle", extensions: ["json"] }],
-            });
-            if (!selected) return;
-            restoreImportPath = selected;
-            try {
-                restoreValidation = await core.invoke("vault_validate_import_bundle", { path: selected });
-            } catch (err) {
-                vaultError = "Validation failed: " + String(err);
-                restoreImportPath = "";
-                restoreValidation = null;
-                return;
-            }
-            if (vaultStatus.exists) {
-                showRestoreConfirm = true;
-            } else {
-                await executeRestore(null);
-            }
-        } catch (err) {
-            vaultError = String(err);
-        }
-    }
-
-    async function executeRestore(passphrase) {
-        showRestoreConfirm = false;
-        restoring = true;
-        vaultMsg = "";
-        vaultError = "";
-        try {
-            const result = await core.invoke("ipfs_vault_import_bundle_replace", {
-                path: restoreImportPath,
-                passphrase: passphrase || null,
-            });
-            vaultMsg = `Vault restored (v${result.version}, ${result.network}). Vault is locked — unlock with the restored vault passphrase.`;
-            await loadVaultStatus();
-            providerRecords = null;
-        } catch (err) {
-            vaultError = "Restore failed: " + String(err);
-        }
-        restoring = false;
-        restoreImportPath = "";
-        restoreValidation = null;
-    }
-
-    function cancelRestore() {
-        showRestoreConfirm = false;
-        restoreImportPath = "";
-        restoreValidation = null;
-    }
-
-    function confirmRemoveToken(provider) {
-        removeTokenProvider = provider;
-        showRemoveTokenConfirm = true;
-    }
-
-    async function executeRemoveToken() {
+    async function removeProviderToken(providerId) {
         removingToken = true;
         vaultMsg = "";
         vaultError = "";
         try {
-            await core.invoke("ipfs_vault_remove_provider_token", {
-                providerId: removeTokenProvider,
-            });
-            vaultMsg = `${removeTokenProvider.charAt(0).toUpperCase() + removeTokenProvider.slice(1)} token removed from vault.`;
-            await loadProviderRecords();
+            await core.invoke("ipfs_vault_remove_provider_token", { providerId });
+            vaultMsg = `${providerLabel(providerId)} token removed from vault.`;
+            await loadTokenPresence();
+            await loadProviderSettings();
         } catch (err) {
-            vaultError = "Remove failed: " + String(err);
+            vaultError = friendlyError(err);
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         removingToken = false;
-        showRemoveTokenConfirm = false;
-        removeTokenProvider = "";
-    }
-
-    function cancelRemoveToken() {
-        showRemoveTokenConfirm = false;
-        removeTokenProvider = "";
-    }
-
-    async function migrateTokens() {
-        if (!vaultPassphrase) {
-            vaultError = "Enter your vault passphrase to migrate tokens.";
-            return;
-        }
-        await confirmMigrate();
     }
 
     async function testProvider(provider) {
@@ -357,11 +205,14 @@
         try {
             const result = await core.invoke("ipfs_test_publish_provider", { provider });
             providerTestResults = { ...providerTestResults, [provider]: result };
+            await loadTokenPresence();
+            await loadProviderSettings();
         } catch (err) {
             providerTestResults = {
                 ...providerTestResults,
-                [provider]: { success: false, message: String(err) },
+                [provider]: { success: false, message: friendlyError(err) },
             };
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         testingProvider = "";
     }
@@ -393,9 +244,10 @@
             modalItems = result.items;
             modalHasNext = result.has_next_page;
         } catch (err) {
-            modalError = String(err);
+            modalError = friendlyError(err);
             modalItems = [];
             modalHasNext = false;
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         modalLoading = false;
     }
@@ -437,7 +289,8 @@
             selectedCids = selectedCids.filter((c) => c !== cid);
             await loadPublishedPins();
         } catch (err) {
-            modalError = String(err);
+            modalError = friendlyError(err);
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         unpinningCid = "";
     }
@@ -463,7 +316,8 @@
             selectedCids = [];
             await loadPublishedPins();
         } catch (err) {
-            modalError = String(err);
+            modalError = friendlyError(err);
+            if (isVaultAccessError(err)) requestVaultUnlock();
         }
         unpinningBulk = false;
     }
@@ -498,14 +352,20 @@
         } catch {}
     }
 
+    function openUrl(url) {
+        shellOpen(url).catch(() => {});
+    }
+
     onMount(() => {
+        mounted = true;
+        lastVaultUnlocked = vaultUnlocked;
         loadStatus();
-        loadVaultStatus().then(() => {
-            if (vaultStatus.exists && vaultStatus.unlocked) {
-                loadProviderRecords();
-            }
-        });
+        loadTokenPresence();
         loadProviderSettings();
+    });
+
+    onDestroy(() => {
+        mounted = false;
     });
 </script>
 
@@ -520,115 +380,49 @@
         </button>
     </div>
 
-    <div class="notice-bar">
-        {#if vaultStatus.exists && vaultStatus.unlocked}
-            Vault unlocked. Provider tokens are read from encrypted storage.
-        {:else if vaultStatus.exists}
-            Vault locked. Unlock to enable publish operations.
-        {:else if vaultStatus.has_plaintext_tokens}
-            Plaintext provider tokens detected. Set up a vault and migrate them.
-        {:else}
-            No vault configured. Set up an encrypted vault to protect your API tokens.
-        {/if}
-    </div>
-
     <section class="vault-section">
-        <h4 class="section-subtitle">VAULT</h4>
-        {#if vaultStatus.exists}
-            <div class="vault-status">
-                <span class="vault-indicator" class:unlocked={vaultStatus.unlocked}>
-                    {vaultStatus.unlocked ? "UNLOCKED" : "LOCKED"}
-                </span>
-                {#if vaultStatus.info}
-                    {@const slot = vaultStatus.info.key_slots?.[0]}
-                    <span class="vault-meta">
-                        v{vaultStatus.info.version} | {slot?.kdf_profile ?? "?"}
-                        {#if slot?.kdf_iterations} | {slot.kdf_iterations} iter{/if}
-                        {#if slot?.kdf_log_n} | N=2^{slot.kdf_log_n}{/if}
-                    </span>
-                {/if}
-            </div>
-            {#if !vaultStatus.unlocked}
-                <div class="vault-unlock-row">
-                    <input
-                        type="password"
-                        class="form-input mono"
-                        autocomplete="off"
-                        bind:value={vaultPassphrase}
-                        on:keydown={(e) => e.key === "Enter" && vaultUnlock()}
-                        placeholder="Vault passphrase"
-                    />
-                    <button class="cyber-btn small" on:click={vaultUnlock} disabled={vaultUnlocking || !vaultPassphrase}>
-                        {vaultUnlocking ? "..." : "UNLOCK"}
-                    </button>
-                </div>
+        <div class="vault-status">
+            <span class="vault-label">Vault:</span>
+            <span class="vault-indicator" class:unlocked={vaultUnlocked} class:locked={!vaultUnlocked}>
+                {vaultUnlocked ? "Unlocked" : "Locked"}
+            </span>
+        </div>
+
+        <div class="vault-status vault-status-row">
+            <span class="vault-label">Provider tokens:</span>
+            {#if !vaultExists}
+                <span class="vault-helper">No token stored</span>
+            {:else if !vaultUnlocked}
+                <span class="vault-helper">Unlock vault to check saved tokens</span>
+            {:else if tokenPresence?.source === "vault" &&
+                (tokenPresence?.providers?.pinata?.stored || tokenPresence?.providers?.filebase?.stored)}
+                <span class="vault-indicator unlocked">Stored safely</span>
             {:else}
-                <button class="cyber-btn ghost small" on:click={vaultLock}>LOCK VAULT</button>
+                <span class="vault-helper">No token stored</span>
             {/if}
-            {#if vaultStatus.vault_path}
-                <div class="vault-meta" style="margin-top:0.4rem;">Path: <code>{vaultStatus.vault_path}</code></div>
-            {/if}
-            <div class="vault-actions-row">
-                <button class="cyber-btn ghost small" on:click={vaultBackup} disabled={!vaultStatus.exists}>
-                    BACK UP VAULT
-                </button>
-                <button class="cyber-btn ghost small" on:click={vaultRestoreSelect} disabled={restoring}>
-                    {restoring ? "RESTORING..." : "RESTORE VAULT"}
-                </button>
+        </div>
+
+        {#if !vaultExists}
+            <div class="vault-info-row">
+                <span class="vault-info">Create a vault in Tools → Wallet before saving provider tokens.</span>
+                <button class="cyber-btn ghost small" on:click={navigateToWalletVault}>OPEN WALLET</button>
             </div>
-            {#if vaultStatus.unlocked && providerRecords}
-                <div class="vault-provider-status">
-                    <span class="vault-provider-label">Provider tokens:</span>
-                    {#if providerRecords.providers}
-                        <div class="vault-provider-row">
-                            <span class="provider-token-name">Pinata</span>
-                            <span class="provider-token-indicator" class:has-token={providerRecords.providers.pinata?.has_token}>
-                                {providerRecords.providers.pinata?.has_token ? "TOKEN STORED" : "NO TOKEN"}
-                            </span>
-                            {#if providerRecords.providers.pinata?.has_token}
-                                <button class="cyber-btn ghost tiny" on:click={() => confirmRemoveToken("pinata")} disabled={removingToken}>
-                                    REMOVE
-                                </button>
-                            {/if}
-                        </div>
-                        <div class="vault-provider-row">
-                            <span class="provider-token-name">Filebase</span>
-                            <span class="provider-token-indicator" class:has-token={providerRecords.providers.filebase?.has_token}>
-                                {providerRecords.providers.filebase?.has_token ? "TOKEN STORED" : "NO TOKEN"}
-                            </span>
-                            {#if providerRecords.providers.filebase?.has_token}
-                                <button class="cyber-btn ghost tiny" on:click={() => confirmRemoveToken("filebase")} disabled={removingToken}>
-                                    REMOVE
-                                </button>
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
-            {/if}
-            {#if vaultStatus.has_plaintext_tokens}
-                <div class="vault-migrate-row">
-                    <p class="provider-desc" style="margin:0;">Plaintext tokens still present in settings file. Migrate them to the vault.</p>
-                    <button class="cyber-btn small" on:click={confirmMigrate} disabled={vaultUnlocking || !vaultStatus.unlocked}>
-                        MIGRATE TOKENS
-                    </button>
-                </div>
-            {/if}
-        {:else}
-            <p class="provider-desc">Create an encrypted vault to protect provider API tokens. Uses scrypt (memory-hard) with AES-256-GCM. PBKDF2-HMAC-SHA512 also supported for Core Next compatibility.</p>
+        {:else if !vaultUnlocked}
             <div class="vault-unlock-row">
-                <input
-                    type="password"
-                    class="form-input mono"
-                    autocomplete="off"
-                    bind:value={vaultPassphrase}
-                    on:keydown={(e) => e.key === "Enter" && vaultSetup()}
-                    placeholder="New vault passphrase (min 8 chars)"
-                />
-                <button class="cyber-btn small" on:click={vaultSetup} disabled={vaultUnlocking || !vaultPassphrase || vaultPassphrase.length < 8}>
-                    {vaultUnlocking ? "..." : "CREATE VAULT"}
-                </button>
+                <span class="vault-helper">Provider tokens are protected by the vault.</span>
+                <button class="cyber-btn small" on:click={requestVaultUnlock}>UNLOCK VAULT</button>
+            </div>
+        {:else}
+            <div class="vault-unlock-row">
+                <span class="vault-helper-inline">Provider tokens are available for publish operations.</span>
             </div>
         {/if}
+
+        <div class="vault-footer-note">
+            Vault file management is handled in
+            <button class="link-btn" on:click={navigateToWalletVault}>Tools → Wallet</button>.
+        </div>
+
         {#if vaultMsg}
             <div class="vault-msg">{vaultMsg}</div>
         {/if}
@@ -640,20 +434,32 @@
     <div class="provider-grid">
         <section class="provider-card">
             <div class="provider-header">
-                <span class="provider-name">Pinata</span>
+                <a href="https://pinata.cloud/" target="_blank" rel="noopener noreferrer" class="provider-link" title="https://pinata.cloud/" on:click|preventDefault={() => openUrl("https://pinata.cloud/")}>Pinata</a>
                 <span class="provider-status" class:active={providerSettings.selected_publish_provider === "pinata"}>API</span>
             </div>
-            <label class="form-label" for="pinata-token">JWT / API Token</label>
-            <input
-                id="pinata-token"
-                class="form-input mono"
-                type="password"
-                autocomplete="off"
-                disabled={vaultStatus.exists && !vaultStatus.unlocked}
-                bind:value={providerSettings.pinata_api_token}
-                on:input={markEdited}
-                placeholder={vaultStatus.exists && !vaultStatus.unlocked ? "Unlock vault to edit" : "Paste Pinata JWT"}
-            />
+            <label class="form-label" for="pinata-token">Provider Token</label>
+            <div class="token-input-wrap">
+                <input
+                    id="pinata-token"
+                    class="form-input mono token-input"
+                    type={showPinataToken ? "text" : "password"}
+                    autocomplete="off"
+                    disabled={!vaultExists || !vaultUnlocked}
+                    bind:value={providerSettings.pinata_api_token}
+                    on:input={markEdited}
+                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.pinata?.stored ? "Stored in vault — paste new token to replace" : "Paste Pinata JWT"}
+                />
+                <button
+                    class="token-eye-btn"
+                    type="button"
+                    title={showPinataToken ? "Hide token" : "Show token"}
+                    aria-label={showPinataToken ? "Hide Pinata token" : "Show Pinata token"}
+                    disabled={!vaultExists || !vaultUnlocked}
+                    on:click={() => (showPinataToken = !showPinataToken)}
+                >
+                    <img src={showPinataToken ? eyeOpen : eyeClosed} alt="" class="token-eye-icon" />
+                </button>
+            </div>
             <label class="form-label" for="pinata-url">API URL</label>
             <input
                 id="pinata-url"
@@ -663,10 +469,18 @@
                 on:input={markEdited}
             />
             <div class="provider-actions">
+                <button class="cyber-btn small" on:click={saveSettings} disabled={settingsSaving || !settingsEdited || !vaultUnlocked}>
+                    {settingsSaving ? "SAVING..." : "SAVE"}
+                </button>
                 <button class="cyber-btn ghost small" on:click={() => testProvider("pinata")} disabled={testingProvider === "pinata"}>
                     {testingProvider === "pinata" ? "TESTING..." : "TEST"}
                 </button>
                 <button class="cyber-btn ghost small" on:click={() => openPublishedModal("pinata")}>PINS</button>
+                {#if vaultUnlocked && tokenPresence?.providers?.pinata?.stored}
+                    <button class="cyber-btn ghost tiny" on:click={() => removeProviderToken("pinata")} disabled={removingToken}>
+                        {removingToken ? "..." : "REMOVE"}
+                    </button>
+                {/if}
             </div>
             {#if providerTestResults.pinata}
                 <div class:ok={providerTestResults.pinata.success} class:bad={!providerTestResults.pinata.success} class="test-result">
@@ -677,20 +491,32 @@
 
         <section class="provider-card">
             <div class="provider-header">
-                <span class="provider-name">Filebase</span>
+                <a href="https://filebase.com/" target="_blank" rel="noopener noreferrer" class="provider-link" title="https://filebase.com/" on:click|preventDefault={() => openUrl("https://filebase.com/")}>Filebase</a>
                 <span class="provider-status" class:active={providerSettings.selected_publish_provider === "filebase"}>API</span>
             </div>
-            <label class="form-label" for="filebase-token">Access Token</label>
-            <input
-                id="filebase-token"
-                class="form-input mono"
-                type="password"
-                autocomplete="off"
-                disabled={vaultStatus.exists && !vaultStatus.unlocked}
-                bind:value={providerSettings.filebase_token}
-                on:input={markEdited}
-                placeholder={vaultStatus.exists && !vaultStatus.unlocked ? "Unlock vault to edit" : "Paste Filebase token"}
-            />
+            <label class="form-label" for="filebase-token">Provider Token</label>
+            <div class="token-input-wrap">
+                <input
+                    id="filebase-token"
+                    class="form-input mono token-input"
+                    type={showFilebaseToken ? "text" : "password"}
+                    autocomplete="off"
+                    disabled={!vaultExists || !vaultUnlocked}
+                    bind:value={providerSettings.filebase_token}
+                    on:input={markEdited}
+                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.filebase?.stored ? "Stored in vault — paste new token to replace" : "Paste Filebase token"}
+                />
+                <button
+                    class="token-eye-btn"
+                    type="button"
+                    title={showFilebaseToken ? "Hide token" : "Show token"}
+                    aria-label={showFilebaseToken ? "Hide Filebase token" : "Show Filebase token"}
+                    disabled={!vaultExists || !vaultUnlocked}
+                    on:click={() => (showFilebaseToken = !showFilebaseToken)}
+                >
+                    <img src={showFilebaseToken ? eyeOpen : eyeClosed} alt="" class="token-eye-icon" />
+                </button>
+            </div>
             <label class="form-label" for="filebase-endpoint">Endpoint</label>
             <input
                 id="filebase-endpoint"
@@ -700,10 +526,18 @@
                 on:input={markEdited}
             />
             <div class="provider-actions">
+                <button class="cyber-btn small" on:click={saveSettings} disabled={settingsSaving || !settingsEdited || !vaultUnlocked}>
+                    {settingsSaving ? "SAVING..." : "SAVE"}
+                </button>
                 <button class="cyber-btn ghost small" on:click={() => testProvider("filebase")} disabled={testingProvider === "filebase"}>
                     {testingProvider === "filebase" ? "TESTING..." : "TEST"}
                 </button>
                 <button class="cyber-btn ghost small" on:click={() => openPublishedModal("filebase")}>PINS</button>
+                {#if vaultUnlocked && tokenPresence?.providers?.filebase?.stored}
+                    <button class="cyber-btn ghost tiny" on:click={() => removeProviderToken("filebase")} disabled={removingToken}>
+                        {removingToken ? "..." : "REMOVE"}
+                    </button>
+                {/if}
             </div>
             {#if providerTestResults.filebase}
                 <div class:ok={providerTestResults.filebase.success} class:bad={!providerTestResults.filebase.success} class="test-result">
@@ -714,7 +548,8 @@
 
         <section class="provider-card">
             <div class="provider-header">
-                <span class="provider-name">Installed Kubo</span>
+                <a href="https://github.com/ipfs/kubo" target="_blank" rel="noopener noreferrer" class="provider-link" title="https://github.com/ipfs/kubo" on:click|preventDefault={() => openUrl("https://github.com/ipfs/kubo")}>Kubo</a>
+                <span class="provider-name-sub">(Local Install)</span>
                 <span class="provider-status" class:active={providerSettings.selected_publish_provider === "installed_kubo"}>LOCAL</span>
             </div>
             <p class="provider-desc">Commander connects to a Kubo daemon you install and run separately.</p>
@@ -789,6 +624,7 @@ https://ipfs.io/ipfs/"
             <li>Published IPFS content may be public and difficult to remove.</li>
             <li>Public gateway requests reveal requested CIDs to gateway operators.</li>
             <li>Local IPFS nodes may expose your IP address and DHT participation metadata.</li>
+            <li>Review each provider's terms before use. We are not responsible for misuse of third-party services.</li>
         </ul>
     </section>
 
@@ -897,56 +733,6 @@ https://ipfs.io/ipfs/"
 </div>
 {/if}
 
-{#if showMigrateConfirm}
-    <div class="modal-overlay" on:click={cancelMigrate} on:keydown={(e) => e.key === "Escape" && cancelMigrate()}>
-        <div class="modal-content" on:click|stopPropagation style="max-width: 420px;">
-            <h4 style="margin:0 0 0.5rem;">Migrate Tokens to Vault</h4>
-            <p style="font-size:0.75rem; color:#999;">This will move your API tokens into the encrypted vault and remove them from the plaintext settings file. This action cannot be undone without re-entering your tokens. Continue?</p>
-            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-                <button class="cyber-btn ghost small" on:click={cancelMigrate}>CANCEL</button>
-                <button class="cyber-btn small" on:click={executeMigrate}>MIGRATE</button>
-            </div>
-        </div>
-    </div>
-{/if}
-
-{#if showRestoreConfirm}
-    <div class="modal-overlay" on:click={cancelRestore} on:keydown={(e) => e.key === "Escape" && cancelRestore()}>
-        <div class="modal-content" on:click|stopPropagation style="max-width: 460px;">
-            <h4 style="margin:0 0 0.5rem; color:#ffaa00;">Replace Current Vault?</h4>
-            <p style="font-size:0.75rem; color:#999;">Restoring will <strong style="color:#ff6666;">replace</strong> your current vault.json with the imported bundle. Your current encrypted provider tokens will be overwritten.</p>
-            <p style="font-size:0.75rem; color:#bb9955; margin-top:0.4rem;"><strong>Back up your current vault first</strong> if you want to keep it. After restore, the vault will be locked — you must know the restored vault's passphrase to unlock it.</p>
-            {#if restoreValidation}
-                <div style="background:rgba(0,0,0,0.3); padding:0.5rem; border-radius:4px; margin:0.75rem 0; font-size:0.7rem; color:#aaa;">
-                    <p style="margin:0;">Bundle version: {restoreValidation.bundle_version} | Network: {restoreValidation.network}</p>
-                    <p style="margin:0.2rem 0 0;">Cipher: {restoreValidation.cipher_profile} | Slots: {restoreValidation.key_slots?.length ?? 0}</p>
-                </div>
-            {/if}
-            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-                <button class="cyber-btn ghost small" on:click={cancelRestore}>CANCEL</button>
-                <button class="cyber-btn small" style="border-color:#ffaa00; color:#ffaa00;" on:click={() => executeRestore(null)}>
-                    {restoring ? "RESTORING..." : "REPLACE VAULT"}
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
-
-{#if showRemoveTokenConfirm}
-    <div class="modal-overlay" on:click={cancelRemoveToken} on:keydown={(e) => e.key === "Escape" && cancelRemoveToken()}>
-        <div class="modal-content" on:click|stopPropagation style="max-width: 420px;">
-            <h4 style="margin:0 0 0.5rem; color:#ff6666;">Remove {removeTokenProvider.charAt(0).toUpperCase() + removeTokenProvider.slice(1)} Token?</h4>
-            <p style="font-size:0.75rem; color:#999;">This will permanently remove the {removeTokenProvider} API token from your encrypted vault. You will need to re-enter it to use {removeTokenProvider} for publishing. Continue?</p>
-            <div style="display:flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-                <button class="cyber-btn ghost small" on:click={cancelRemoveToken}>CANCEL</button>
-                <button class="cyber-btn small" style="border-color:#ff6666; color:#ff6666;" on:click={executeRemoveToken}>
-                    {removingToken ? "REMOVING..." : "REMOVE TOKEN"}
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
-
 <style>
     .provider-settings {
         background: rgba(0, 0, 0, 0.3);
@@ -977,16 +763,6 @@ https://ipfs.io/ipfs/"
         line-height: 1.4;
         margin: 0 0 0.65rem 0;
     }
-    .notice-bar {
-        padding: 0.5rem 0.75rem;
-        background: rgba(255, 165, 0, 0.05);
-        border: 1px solid rgba(255, 165, 0, 0.15);
-        color: #bb9955;
-        font-size: 0.65rem;
-        border-radius: 4px;
-        margin-bottom: 1rem;
-        line-height: 1.4;
-    }
     .provider-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -1010,13 +786,72 @@ https://ipfs.io/ipfs/"
         align-items: center;
         margin-bottom: 0.6rem;
     }
-    .provider-name,
+    .provider-link,
     .section-subtitle {
         font-size: 0.72rem;
         font-weight: 600;
         color: #ccc;
         letter-spacing: 1px;
         margin: 0 0 0.65rem 0;
+    }
+    .provider-link {
+        text-decoration: none;
+        color: var(--color-primary);
+        transition: color 0.2s;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+    .provider-link:hover {
+        color: #fff;
+        text-decoration: underline;
+    }
+    .token-input-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    .token-input {
+        padding-right: 2.35rem;
+    }
+    .token-eye-btn {
+        position: absolute;
+        right: 0.35rem;
+        width: 1.75rem;
+        height: 1.75rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        background: rgba(0, 0, 0, 0.38);
+        cursor: pointer;
+        opacity: 0.82;
+    }
+    .token-eye-btn:hover:not(:disabled) {
+        border-color: rgba(0, 255, 65, 0.55);
+        opacity: 1;
+    }
+    .token-eye-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.28;
+    }
+    .token-eye-icon {
+        width: 0.95rem;
+        height: 0.95rem;
+        object-fit: contain;
+        filter: brightness(0.9);
+    }
+    .provider-name-sub {
+        font-size: 0.6rem;
+        color: #666;
+        font-weight: 400;
+        margin-left: 0.3rem;
     }
     .provider-status {
         font-size: 0.5rem;
@@ -1057,6 +892,7 @@ https://ipfs.io/ipfs/"
         display: flex;
         gap: 0.4rem;
         flex-wrap: wrap;
+        align-items: center;
         margin-top: 0.65rem;
     }
     .test-result,
@@ -1314,36 +1150,63 @@ https://ipfs.io/ipfs/"
     .vault-status {
         display: flex;
         align-items: center;
-        gap: 0.75rem;
-        margin-bottom: 0.5rem;
+        gap: 0.5rem;
+        margin-bottom: 0.35rem;
+        font-size: 0.65rem;
+        color: #aaa;
+        flex-wrap: wrap;
+    }
+    .vault-status-row {
+        margin-top: 0.25rem;
+    }
+    .vault-label {
+        color: #888;
+        letter-spacing: 0.5px;
     }
     .vault-indicator {
-        font-size: 0.6rem;
+        font-size: 0.55rem;
         font-weight: 600;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
         padding: 2px 8px;
         border-radius: 4px;
-        background: rgba(255, 85, 85, 0.1);
-        border: 1px solid rgba(255, 85, 85, 0.3);
-        color: #ff5555;
+        background: rgba(255, 170, 0, 0.08);
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        color: #ffaa00;
+    }
+    .vault-indicator.locked {
+        background: rgba(255, 170, 0, 0.08);
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        color: #ffaa00;
     }
     .vault-indicator.unlocked {
         background: rgba(0, 255, 65, 0.08);
         border: 1px solid rgba(0, 255, 65, 0.3);
         color: var(--color-primary);
     }
-    .vault-meta {
-        font-size: 0.55rem;
-        color: #666;
+    .vault-helper,
+    .vault-helper-inline {
+        font-size: 0.6rem;
+        color: #888;
+    }
+    .vault-helper-inline {
+        margin-right: 0.4rem;
+    }
+    .vault-info-row {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 0.4rem;
+    }
+    .vault-info {
+        font-size: 0.6rem;
+        color: #bb9955;
     }
     .vault-unlock-row {
         display: flex;
         gap: 0.4rem;
         align-items: center;
-    }
-    .vault-unlock-row .form-input {
-        flex: 1;
-        min-width: 0;
+        flex-wrap: wrap;
     }
     .vault-msg {
         font-size: 0.62rem;
@@ -1355,58 +1218,22 @@ https://ipfs.io/ipfs/"
         color: #ff6666;
         margin-top: 0.5rem;
     }
-    .vault-actions-row {
-        display: flex;
-        gap: 0.4rem;
-        margin-top: 0.5rem;
-    }
-    .vault-provider-status {
+    .vault-footer-note {
+        font-size: 0.58rem;
+        color: #888;
         margin-top: 0.6rem;
-        padding: 0.5rem 0.6rem;
-        background: rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.04);
-        border-radius: 4px;
     }
-    .vault-provider-label {
-        font-size: 0.55rem;
-        color: #666;
-        letter-spacing: 0.5px;
-        display: block;
-        margin-bottom: 0.4rem;
-    }
-    .vault-provider-row {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.25rem 0;
-    }
-    .provider-token-name {
-        font-size: 0.6rem;
-        color: #aaa;
-        min-width: 50px;
-    }
-    .provider-token-indicator {
-        font-size: 0.5rem;
-        color: #666;
-        letter-spacing: 0.5px;
-    }
-    .provider-token-indicator.has-token {
+    .link-btn {
+        background: none;
+        border: none;
         color: var(--color-primary);
+        cursor: pointer;
+        padding: 0;
+        font-size: inherit;
+        text-decoration: underline;
+        font-family: inherit;
     }
-    .modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.6);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-        padding: 1rem;
-    }
-    .modal-content {
-        background: #0a0f0d;
-        border: 1px solid rgba(0, 255, 65, 0.2);
-        border-radius: 8px;
-        padding: 1.2rem;
+    .link-btn:hover {
+        color: #fff;
     }
 </style>

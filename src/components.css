@@ -56,6 +56,12 @@
     font-size: 0.7rem;
 }
 
+.cyber-btn.tiny {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.55rem;
+    letter-spacing: 0.3px;
+}
+
 /* === MODALS === */
 .modal-overlay {
     position: fixed;

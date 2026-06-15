@@ -20,8 +20,10 @@
   import ViewAssets from "./lib/ViewAssets.svelte";
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
+  import VaultUnlockModal from "./lib/ui/VaultUnlockModal.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
+  import { vaultStatus } from "./stores.js";
   import { APP_VERSION } from "./lib/constants.js";
 
   /**
@@ -88,6 +90,14 @@
   /** @type {{ node: NodeInfo, wallet: WalletInfo, tx: RecentTx[] } | null} */
   let lastKnownDashboard = null; // preserve last good data across transient errors
   let dashboardFailCount = 0;
+
+  // Vault status
+  let vaultLocked = true;
+  let vaultExists = false;
+  let showVaultUnlockModal = false;
+  let vaultUnlockPassphrase = "";
+  let vaultUnlocking = false;
+  let vaultUnlockError = "";
 
   // Runtime notification state tracking (prevents duplicate notifications)
   let coreNextReadyNotified = false;
@@ -491,6 +501,70 @@
     }
   }
 
+  async function refreshVaultStatus() {
+    if (!tauriReady) return;
+    try {
+      const status = await core.invoke("ipfs_vault_unlock_status");
+      vaultExists = !!status?.vault_exists;
+      vaultLocked = !status?.unlocked;
+      vaultStatus.set({ exists: vaultExists, unlocked: !vaultLocked });
+    } catch {
+      vaultExists = false;
+      vaultLocked = true;
+      vaultStatus.set({ exists: false, unlocked: false });
+    }
+  }
+
+  function openVaultUnlockModal() {
+    vaultUnlockPassphrase = "";
+    vaultUnlockError = "";
+    showVaultUnlockModal = true;
+  }
+
+  function closeVaultUnlockModal() {
+    showVaultUnlockModal = false;
+    vaultUnlockPassphrase = "";
+    vaultUnlockError = "";
+  }
+
+  async function confirmVaultUnlock() {
+    if (!tauriReady || !vaultUnlockPassphrase) return;
+    vaultUnlocking = true;
+    vaultUnlockError = "";
+    try {
+      const ok = await core.invoke("ipfs_unlock_vault", { passphrase: vaultUnlockPassphrase });
+      if (ok) {
+        vaultLocked = false;
+        vaultStatus.set({ exists: true, unlocked: true });
+        closeVaultUnlockModal();
+      } else {
+        vaultUnlockError = "Incorrect passphrase.";
+      }
+    } catch (err) {
+      vaultUnlockError = String(err || "Failed to unlock vault");
+    }
+    vaultUnlocking = false;
+  }
+
+  async function handleVaultStatusClick() {
+    if (!tauriReady) return;
+    await refreshVaultStatus();
+    if (!vaultExists) {
+      activeTab = "TOOLS";
+      window.dispatchEvent(new CustomEvent("commander-open-tools-wallet"));
+      return;
+    }
+    if (vaultLocked) {
+      openVaultUnlockModal();
+    } else {
+      try {
+        await core.invoke("ipfs_lock_vault");
+        vaultLocked = true;
+        vaultStatus.set({ exists: true, unlocked: false });
+      } catch {}
+    }
+  }
+
   /**
    * @param {string} status
    */
@@ -648,6 +722,10 @@
       ipfsHubSection.set("library");
     };
     window.addEventListener("commander-open-content-library", openLibraryHandler);
+    const vaultUnlockHandler = () => {
+      openVaultUnlockModal();
+    };
+    window.addEventListener("commander-open-vault-unlock", vaultUnlockHandler);
     if (tauriReady) {
       // Handle close event for daemon lifecycle
       getCurrentWindow().onCloseRequested(async (event) => {
@@ -844,6 +922,7 @@
         await refreshDashboard();
         await refreshStratumStatus();
         await refreshRpcAuthStatus();
+        await refreshVaultStatus();
       }
 
       let delay = 5000;
@@ -859,6 +938,7 @@
       clearTimeout(timer);
       window.removeEventListener("resize", updateScale);
       window.removeEventListener("commander-open-content-library", openLibraryHandler);
+      window.removeEventListener("commander-open-vault-unlock", vaultUnlockHandler);
       if (typeof unlistenNetwork === "function") unlistenNetwork();
     };
   });
@@ -953,6 +1033,26 @@
     >
       <span class="ts-label">Wallet</span>
       <span class="ts-val">{walletInfo.status}</span>
+    </button>
+    <button
+      type="button"
+      class="ts-item"
+      class:ts-ok={vaultExists && !vaultLocked}
+      class:ts-warn={vaultExists && vaultLocked}
+      class:wallet-status-action={vaultExists}
+      title={vaultExists ? (vaultLocked ? "Unlock Vault" : "Lock Vault") : "No vault configured"}
+      on:click={handleVaultStatusClick}
+    >
+      <span class="ts-label">Vault</span>
+      <span class="ts-val">
+        {#if !vaultExists}
+          NONE
+        {:else if vaultLocked}
+          LOCKED
+        {:else}
+          UNLOCKED
+        {/if}
+      </span>
     </button>
     <div class="ts-item">
       <span class="ts-label">Network</span>
@@ -1343,6 +1443,15 @@
       </div>
     </div>
   {/if}
+
+  <VaultUnlockModal
+    show={showVaultUnlockModal}
+    bind:password={vaultUnlockPassphrase}
+    unlocking={vaultUnlocking}
+    error={vaultUnlockError}
+    on:cancel={closeVaultUnlockModal}
+    on:confirm={confirmVaultUnlock}
+  />
 
   <!-- WELCOME POPUP -->
   {#if showWelcome}

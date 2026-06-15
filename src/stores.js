@@ -60,6 +60,15 @@ export const uiState = writable({
  * Daemon Runtime
  * Tracks daemon lifecycle: ownership, runtime status, launch decisions.
  */
+/**
+ * Vault Status
+ * Tracks the unified vault existence and lock state.
+ */
+export const vaultStatus = writable({
+    exists: false,
+    unlocked: false,
+});
+
 export const daemonRuntime = writable({
     commanderOwns: false,
     bundledCoreNextReady: false,

@@ -253,6 +253,7 @@ pub fn run() {
             provider_settings::ipfs_vault_status,
             provider_settings::ipfs_migrate_provider_tokens_to_vault,
             provider_settings::ipfs_vault_provider_status,
+            provider_settings::ipfs_provider_token_presence,
             provider_settings::ipfs_vault_remove_provider_token,
             provider_settings::ipfs_vault_import_bundle_replace,
             // Stratum Commands
@@ -284,6 +285,10 @@ pub fn run() {
             short_message_table_packs::short_message_reset_table_pack,
             // Vault Commands
             vault::vault_get_info,
+            vault::vault_get_vault_overview,
+            vault::vault_get_vault_index,
+            vault::vault_set_vault_label,
+            vault::vault_archive_current_vault,
             vault::vault_setup,
             vault::vault_get_supported_record_types,
             vault::vault_get_supported_derivation_profiles,
@@ -295,6 +300,14 @@ pub fn run() {
             vault::vault_restore_wallet_migration_record,
             vault::vault_list_wallet_migration_records,
             vault::vault_remove_wallet_migration_record,
+            // Vault cached-session wrappers for the Wallet page
+            provider_settings::ipfs_vault_setup_and_unlock,
+            provider_settings::ipfs_vault_unlock_status,
+            provider_settings::ipfs_vault_list_wallet_migration_records,
+            provider_settings::ipfs_vault_export_current_wallet_migration_record,
+            provider_settings::ipfs_vault_restore_wallet_migration_record,
+            provider_settings::ipfs_vault_remove_wallet_migration_record,
+            provider_settings::ipfs_vault_import_wallet_migration_record_from_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

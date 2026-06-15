@@ -302,6 +302,17 @@ fn vault_temp_path() -> Result<PathBuf, String> {
     Ok(commander_dir()?.join("vault.json.tmp"))
 }
 
+fn vault_state_dir() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    {
+        let override_path = TEST_VAULT_DIR.with(|cell| cell.borrow().clone());
+        if let Some(dir) = override_path {
+            return Ok(dir);
+        }
+    }
+    commander_dir()
+}
+
 fn validate_network(network: Option<&str>) -> Result<(), String> {
     match network {
         None | Some("") => Err("Network must be set".to_string()),
@@ -1115,6 +1126,334 @@ pub fn vault_get_info() -> Result<Option<serde_json::Value>, String> {
     }
 }
 
+/// Metadata-only vault overview for the Wallet page header.
+///
+/// This intentionally does NOT decrypt the payload. It only reads the
+/// on-disk bundle shape and key-slot configuration (KDF profile / params),
+/// which are non-secret envelope metadata, so the Wallet page can show
+/// "Vault ready" / "No vault yet" / "Vault file path" without prompting
+/// for a passphrase.
+///
+/// Wallet-record count is intentionally NOT returned here because the
+/// records live inside the encrypted payload. The UI shows the count
+/// after the user unlocks the vault and lists records.
+#[tauri::command]
+pub fn vault_get_vault_overview() -> Result<serde_json::Value, String> {
+    let path = vault_path().map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| String::new());
+    let bundle = load_bundle()?;
+    let index = load_vault_index().unwrap_or_default();
+    let display_label = index
+        .labels
+        .get(&path)
+        .map(|e| e.display_name.clone())
+        .unwrap_or_default();
+    let overview = match bundle {
+        Some(b) => {
+            let first_slot = b.vault.key_slots.first();
+            let (file_size, file_modified) = vault_file_stats();
+            serde_json::json!({
+                "exists": true,
+                "vault_path": path,
+                "bundle_version": b.bundleVersion,
+                "format_identifier": b.format_identifier,
+                "vault_version": b.vault.version,
+                "schema_identifier": b.vault.schema_identifier,
+                "app_identifier": b.vault.app_identifier,
+                "network": b.vault.network,
+                "cipher_profile": b.vault.cipher_profile,
+                "aad_profile": b.vault.aad_profile,
+                "payload_schema": b.vault.payload.payload_schema,
+                "kdf_profile": first_slot.map(|s| s.kdf_profile.clone()),
+                "key_slot_count": b.vault.key_slots.len(),
+                "created": b.vault.created,
+                "modified": b.vault.modified,
+                "file_size": file_size,
+                "file_modified": file_modified,
+                "display_label": display_label,
+            })
+        }
+        None => serde_json::json!({
+            "exists": false,
+            "vault_path": path,
+            "file_size": 0_i64,
+            "file_modified": 0_i64,
+            "display_label": display_label,
+        }),
+    };
+    Ok(overview)
+}
+
+fn vault_file_stats() -> (i64, i64) {
+    // Best-effort metadata only; failures collapse to 0 so the overview
+    // is still usable on locked-down filesystems.
+    if let Ok(path) = vault_path() {
+        if let Ok(meta) = fs::metadata(&path) {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            return (meta.len() as i64, modified);
+        }
+    }
+    (0, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Vault File Manager (slice 60s)
+// ---------------------------------------------------------------------------
+//
+// Local non-secret metadata lives in a sidecar file under the Commander
+// directory: <commander_dir>/vault_index.json
+//
+// The sidecar is allowed to contain ONLY:
+//   - vault path
+//   - display name
+//   - last selected timestamp
+//   - archived/known vault list
+//
+// It MUST NEVER contain: passphrases, hints, private keys, mnemonics,
+// provider tokens, or any decrypted vault content.
+
+const VAULT_INDEX_FILENAME: &str = "vault_index.json";
+const VAULT_ARCHIVE_DIRNAME: &str = "vaults";
+const VAULT_ARCHIVE_SUBDIR: &str = "archive";
+const VAULT_ARCHIVE_PREFIX: &str = "vault";
+const VAULT_ARCHIVE_EXTENSION: &str = "json";
+const VAULT_INDEX_VERSION: i32 = 1;
+const VAULT_MAX_LABEL_LEN: usize = 64;
+const VAULT_MAX_KNOWN_ENTRIES: usize = 64;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VaultIndexEntry {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub last_selected: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VaultIndex {
+    #[serde(default = "default_vault_index_version")]
+    pub version: i32,
+    #[serde(default)]
+    pub active_label: String,
+    #[serde(default)]
+    pub labels: HashMap<String, VaultIndexEntry>,
+    #[serde(default)]
+    pub archives: Vec<String>,
+}
+
+fn default_vault_index_version() -> i32 {
+    VAULT_INDEX_VERSION
+}
+
+fn vault_index_path() -> Result<PathBuf, String> {
+    Ok(vault_state_dir()?.join(VAULT_INDEX_FILENAME))
+}
+
+fn vault_archives_dir() -> Result<PathBuf, String> {
+    let dir = vault_state_dir()?
+        .join(VAULT_ARCHIVE_DIRNAME)
+        .join(VAULT_ARCHIVE_SUBDIR);
+    fs::create_dir_all(&dir).map_err(|e| format!("Could not create archive dir: {e}"))?;
+    Ok(dir)
+}
+
+pub fn load_vault_index() -> Result<VaultIndex, String> {
+    let path = vault_index_path()?;
+    if !path.exists() {
+        return Ok(VaultIndex {
+            version: VAULT_INDEX_VERSION,
+            ..Default::default()
+        });
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let parsed: VaultIndex = serde_json::from_str(&raw)
+        .map_err(|e| format!("Invalid vault index: {e}"))?;
+    Ok(parsed)
+}
+
+fn save_vault_index(index: &VaultIndex) -> Result<(), String> {
+    let path = vault_index_path()?;
+    let tmp = path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(index)
+        .map_err(|e| format!("Serialize vault index: {e}"))?;
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn sanitize_label(input: &str) -> String {
+    let mut clean = String::new();
+    let mut chars = input.trim().chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        clean.push(ch);
+        if clean.chars().count() >= VAULT_MAX_LABEL_LEN {
+            break;
+        }
+    }
+    clean
+}
+
+fn timestamped_archive_name(now_unix: i64) -> String {
+    // YYYYMMDD-HHMMSS in UTC.
+    let secs_per_day = 86_400_i64;
+    let secs_per_hour = 3_600_i64;
+    let secs_per_min = 60_i64;
+    let days = now_unix.div_euclid(secs_per_day);
+    let mut remainder = now_unix.rem_euclid(secs_per_day);
+    let hour = remainder / secs_per_hour;
+    remainder %= secs_per_hour;
+    let minute = remainder / secs_per_min;
+    let second = remainder % secs_per_min;
+    // Convert days-since-epoch into a Y/M/D using a simple civil-from-days
+    // (Howard Hinnant's algorithm) to keep the helper self-contained.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{}{:02}{:02}-{:02}{:02}{:02}",
+        y, m, d, hour, minute, second
+    )
+}
+
+#[tauri::command]
+pub fn vault_get_vault_index() -> Result<serde_json::Value, String> {
+    let path = vault_index_path()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let index = load_vault_index()?;
+    Ok(serde_json::json!({
+        "version": index.version,
+        "active_label": index.active_label,
+        "labels": index.labels,
+        "archives": index.archives,
+        "index_path": path,
+    }))
+}
+
+#[tauri::command]
+pub fn vault_set_vault_label(label: String) -> Result<serde_json::Value, String> {
+    let clean = sanitize_label(&label);
+    let mut index = load_vault_index()?;
+    let path = vault_path()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if clean.is_empty() {
+        index.labels.remove(&path);
+        index.active_label.clear();
+    } else {
+        let entry = index.labels.entry(path.clone()).or_default();
+        entry.display_name = clean.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        entry.last_selected = now;
+        index.active_label = clean.clone();
+    }
+    save_vault_index(&index)?;
+    Ok(serde_json::json!({
+        "updated": true,
+        "active_label": index.active_label,
+    }))
+}
+
+/// Move the current active `vault.json` into the archive directory and
+/// clear the cached unlock session. The file is preserved verbatim on
+/// disk; it is never deleted. Returns the absolute archive path.
+#[tauri::command]
+pub fn vault_archive_current_vault() -> Result<serde_json::Value, String> {
+    let current = vault_path()?;
+    if !current.exists() {
+        return Err("No vault file to archive".to_string());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let stamp = timestamped_archive_name(now);
+    let archive_dir = vault_archives_dir()?;
+    let mut target = archive_dir.join(format!(
+        "{}-{}.{}",
+        VAULT_ARCHIVE_PREFIX, stamp, VAULT_ARCHIVE_EXTENSION
+    ));
+    // Avoid collision: append a numeric suffix if needed.
+    let mut suffix: u32 = 1;
+    while target.exists() {
+        target = archive_dir.join(format!(
+            "{}-{}-{}.{}",
+            VAULT_ARCHIVE_PREFIX, stamp, suffix, VAULT_ARCHIVE_EXTENSION
+        ));
+        suffix = suffix.saturating_add(1);
+    }
+    fs::rename(&current, &target)
+        .map_err(|e| format!("Could not archive vault file: {e}"))
+        .or_else(|rename_err| {
+            // `fs::rename` is not always valid across filesystems (e.g.
+            // the test override is on /tmp while the active data dir is
+            // elsewhere). Fall back to copy + delete so the archive path
+            // still works in mixed-filesystem environments.
+            fs::copy(&current, &target)
+                .map_err(|copy_err| {
+                    format!(
+                        "Could not archive vault file: rename failed ({rename_err}); copy fallback failed ({copy_err})"
+                    )
+                })
+                .and_then(|_| {
+                    fs::remove_file(&current)
+                        .map_err(|rm_err| format!("Could not remove archived vault: {rm_err}"))
+                })
+        })?;
+    // Best-effort: clear the cached unlock session so a stale unlock does
+    // not survive the archive. Failure here is non-fatal because the file
+    // is already moved and the user can re-unlock against the archive.
+    let _ = crate::modules::provider_settings::ipfs_lock_vault();
+    let mut index = load_vault_index()?;
+    let path_str = target.to_string_lossy().to_string();
+    index.archives.insert(0, path_str.clone());
+    if index.archives.len() > VAULT_MAX_KNOWN_ENTRIES {
+        index.archives.truncate(VAULT_MAX_KNOWN_ENTRIES);
+    }
+    // The current active vault is no longer present; drop any label entry
+    // that pointed at the now-archived path.
+    let current_str = current.to_string_lossy().to_string();
+    index.labels.remove(&current_str);
+    if !index.active_label.is_empty() {
+        index.active_label.clear();
+    }
+    save_vault_index(&index)?;
+    Ok(serde_json::json!({
+        "archived": true,
+        "archive_path": path_str,
+        "archive_dir": archive_dir.to_string_lossy().to_string(),
+    }))
+}
+
 #[tauri::command]
 pub fn vault_setup(passphrase: String) -> Result<serde_json::Value, String> {
     let payload = VaultPayload::default();
@@ -1202,6 +1541,9 @@ pub fn vault_get_provider_records_status(passphrase: String) -> Result<serde_jso
 // ─── Wallet Migration Record Helpers ─────────────────────────────────────
 
 const WALLET_MIGRATION_RECORD_PREFIX: &str = "wallet.core_migration_envelope.";
+
+const RECOVERY_MODE_VAULT_PASSPHRASE: &str = "vault_passphrase";
+const RECOVERY_MODE_SEPARATE_PASSPHRASE: &str = "separate_passphrase";
 
 fn vault_tmp_dir() -> Result<PathBuf, String> {
     let dir = commander_dir()?.join("tmp");
@@ -1532,19 +1874,32 @@ pub fn vault_export_current_wallet_migration_record(
     include_private: bool,
     migration_passphrase: String,
     vault_passphrase: Option<String>,
+    recovery_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if !include_private {
         return Err("Only private (restorable) migration envelopes can be stored in the vault".to_string());
     }
-    if migration_passphrase.len() < 8 {
-        return Err("Migration passphrase must be at least 8 characters".to_string());
-    }
-    if migration_passphrase.len() > 1024 {
-        return Err("Migration passphrase must not exceed 1024 characters".to_string());
-    }
+
+    let effective_recovery_mode = recovery_mode
+        .as_deref()
+        .map(|m| m.trim().to_string())
+        .filter(|m| m == RECOVERY_MODE_VAULT_PASSPHRASE || m == RECOVERY_MODE_SEPARATE_PASSPHRASE)
+        .unwrap_or_else(|| RECOVERY_MODE_SEPARATE_PASSPHRASE.to_string());
 
     let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
     let label = validate_label(&label)?;
+
+    let effective_migration_passphrase: String = if effective_recovery_mode == RECOVERY_MODE_VAULT_PASSPHRASE {
+        passphrase.clone()
+    } else {
+        if migration_passphrase.len() < 8 {
+            return Err("Migration passphrase must be at least 8 characters".to_string());
+        }
+        if migration_passphrase.len() > 1024 {
+            return Err("Migration passphrase must not exceed 1024 characters".to_string());
+        }
+        migration_passphrase.clone()
+    };
 
     let temp = TempFileGuard::new("vault_migration_temp")?;
 
@@ -1552,13 +1907,13 @@ pub fn vault_export_current_wallet_migration_record(
         temp.path_str(),
         true,
         true,
-        migration_passphrase.clone(),
+        effective_migration_passphrase.clone(),
     ).map_err(|e| format!("Failed to export wallet migration: {e}"))?;
 
     let content = fs::read_to_string(&temp.path)
         .map_err(|e| format!("Cannot read temp migration file: {e}"))?;
 
-    let validation = validate_migration_envelope_file(&temp.path_str(), &migration_passphrase)
+    let validation = validate_migration_envelope_file(&temp.path_str(), &effective_migration_passphrase)
         .map_err(|e| format!("Migration envelope validation after export failed: {e}"))?;
 
     let valid = validation.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1571,6 +1926,7 @@ pub fn vault_export_current_wallet_migration_record(
         obj.insert("source".to_string(), serde_json::Value::String("core-next-exportwalletmigration".to_string()));
         obj.insert("exported_at".to_string(), serde_json::Value::Number(chrono::Utc::now().timestamp().into()));
         obj.insert("label".to_string(), serde_json::Value::String(label.clone()));
+        obj.insert("recovery_mode".to_string(), serde_json::Value::String(effective_recovery_mode.clone()));
     }
 
     let record_id = generate_collision_safe_record_id("export", &content);
@@ -1581,6 +1937,7 @@ pub fn vault_export_current_wallet_migration_record(
         "exported_to_vault": true,
         "record_id": record_id,
         "label": label,
+        "recovery_mode": effective_recovery_mode,
         "migration_filename": export_result.get("filename").and_then(|v| v.as_str()).unwrap_or(""),
     }))
 }
@@ -1595,6 +1952,34 @@ pub fn vault_restore_wallet_migration_record(
 ) -> Result<serde_json::Value, String> {
     let passphrase = vault_passphrase.ok_or("Vault passphrase is required")?;
 
+    let bundle = load_bundle()?.ok_or("Vault does not exist")?;
+    let payload = decrypt_vault_envelope(&passphrase, &bundle.vault)?;
+
+    let record = payload.secrets.get(&record_id)
+        .ok_or(format!("No wallet migration record found for: {record_id}"))?;
+
+    if record.record_type != RECORD_TYPE_WALLET_CORE_MIGRATION {
+        return Err(format!("Record {record_id} is not a wallet migration record"));
+    }
+
+    let recovery_mode = record.metadata.as_ref()
+        .and_then(|m| m.get("recovery_mode"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let effective_migration_passphrase: String = if recovery_mode == RECOVERY_MODE_VAULT_PASSPHRASE && !migration_passphrase.is_empty() {
+        return Err(
+            "This backup record was created with vault-passphrase recovery. Do not provide a separate migration passphrase — the vault passphrase is used automatically.".to_string()
+        );
+    } else if recovery_mode == RECOVERY_MODE_VAULT_PASSPHRASE {
+        passphrase.clone()
+    } else {
+        if migration_passphrase.len() < 8 {
+            return Err("Migration passphrase must be at least 8 characters".to_string());
+        }
+        migration_passphrase.clone()
+    };
+
     let temp = TempFileGuard::new("vault_restore_temp")?;
 
     export_wallet_migration_record_to_path(&passphrase, &record_id, &temp.path_str())
@@ -1604,7 +1989,7 @@ pub fn vault_restore_wallet_migration_record(
     let restore_result = crate::modules::commands::restore_wallet_migration(
         temp.path_str(),
         wallet_name,
-        migration_passphrase,
+        effective_migration_passphrase,
         birth_height,
     ).map_err(|e| format!("Failed to restore wallet migration: {e}"))?;
 
@@ -3355,5 +3740,215 @@ mod tests {
         assert_eq!(meta["envelope_kdf_profile"], "unknown");
         assert_eq!(meta["envelope_cipher_profile"], "unknown");
         assert_eq!(meta["envelope_aad_profile"], "unknown");
+    }
+
+    #[test]
+    fn vault_overview_reports_not_exists_when_no_bundle() {
+        let _guard = setup_test_vault_dir();
+        let overview = vault_get_vault_overview().unwrap();
+        assert_eq!(overview["exists"], false);
+        assert!(overview["vault_path"].is_string());
+    }
+
+    #[test]
+    fn vault_overview_reports_metadata_when_bundle_exists() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "overview-test-pass";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let overview = vault_get_vault_overview().unwrap();
+        assert_eq!(overview["exists"], true);
+        assert_eq!(overview["bundle_version"], CURRENT_BUNDLE_VERSION);
+        assert_eq!(overview["format_identifier"], FORMAT_IDENTIFIER);
+        assert_eq!(overview["kdf_profile"], KDF_PROFILE_SCRYPT);
+        assert_eq!(overview["key_slot_count"], 1);
+        assert_eq!(overview["cipher_profile"], CIPHER_PROFILE);
+        assert_eq!(overview["aad_profile"], AAD_PROFILE);
+        // Wallet-record count is intentionally not exposed here.
+        assert!(overview.get("wallet_record_count").is_none());
+        // File stats and stable display_label key are exposed.
+        assert!(overview["file_size"].as_i64().unwrap_or(0) > 0);
+        assert!(overview["file_modified"].as_i64().unwrap_or(0) > 0);
+        assert!(overview.get("display_label").is_some());
+    }
+
+    // ---- slice 60s: vault file manager sidecar + archive ----
+
+    fn write_real_vault_file(guard: &TestVaultDirGuard) -> PathBuf {
+        // Use the real bundle format so `vault_get_vault_overview` does
+        // not reject the test file as malformed.
+        let _ = guard;
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope =
+            encrypt_vault_envelope("slice60s-test-pass", &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+        vault_path().unwrap()
+    }
+
+    #[test]
+    fn vault_set_and_get_label_roundtrip() {
+        let _guard = setup_test_vault_dir();
+        let _path = write_real_vault_file(&_guard);
+
+        let res = vault_set_vault_label("  Main Commander Vault  ".to_string()).unwrap();
+        assert_eq!(res["updated"], true);
+        assert_eq!(res["active_label"], "Main Commander Vault");
+
+        let overview = vault_get_vault_overview().unwrap();
+        assert_eq!(overview["display_label"], "Main Commander Vault");
+
+        // Clearing the label removes the entry but keeps the key present.
+        let res2 = vault_set_vault_label("   ".to_string()).unwrap();
+        assert_eq!(res2["active_label"], "");
+        let overview2 = vault_get_vault_overview().unwrap();
+        assert_eq!(overview2["display_label"], "");
+    }
+
+    #[test]
+    fn vault_set_label_truncates_and_strips_control_chars() {
+        let _guard = setup_test_vault_dir();
+        let _path = write_real_vault_file(&_guard);
+
+        let mut s = String::new();
+        s.push_str("\u{1b}[31mred");
+        while s.len() < 200 {
+            s.push('x');
+        }
+        let res = vault_set_vault_label(s).unwrap();
+        let label = res["active_label"].as_str().unwrap().to_string();
+        assert!(label.len() <= VAULT_MAX_LABEL_LEN);
+        assert!(!label.contains('\u{1b}'));
+        assert!(!label.contains("[31m"));
+        assert!(label.starts_with("red"));
+    }
+
+    #[test]
+    fn vault_archive_moves_file_and_records_in_index() {
+        let _guard = setup_test_vault_dir();
+        let path = write_real_vault_file(&_guard);
+        let original_size = std::fs::metadata(&path).unwrap().len();
+        assert!(path.exists());
+
+        let res = vault_archive_current_vault().unwrap();
+        assert_eq!(res["archived"], true);
+        let archive_path = res["archive_path"].as_str().unwrap().to_string();
+        assert!(std::path::Path::new(&archive_path).exists());
+        // Original active vault is gone.
+        assert!(!path.exists());
+        // The archive is a verbatim copy, not a deletion.
+        let archived_size = std::fs::metadata(&archive_path).unwrap().len();
+        assert_eq!(archived_size, original_size);
+
+        // The index recorded the archive.
+        let index = load_vault_index().unwrap();
+        assert!(index.archives.iter().any(|a| a == &archive_path));
+    }
+
+    #[test]
+    fn vault_archive_requires_existing_file() {
+        let _guard = setup_test_vault_dir();
+        // No vault file present.
+        let err = vault_archive_current_vault().unwrap_err();
+        assert!(err.to_lowercase().contains("no vault"));
+    }
+
+    // ─── slice 60v: recovery_mode tests ─────────────────────────────────
+
+    #[test]
+    fn recovery_mode_vault_passphrase_stored_in_metadata() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase-recovery";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        // This is a unit test on the metadata shape; we cannot run
+        // vault_export_current_wallet_migration_record without a live
+        // Core node, but we can validate the metadata structure
+        // directly by calling insert with the right metadata.
+        let record_id = "wallet.core_migration_envelope.test-recovery-1";
+        let value = make_migration_envelope_json();
+        let mut metadata = make_migration_metadata();
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.insert("recovery_mode".to_string(), serde_json::Value::String(RECOVERY_MODE_VAULT_PASSPHRASE.to_string()));
+        }
+        insert_wallet_migration_record(passphrase, record_id, "Test Vault Recovery", &value, metadata).unwrap();
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        let rec = records.iter().find(|r| r["record_id"] == record_id).unwrap();
+        assert_eq!(rec["metadata"]["recovery_mode"], RECOVERY_MODE_VAULT_PASSPHRASE);
+    }
+
+    #[test]
+    fn recovery_mode_separate_passphrase_stored_in_metadata() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase-separate";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let record_id = "wallet.core_migration_envelope.test-separate-1";
+        let value = make_migration_envelope_json();
+        let mut metadata = make_migration_metadata();
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.insert("recovery_mode".to_string(), serde_json::Value::String(RECOVERY_MODE_SEPARATE_PASSPHRASE.to_string()));
+        }
+        insert_wallet_migration_record(passphrase, record_id, "Test Separate Recovery", &value, metadata).unwrap();
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        let rec = records.iter().find(|r| r["record_id"] == record_id).unwrap();
+        assert_eq!(rec["metadata"]["recovery_mode"], RECOVERY_MODE_SEPARATE_PASSPHRASE);
+    }
+
+    #[test]
+    fn recovery_mode_legacy_no_metadata_treated_as_separate() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-passphrase-legacy";
+        let payload = make_provider_payload("pinata", "filebase");
+        let envelope = encrypt_vault_envelope(passphrase, &payload, KDF_PROFILE_SCRYPT).unwrap();
+        let bundle = VaultBundle {
+            bundleVersion: CURRENT_BUNDLE_VERSION,
+            format_identifier: FORMAT_IDENTIFIER.to_string(),
+            vault: envelope,
+            meta: None,
+        };
+        save_bundle_atomic(&bundle).unwrap();
+
+        let record_id = "wallet.core_migration_envelope.test-legacy-1";
+        let value = make_migration_envelope_json();
+        let metadata = make_migration_metadata(); // no recovery_mode key
+        insert_wallet_migration_record(passphrase, record_id, "Legacy Record", &value, metadata).unwrap();
+
+        let records = list_wallet_migration_records(passphrase).unwrap();
+        let rec = records.iter().find(|r| r["record_id"] == record_id).unwrap();
+        // Legacy records should have no recovery_mode key,
+        // which the frontend treats as "separate": user must enter password.
+        assert!(rec["metadata"]["recovery_mode"].is_null());
     }
 }

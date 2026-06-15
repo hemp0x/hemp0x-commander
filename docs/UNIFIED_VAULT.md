@@ -187,27 +187,109 @@ The Tauri command is `ipfs_vault_remove_provider_token(provider_id)`, which uses
 
 ## UI Control Locations
 
-Vault management UI lives in two places:
+Vault file management UI lives on the **Wallet page** (Tools →
+Wallet). IPFS Settings only stores and uses provider credentials
+inside the active vault. The two pages share the same underlying
+`vault.json` file and the same cached unlock session.
 
 | Control | Location |
 |---------|----------|
-| Vault setup (create) | IPFS Settings → Vault section |
-| Vault unlock / lock | IPFS Settings → Vault section |
-| Vault backup (export) | IPFS Settings → Vault section → Back Up Vault |
-| Vault restore (import) | IPFS Settings → Vault section → Restore Vault |
-| Provider token migration | IPFS Settings → Vault section → Migrate Tokens |
-| Provider token status | IPFS Settings → Vault section (when unlocked) |
-| Provider token removal | IPFS Settings → Vault section → Remove (per provider) |
-| Core wallet backup | Wallet page → Wallet Management |
-| Core wallet migration | Wallet page → Core Wallet Migration |
-| Vault vs wallet distinction | Wallet page → App Secrets Vault |
-| Vault wallet record import | Wallet page → Unified Vault Wallet Records |
-| Vault wallet record export (active) | Wallet page → Unified Vault Wallet Records |
-| Vault wallet record list | Wallet page → Unified Vault Wallet Records |
-| Vault wallet record restore | Wallet page → Unified Vault Wallet Records |
-| Vault wallet record remove | Wallet page → Unified Vault Wallet Records |
+| Vault setup (create) | Wallet page → Recommended Backup (inline, when no vault exists) |
+| Vault unlock / lock | Wallet page → Wallet Status header (inline) and Recommended Backup (inline) |
+| Vault file backup (export bundle) | Wallet page → Vault File area → Back Up Current Vault |
+| Vault file restore (import bundle) | Wallet page → Vault File area → Switch / Import Vault |
+| Vault file label / archive / known vaults | Wallet page → Vault File area |
+| Back up active wallet to vault (recommended) | Wallet page → Recommended Backup |
+| List stored wallet backups | Wallet page → Restore / Recover Wallet |
+| Restore wallet from vault backup | Wallet page → Restore / Recover Wallet |
+| `wallet.dat` file backup/restore (legacy) | Wallet page → Advanced → Wallet.dat (Legacy / Compatibility) |
+| Core migration envelope export/validate/restore (low-level) | Wallet page → Advanced → Core Wallet Migration |
+| Vault wallet record import (from migration file) | Wallet page → Advanced → Advanced Vault Records |
+| Vault wallet record remove | Wallet page → Advanced → Advanced Vault Records |
+| Provider token entry / update | IPFS Settings → Publishing provider card |
+| Provider token status (stored / missing) | IPFS Settings → Vault status panel |
+| Vault unlock for IPFS | IPFS Settings → UNLOCK VAULT button (opens unified modal) |
+| Provider token removal | IPFS Settings → per-provider REMOVE (only when unlocked and stored) |
+| Vault status bar | App trust strip → VAULT (LOCKED / UNLOCKED / NONE) |
+| Unified vault unlock modal | App header VAULT click or `commander-open-vault-unlock` event |
 
-The Wallet page includes an **App Secrets Vault** section that explains the `wallet.dat` / `vault.json` distinction and directs users to IPFS Settings for vault operations. The **Unified Vault Wallet Records** section manages wallet migration records stored in the vault.
+The Wallet page Recommended Backup section can drive the user all
+the way through setup, unlock, backup, list, and restore without
+leaving the page. IPFS Settings no longer manages the vault *file*
+itself; it only stores and uses provider credentials inside the
+active vault, and reuses the cached unlock session set by the
+Wallet page.
+
+## Wallet Page Vault-First Flow (60q)
+
+The Wallet page uses a **vault-first** model for user-facing wallet
+backup and recovery, while keeping `wallet.dat` as the live Core
+wallet internally. The flow on the Wallet page is:
+
+1. **Wallet Status header** (no passphrase required)
+   - Shows Core `wallet.dat` name + encrypted / locked / unlocked
+     state via `rpc_get_wallet_info`.
+   - Shows vault existence, KDF profile, and lock state via
+     `vault_get_vault_overview` and `ipfs_vault_unlock_status`.
+   - Shows whether `wallet.dat` exists via `get_data_folder_info`
+     and surfaces a recovery banner if it is missing.
+   - Surfaces a dismissible `Finish vault backup` banner after a
+     successful `create_new_wallet`.
+2. **Recommended Backup** section
+   - If no vault exists: inline `Create Vault` card (passphrase +
+     confirm) using `ipfs_vault_setup_and_unlock`.
+   - If vault exists but locked: inline `Unlock Vault` row using
+     `ipfs_unlock_vault`.
+   - If vault is unlocked: just label + wallet backup passphrase +
+     one `Back Up Wallet To Vault` button. The cached vault session
+     is reused; no per-call vault passphrase is required.
+3. **Restore / Recover Wallet** section
+   - If vault exists and unlocked, the stored backup list is
+     populated and refreshes on demand.
+   - If vault exists but locked, the user is prompted to unlock
+     inline.
+   - Restore form asks only for the wallet backup passphrase and a
+     typed confirmation when the vault is unlocked. The cached
+     vault session is reused; no per-call vault passphrase is
+     required.
+   - Birth height is hidden behind an `Advanced restore options`
+     disclosure.
+4. **Unified Vault** informational section
+   - Explains that the vault is a general encrypted container
+     holding wallet backup records and optional app-secret records
+     such as provider tokens.
+   - States that Core still uses `wallet.dat` internally today.
+5. **Advanced** (collapsed by default)
+   - Legacy `wallet.dat` file backup, restore, and new.
+   - Private-key export/import.
+   - Wallet encryption change.
+   - Low-level Core migration envelope export / validate / restore.
+   - Vault record import-from-file and remove.
+
+### Cached Unlock Session
+
+The Wallet page reuses the cached vault unlock session set by
+`ipfs_unlock_vault` (or `ipfs_vault_setup_and_unlock`). The cached
+passphrase:
+
+- Is held in a process-local `Zeroizing<String>` inside a `Mutex`.
+  It is never persisted, never logged, and never sent back over IPC.
+- Is cleared automatically on `ipfs_lock_vault`,
+  `ipfs_vault_import_bundle_replace`, and on a vault-decrypt error
+  inside `load_provider_tokens`.
+- Is used by the new `ipfs_vault_list_wallet_migration_records`,
+  `ipfs_vault_export_current_wallet_migration_record`,
+  `ipfs_vault_restore_wallet_migration_record`,
+  `ipfs_vault_remove_wallet_migration_record`, and
+  `ipfs_vault_import_wallet_migration_record_from_path` wrappers
+  when the Wallet page does not pass an explicit per-call vault
+  passphrase. Users who want to keep the vault locked can still
+  pass the passphrase explicitly to one operation.
+
+The cached-session design is opt-in per operation: the frontend
+falls back to the explicit `vaultPassphrase` field whenever the
+vault is not unlocked, so users who never unlock the vault on the
+Wallet page continue to work.
 
 ## Wallet Migration Records
 
@@ -267,6 +349,17 @@ The `value` field contains the full encrypted Core Next migration envelope JSON 
 | `envelope_coin_type` | From migration validation | Coin type (420 for Hemp0x) |
 | `label` | User-provided | Human-readable label |
 | `wallet_name_hint` | User-provided or `"default"` | Suggested wallet name for restore |
+| `recovery_mode` | Set by Commander at backup time | `"vault_passphrase"` or `"separate_passphrase"` (see Recovery Mode below) |
+
+### Recovery Mode (Slice 60v)
+
+New wallet backup records include a `recovery_mode` metadata field:
+
+- **`vault_passphrase`** (default): The vault passphrase doubles as the migration envelope passphrase. When restoring, Commander automatically uses the cached vault passphrase — no second password prompt.
+- **`separate_passphrase`**: A distinct backup recovery password protects the migration envelope. The user must provide it at restore time.
+- **Legacy / unknown** (no `recovery_mode` key): Treated as "separate". The user must provide an explicit backup recovery password.
+
+The live Core wallet unlock password is **never** stored in the vault. The vault is never used as a password manager for the runtime Core wallet.
 
 ### Commands
 
@@ -284,26 +377,195 @@ The `value` field contains the full encrypted Core Next migration envelope JSON 
 - Export to temp file writes the exact stored envelope for restore operations.
 - Temp files are deleted best-effort after restore.
 - All commands require a vault passphrase (unlocked vault or explicit passphrase).
-- Restore requires the migration envelope passphrase in addition to the vault passphrase.
+- For `vault_passphrase` records, the vault passphrase is used as the migration envelope passphrase automatically (server-side only; never returned to frontend).
+- For `separate_passphrase` and legacy records, the user must provide the explicit backup recovery password.
+- The live Core wallet unlock password is never stored in the vault.
 
 ### Transition Path
 
 - **Today**: `wallet.dat` is the live Core wallet. Vault wallet records are portable encrypted backups.
-- **Future**: The vault can become the primary wallet storage, with `wallet.dat` as a fallback during transition.
-- A vault containing a private/restorable migration envelope can restore wallet keys if the user knows both the vault passphrase and the migration envelope passphrase.
+  - Commander **can** restore a Core runtime wallet from a vault backup record without a pre-existing `wallet.dat`. Core's `restorewalletmigration` RPC creates the necessary wallet files on disk.
+  - Commander **cannot** run Core directly from a vault without writing wallet files to disk. Core has no RPC to load a migration envelope as the active runtime wallet without file-system persistence.
+- **Future blocker for truly wallet.dat-free operation**: Core needs a new RPC (e.g., `loadwalletmigration`) that accepts a migration envelope and loads it as the active runtime wallet without writing wallet files to disk. The vault could then serve as the primary wallet backing store.
+- **Best currently possible**: Commander creates/imports a vault first, then provisions or restores the Core runtime wallet from vault records. `wallet.dat` is treated as a compatibility/runtime detail, not the primary user-facing backup model.
 
 ## What to Back Up
 
-A full Commander setup restore requires two separate files:
+Commander uses a vault-first backup model:
 
 | File | Purpose | Backup command |
 |------|---------|---------------|
-| `wallet.dat` | Core wallet keys and funds | Wallet page → Back Up Wallet |
-| `vault.json` | App/provider secrets + wallet migration records | IPFS Settings → Back Up Vault |
+| `vault.json` | Commander's portable encrypted wallet container + app secrets | Wallet page → Save Vault |
+| Runtime wallet files (`wallet.dat` / wallet directories) | Core's internal wallet files (compatibility) | Wallet page → Advanced → Backup wallet.dat |
 
-These are independent. Backing up `wallet.dat` does **not** back up `vault.json`, and the two may use different passphrases. For a full Commander restore, back up both.
+The **vault** is the recommended portable backup. The vault's wallet backup records are the primary recovery path. The runtime wallet files are compatibility plumbing; backing them up directly is an advanced operation.
 
-The wallet migration tools (Export/Validate/Restore Migration Package in the Wallet page) back up wallet keys in a portable format. They do **not** include vault secrets. The **Unified Vault Wallet Records** section can store encrypted migration envelopes inside the vault for a self-contained backup.
+If you have vault backup records (created via Backup tab), you can restore a runtime wallet without a pre-existing `wallet.dat`. Core still requires the runtime wallet files to exist on disk during operation, but Commander can provision them from the vault automatically.
+
+## Vault File Manager (60s)
+
+The Wallet page exposes a small **Vault File** area that gives users a normal UI path to identify, back up, switch, import, and label their vault file. The vault crypto, KDF, AAD, envelope version, payload schema, record shape, and bundle format are unchanged. No passphrase handling is weakened.
+
+### Active Vault File
+
+The active vault is the file at:
+
+```text
+<active Hemp0x data dir>/commander/vault.json
+```
+
+The Wallet page reads non-secret on-disk metadata only (file path, size, modified time, bundle version, vault version, network, envelope created/modified timestamps) via `vault_get_vault_overview`. It does not decrypt the vault for this overview.
+
+### Display Label (Sidecar)
+
+A human-friendly label such as `Main Commander Vault`, `Testing Vault`, or `WebCom Import` is stored in a non-secret local sidecar at:
+
+```text
+<active Hemp0x data dir>/commander/vault_index.json
+```
+
+The sidecar contains only:
+
+- vault path
+- display name
+- last selected timestamp
+- archived/known vault list
+
+It **must never** contain passphrases, passphrase hints, private keys, mnemonics, provider tokens, or any decrypted vault content. Storing the label outside the encrypted payload is intentional for this release; no envelope format change is required.
+
+### Archive
+
+`Back Up Current Vault` moves the current `vault.json` to:
+
+```text
+<active Hemp0x data dir>/commander/vaults/archive/vault-YYYYMMDD-HHMMSS.json
+```
+
+The file is preserved verbatim on disk and the cached unlock session is cleared. The operation is a rename (with copy-then-delete fallback for cross-filesystem paths). The active path `vault.json` is no longer present after a successful backup, so the Wallet page falls back to the **No vault / First setup** state.
+
+Confirmation requires typing the phrase `BACK UP VAULT`. This is the UI replacement for manually running:
+
+```bash
+mv ~/.hemp0x/commander/vault.json ~/.hemp0x/commander/vault.json.bak
+```
+
+Backed-up vaults are kept on disk and can be imported later via `Switch / Import Vault`. Internally, `vaults/archive/` is the backup/archive storage folder.
+
+### Switch / Import Vault
+
+`Switch / Import Vault` opens a file picker, validates the selected bundle (header, format identifier, supported bundle version) before changing anything, and then:
+
+1. If an active vault exists, backs it up first (as above) so it is preserved.
+2. Replaces the active `vault.json` with the imported bundle.
+3. Clears the cached unlock session.
+4. Re-renders the Wallet page in the locked state for the new vault.
+
+### Create New Vault When One Already Exists
+
+If a locked vault already exists and the user chooses `Create New Vault`:
+
+1. The user must confirm that the existing vault will be backed up first.
+2. The old vault is moved into `commander/vaults/archive/`.
+3. A new active vault is created with the user's new passphrase and unlocked for the session.
+
+### Lost Passphrase Behavior
+
+Commander does not attempt to recover or brute-force a lost vault passphrase. The recovery path is:
+
+- The file is still on disk; it was not deleted.
+- The user can `Back Up Current Vault` and then `Create New Vault` to start fresh.
+- Backed-up vaults can be re-imported via `Switch / Import Vault` and unlocked with their original passphrase if it is still known.
+
+### Sidecar Metadata Rules
+
+`vault_index.json` is the single source of truth for local, non-secret UI metadata. It is allowed to contain:
+
+- vault path
+- display name
+- last selected timestamp
+- archived/known vault list
+
+It is not allowed to contain: passphrases, hints, private keys, mnemonics, provider tokens, decrypted vault contents, or any other credential material. The sidecar is best-effort local metadata; the encrypted vault remains authoritative for any sensitive value.
+
+## IPFS Settings And The Vault (60w / 60x)
+
+The IPFS Settings page is intentionally narrow now that the unified
+vault exists:
+
+- It only stores and uses provider API credentials (Pinata, Filebase,
+  future providers) inside the **active** Commander vault.
+- It does **not** create, back up, restore, switch, or import the
+  vault file. Those actions live on the Wallet page.
+- The vault must be unlocked for the current Commander session
+  before saved provider tokens can be used. IPFS Settings shows an
+  **UNLOCK VAULT** button that opens the app-wide unified vault
+  unlock modal.
+- The IPFS Settings status panel reports three states for provider
+  tokens: `Stored safely` (encrypted in the vault),
+  `No token stored`, and `Unlock vault to check saved tokens`.
+- No provider token secrets, passphrases, or decrypted vault
+  content are returned to the frontend. The non-secret helper
+  `ipfs_provider_token_presence` reports per-provider presence
+  and the storage source without decrypting the vault or exposing
+  token values.
+
+If an IPFS action that needs a saved provider token is attempted
+while the vault is locked, the UI shows `Unlock your vault to use
+saved provider tokens.` instead of a raw backend error.
+
+## Global Vault Status Bar (60x)
+
+The app-wide trust strip (status bar) at the top of every view
+shows vault lock state between the Wallet and Network items:
+
+- **VAULT NONE** -- No vault configured. Clicking navigates to
+  Tools → Wallet where the vault can be created.
+- **VAULT LOCKED** -- A vault exists but is not unlocked. Clicking
+  opens the unified vault unlock modal.
+- **VAULT UNLOCKED** -- The vault session is active. Clicking locks
+  the vault (clears the cached passphrase).
+
+The status bar refreshes on the normal polling interval. After any
+unlock or lock action, the bar updates immediately.
+
+## Unified Vault Unlock Modal (60x)
+
+A single reusable vault unlock prompt is used app-wide:
+
+- Opens from the app header (click VAULT LOCKED) or from any feature
+  that needs vault access (IPFS Settings UNLOCK VAULT button).
+- Accepts the vault passphrase and calls `ipfs_unlock_vault`.
+- On success, updates global vault state and dismisses.
+- On failure, shows a clear error message.
+- The passphrase is never logged, never persisted in the frontend,
+  and only held in the backend's process-local `Zeroizing<String>`
+  cache during the session.
+
+Any feature that needs the vault should dispatch a
+`commander-open-vault-unlock` window event to trigger the modal,
+rather than embedding its own vault unlock form.
+
+## IPFS Settings (60x): No Legacy Plaintext-Token UX
+
+IPFS Settings no longer shows:
+
+- Inline vault passphrase input fields.
+- Legacy plaintext migration cards or terminology.
+- "Legacy plaintext token detected" status messages.
+
+The user-facing model is simplified:
+
+- Provider tokens are stored in the vault.
+- If no provider token exists, the status shows `No token stored`.
+- If the vault is locked and token presence cannot be checked,
+  the status shows `Unlock vault to check saved tokens`.
+- If tokens exist and the vault is unlocked, the status shows
+  `Stored safely`.
+
+Old plaintext tokens in `provider_settings.json` are treated
+defensively by the backend but are not surfaced as a normal UX
+state. On the next successful save with the vault unlocked,
+provider settings are saved without real token values.
 
 ## Current Deferred Work
 
@@ -339,17 +601,83 @@ Reserved for future use:
 
 Unknown records must be preserved when Commander updates provider tokens.
 
+## App Secret Records
+
+The vault is a **general encrypted container**, not a wallet-only
+construct. Commander currently stores the following *optional*
+app-secret record types in the vault:
+
+- `provider.api_token` (current examples: Pinata, Filebase).
+
+These records are *examples* of a general `provider.*` namespace,
+not a permanent requirement of the wallet-vault design. Future
+sensitive app settings can be added as new record types under
+`app_setting.*` or similar without changing the envelope format,
+the KDF, or the key slots.
+
+Rules for app-secret records:
+
+- They are independent of wallet records. Removing a provider
+  token does not affect any wallet backup record, and removing a
+  wallet record does not affect any provider token.
+- They are *optional*. A user can have a vault with only wallet
+  records, only app-secret records, both, or neither.
+- They must continue to be stored only as encrypted
+  `SecretRecord` entries inside the encrypted payload, never in
+  `meta` (which is unauthenticated and non-secret).
+- Their presence does not imply they are mandatory for wallet
+  backups, and their absence does not block wallet backups.
+- New record types should follow the existing record ID
+  conventions (`<namespace>.<provider-or-feature>.<key>`) and the
+  existing record shape.
+
+Commander and WebCom share this container concept, but the set
+of app-secret record types each app uses is a per-app
+configuration detail, not a property of the bundle or envelope
+format. See the Interop Notes below for WebCom-specific guidance.
+
 ## WebCom Interop Notes
 
 WebCom currently has its own native vault format. The unified bridge should import/export `bundleVersion: 3` bundles without breaking existing WebCom users.
 
+Commander and WebCom are intended to converge on this unified
+vault format. The bundle, envelope, KDF, AAD, payload schema, and
+record namespace language are designed to be neutral:
+
+- `wallet.*` for wallet / backup / derivation records.
+- `provider.*` for provider API credentials / settings.
+- `app_setting.*` (reserved) for future sensitive app settings.
+- Unknown / future record types must be preserved by any
+  implementation when a vault is re-saved.
+
 Important bridge rules:
 
 - Do not put secrets in `meta`.
+- Treat `meta` as advisory and unauthenticated. WebCom and
+  Commander must not use `meta` for trust decisions, key
+  derivation, record authorization, wallet identity, or any other
+  security-sensitive behavior.
 - Preserve legacy derivation profile strings.
 - Do not silently convert legacy coin 175 records to canonical coin 420 records.
 - WebCom PBKDF2-SHA256 16-byte salts are accepted for bridge import.
 - WebCom must reproduce Commander's AAD field order exactly when decrypting a Commander-compatible bundle.
+- Do not assume Commander-specific app-secret record types
+  (`provider.pinata.api_token`, `provider.filebase.token`,
+  `provider.kubo_endpoint`, etc.) exist in every WebCom bundle, or
+  vice versa. Each app stores the app-secret record types it
+  uses; the absence of a particular record is not an error.
+- Do not assume every bundle contains wallet records. A bundle
+  with only app-secret records is valid; a bundle with only wallet
+  records is valid; a bundle with no records at all is valid
+  (just an empty / freshly-created vault).
+- Commander's IPC surface and provider-token commands
+  (`ipfs_*_provider_token*`) are Commander-local. WebCom has its
+  own provider/settings concepts and may later adopt this format.
+  No Commander-only required field is added to the generic vault
+  shape.
+
+This section is documentation only. No WebCom code is changed in
+this slice.
 
 ## Core Next Notes
 
@@ -366,4 +694,3 @@ Recommended metadata includes:
 - `envelope_coin_type`
 - `envelope_schema_identifier`
 - `restorable`
-

@@ -2428,10 +2428,6 @@
             const selected = await open({
                 title: "Select Migration Envelope File",
                 multiple: false,
-                filters: [
-                    { name: "Migration Files", extensions: ["json"] },
-                    { name: "All Files", extensions: ["*"] },
-                ],
             });
             if (!selected) return;
             vaultImportPath = selected;
@@ -2697,7 +2693,6 @@
             const selected = await open({
                 title: "Select Migration Package",
                 multiple: false,
-                filters: [{ name: "Migration Files", extensions: ["json"] }],
             });
             if (selected) {
                 migrationValidatePath = selected;
@@ -2739,7 +2734,6 @@
             const selected = await open({
                 title: "Select Migration Package to Restore",
                 multiple: false,
-                filters: [{ name: "Migration Files", extensions: ["json"] }],
             });
             if (selected) {
                 migrationRestorePath = selected;

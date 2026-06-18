@@ -67,6 +67,14 @@ fn save_bootstrap(custom_data_dir: Option<String>) -> Result<(), String> {
 
 // Active data dir follows the bootstrap pointer
 pub fn active_data_dir() -> Result<PathBuf, String> {
+  #[cfg(test)]
+  {
+    let override_path = TEST_DATA_DIR.with(|cell| cell.borrow().clone());
+    if let Some(dir) = override_path {
+      // The override is responsible for creating the directory.
+      return Ok(dir);
+    }
+  }
   let bootstrap = load_bootstrap()?;
   if let Some(serde_json::Value::String(ref custom)) = bootstrap.get("custom_data_dir") {
     let p = PathBuf::from(custom);
@@ -86,9 +94,18 @@ pub fn data_dir() -> Result<PathBuf, String> {
   active_data_dir()
 }
 
-// Active commander settings live under the active data dir
+#[cfg(test)]
+thread_local! {
+    pub static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+// Active commander settings live under the active data dir. Routed
+// through commander_dir() so that in tests the settings file resolves
+// to the isolated TEST_COMMANDER_DIR instead of the user's real
+// ~/.hemp0x/commander/app_settings.json (which must never be mutated
+// by the test suite).
 pub fn commander_settings_path() -> Result<PathBuf, String> {
-  Ok(active_data_dir()?.join("commander").join("app_settings.json"))
+  Ok(commander_dir()?.join("app_settings.json"))
 }
 
 #[cfg(test)]
@@ -187,6 +204,19 @@ pub fn config_path() -> Result<PathBuf, String> {
   Ok(data_dir()?.join("hemp.conf"))
 }
 
+fn data_dir_has_existing_core_state(dir: &Path) -> bool {
+  [
+    "wallet.dat",
+    "blocks",
+    "chainstate",
+    "debug.log",
+    "peers.dat",
+    "fee_estimates.dat",
+  ]
+    .iter()
+    .any(|name| dir.join(name).exists())
+}
+
 pub fn ensure_config() -> Result<PathBuf, String> {
   let dir = data_dir()?;
   let cfg = config_path()?;
@@ -194,6 +224,18 @@ pub fn ensure_config() -> Result<PathBuf, String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
   }
   if !cfg.exists() {
+    if data_dir_has_existing_core_state(&dir) {
+      // AUDIT: surface the refusal so it is visible in the app log,
+      // not just as an error returned to one caller.
+      log::warn!(
+        "ensure_config refused to auto-create hemp.conf in established Core data dir {} (existing Core state present, no hemp.conf). Restoring a tuned config requires the user's backup or an explicit Create Default.",
+        dir.to_string_lossy()
+      );
+      return Err(format!(
+        "hemp.conf is missing from existing Core data directory {}. Commander refused to create a replacement default because that could hide or overwrite a tuned node configuration. Restore your hemp.conf backup or use System > Config > Create Default intentionally.",
+        dir.to_string_lossy()
+      ));
+    }
     let daemon_flag = "0";
     let content = format!(
       "# Hemp0x Configuration\n\
@@ -446,8 +488,16 @@ pub fn read_config() -> Result<String, String> {
 
 #[tauri::command]
 pub fn write_config(contents: String) -> Result<(), String> {
-  let cfg = ensure_config()?;
-  fs::write(cfg, contents).map_err(|e| e.to_string())
+  if contents.trim().is_empty() {
+    return Err("Refusing to write an empty hemp.conf.".to_string());
+  }
+  let cfg = config_path()?;
+  if cfg.exists() {
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let backup_path = cfg.with_extension(format!("conf.{}.bak", timestamp));
+    fs::copy(&cfg, &backup_path).map_err(|e| format!("Failed to create config backup: {}", e))?;
+  }
+  fs::write(&cfg, contents).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -460,11 +510,29 @@ pub fn check_config_exists() -> Result<bool, String> {
 pub fn create_default_config() -> Result<(), String> {
   let cfg = config_path()?;
   let dir = data_dir()?;
-  
+
   if !dir.exists() {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
   }
-  
+
+  // SAFETY: Never overwrite an existing `hemp.conf`. The user's config
+  // can contain carefully tuned settings (dbcache, indexes, peers, RPC
+  // credentials, comments, and the `wallet=` line we use to select the
+  // default Core runtime wallet). A silent overwrite has previously
+  // broken a user's daemon. The connect flow must never mutate this
+  // file. If you really need a fresh default config, the user must
+  // explicitly delete the existing one first.
+  if cfg.exists() {
+    log::warn!(
+      "create_default_config refused to overwrite existing hemp.conf at {}",
+      cfg.to_string_lossy()
+    );
+    return Err(format!(
+      "hemp.conf already exists at {}; refusing to overwrite it. Delete the existing config file first if you want Commander to write a fresh default.",
+      cfg.to_string_lossy()
+    ));
+  }
+
   let default_config = r#"# Hemp0x Configuration File
 # Core cookie auth is used by default; rpcuser/rpcpassword are not required.
 server=1
@@ -475,7 +543,7 @@ assetindex=1
 port=42069
 rpcport=42068
 "#;
-  
+
   fs::write(&cfg, default_config).map_err(|e| e.to_string())?;
   Ok(())
 }
@@ -1429,6 +1497,12 @@ mod tests {
 
   #[test]
   fn validate_path_in_allowed_roots_accepts_data_dir_child() {
+    // Slice 64h: serialize with the new `create_default_config`
+    // tests so the global HOME env var is not raced. This test
+    // intentionally mutates HOME without restoring; the lock keeps
+    // that mutation from interleaving with another HOME-mutating
+    // test in this module.
+    let _lock = lock_cfg_test();
     let dir = std::env::temp_dir().join("hemp61b_allowed_test");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -1444,6 +1518,7 @@ mod tests {
 
   #[test]
   fn validate_path_in_allowed_roots_rejects_outside_path() {
+    let _lock = lock_cfg_test();
     let dir = std::env::temp_dir().join("hemp61b_reject_test");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -1457,5 +1532,226 @@ mod tests {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("outside allowed"));
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  // ─── Slice 64h: config overwrite guard tests ────────────────────────
+  //
+  // `create_default_config` MUST refuse to overwrite an existing
+  // `hemp.conf`. A previous version of the function silently
+  // overwrote the user's config, which once broke a daemon because
+  // the user's tuned settings (dbcache, peer list, RPC credentials,
+  // `wallet=` default) were clobbered. The connect flow now treats
+  // `hemp.conf` as a user-owned file it must never mutate.
+
+  // Process-wide serialization for tests that mutate HOME + the
+  // commander bootstrap pointer. The Rust stdlib explicitly
+  // documents `set_var` as not thread-safe, and our `data_dir()`
+  // resolution depends on HOME + `<default_core_data_dir>/commander/bootstrap.json`.
+  // The pre-existing `validate_path_in_allowed_roots_*` tests above
+  // also mutate HOME without restoring it; if my new slice-64h tests
+  // race with them, both can read the wrong HOME at the wrong time
+  // and produce intermittent failures. We share the same lock so
+  // every HOME-mutating test in this module is serialized through
+  // one queue.
+  static CFG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+  static CFG_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+  struct HomeGuard {
+    target: PathBuf,
+    previous: Option<String>,
+  }
+
+  impl Drop for HomeGuard {
+    fn drop(&mut self) {
+      // Always restore HOME and clean up, even on panic.
+      match self.previous.take() {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+      }
+      if let Some(parent) = self.target.parent() {
+        let _ = fs::remove_dir_all(parent);
+      }
+    }
+  }
+
+  fn isolate_data_dir_for_config_test() -> HomeGuard {
+    // We use the bootstrap pointer mechanism (the same one
+    // `set_core_data_dir` uses) to redirect `data_dir()` to a
+    // per-test directory. `set_var("HOME", ...)` alone is not enough
+    // because `data_dir()` reads `<default_core_data_dir>/commander/bootstrap.json`
+    // first.
+    let pid = std::process::id();
+    let n = CFG_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+    let unique = format!("hemp64h_cfg_p{pid}_n{n}_{nanos}");
+    let home_root = std::env::temp_dir().join(unique);
+    let _ = fs::remove_dir_all(&home_root);
+    fs::create_dir_all(&home_root).unwrap();
+    // `default_core_data_dir()` returns `<HOME>/.hemp0x` on Linux.
+    let default_data = home_root.join(".hemp0x");
+    let commander = default_data.join("commander");
+    fs::create_dir_all(&commander).unwrap();
+    // The custom target data dir for THIS test, with a unique subdir
+    // name to avoid races when many tests in the same binary mutate
+    // HOME + bootstrap.
+    let target = home_root.join(format!("target_data_{pid}_{n}"));
+    fs::create_dir_all(&target).unwrap();
+    let bootstrap = serde_json::json!({ "custom_data_dir": target.to_string_lossy().to_string() });
+    fs::write(
+      commander.join("bootstrap.json"),
+      serde_json::to_string_pretty(&bootstrap).unwrap(),
+    ).unwrap();
+
+    let previous_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", home_root.to_str().unwrap());
+    HomeGuard { target, previous: previous_home }
+  }
+
+  fn lock_cfg_test() -> std::sync::MutexGuard<'static, ()> {
+    // Recover from poisoning so a panic in one test thread does not
+    // cascade into another.
+    match CFG_TEST_LOCK.lock() {
+      Ok(g) => g,
+      Err(p) => p.into_inner(),
+    }
+  }
+
+  #[test]
+  fn create_default_config_refuses_to_overwrite_existing_config() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+    let original = "server=1\ndaemon=1\nrpcport=42068\n# user comment\nwallet=hemp0x-vault-main\n";
+    fs::write(&cfg, original).unwrap();
+
+    let result = create_default_config();
+    assert!(result.is_err(), "create_default_config must refuse to overwrite an existing hemp.conf");
+    let err = result.unwrap_err();
+    assert!(err.contains("already exists"), "error must mention the file exists, got: {err}");
+    assert!(err.contains("refusing to overwrite"), "error must explicitly refuse, got: {err}");
+
+    // The existing config must be byte-for-byte unchanged.
+    let after = fs::read_to_string(&cfg).unwrap();
+    assert_eq!(after, original, "hemp.conf was mutated by create_default_config");
+    drop(guard);
+  }
+
+  #[test]
+  fn create_default_config_writes_when_no_existing_config() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+    assert!(!cfg.exists(), "test setup: target should not have a hemp.conf yet");
+
+    let result = create_default_config();
+    assert!(result.is_ok(), "create_default_config should succeed when no config exists: {:?}", result);
+    assert!(cfg.exists(), "hemp.conf should be created");
+    let content = fs::read_to_string(&cfg).unwrap();
+    assert!(content.contains("server=1"));
+    assert!(content.contains("rpcport=42068"));
+    drop(guard);
+  }
+
+  // ─── Slice 64n: hemp.conf safety tests ──────────────────────────────
+  //
+  // `ensure_config()` MUST refuse to silently create a default
+  // `hemp.conf` inside an established Core data directory (one that
+  // already has Core state such as blocks/chainstate/wallet.dat). A
+  // previous version wrote a bare default config whenever the file was
+  // missing, which reduced a user's tuned config to basic settings and
+  // lost their custom options during vault import/connect/start.
+  #[test]
+  fn ensure_config_refuses_to_create_default_in_established_data_dir() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+    // Simulate an established Core data dir: no hemp.conf, but Core
+    // state is present (blocks + chainstate + wallet.dat).
+    fs::create_dir_all(guard.target.join("blocks")).unwrap();
+    fs::create_dir_all(guard.target.join("chainstate")).unwrap();
+    fs::write(guard.target.join("wallet.dat"), b"not-a-real-wallet").unwrap();
+    assert!(!cfg.exists(), "test setup: hemp.conf should not exist yet");
+
+    let result = ensure_config();
+    assert!(
+      result.is_err(),
+      "ensure_config must refuse to create a default hemp.conf in an established data dir"
+    );
+    let err = result.unwrap_err();
+    assert!(
+      err.contains("refused to create a replacement default"),
+      "error must explain the refusal, got: {err}"
+    );
+    // Critical: no hemp.conf was written behind the user's back.
+    assert!(
+      !cfg.exists(),
+      "ensure_config must NOT write a hemp.conf when refusing"
+    );
+    drop(guard);
+  }
+
+  #[test]
+  fn ensure_config_creates_default_in_brand_new_empty_data_dir() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+    // Brand-new/empty data dir: no Core state, no hemp.conf. Creating
+    // a default here is safe and expected.
+    assert!(!cfg.exists());
+
+    let result = ensure_config();
+    assert!(result.is_ok(), "ensure_config should create a default in an empty data dir: {:?}", result);
+    assert!(cfg.exists(), "hemp.conf should be created in an empty data dir");
+    drop(guard);
+  }
+
+  #[test]
+  fn ensure_config_creates_default_when_only_commander_dir_exists() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+
+    // Commander settings are app-owned metadata, not Core state. A
+    // fresh custom data dir can legitimately contain only this folder
+    // because set_core_data_dir saves app settings before ensuring the
+    // Core config. That must not make ensure_config refuse first-run
+    // default creation.
+    fs::create_dir_all(guard.target.join("commander")).unwrap();
+    assert!(!cfg.exists());
+
+    let result = ensure_config();
+    assert!(
+      result.is_ok(),
+      "ensure_config should create a default when only app-owned commander metadata exists: {:?}",
+      result
+    );
+    assert!(cfg.exists(), "hemp.conf should be created");
+    drop(guard);
+  }
+
+  #[test]
+  fn write_config_rejects_empty_content() {
+    let _lock = lock_cfg_test();
+    let guard = isolate_data_dir_for_config_test();
+    let cfg = guard.target.join("hemp.conf");
+    let original = "server=1\ndaemon=1\n# tuned by user\ndbcache=2048\n";
+    fs::write(&cfg, original).unwrap();
+
+    // Empty / whitespace-only content must be rejected so a buggy
+    // caller can never wipe a tuned config to nothing.
+    let res = write_config(String::new());
+    assert!(res.is_err(), "write_config must reject empty content");
+    assert!(
+      res.unwrap_err().contains("empty"),
+      "error must mention empty content"
+    );
+
+    let res_ws = write_config("   \n  \t ".to_string());
+    assert!(res_ws.is_err(), "write_config must reject whitespace-only content");
+
+    // The existing tuned config must be byte-for-byte unchanged.
+    let after = fs::read_to_string(&cfg).unwrap();
+    assert_eq!(after, original, "write_config must not mutate hemp.conf when rejecting");
+    drop(guard);
   }
 }

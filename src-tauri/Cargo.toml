@@ -44,3 +44,4 @@ pbkdf2 = { version = "0.12", features = ["simple"] }
 hmac = "0.12"
 scrypt = "0.11"
 zeroize = { version = "1", features = ["zeroize_derive"] }
+bip39 = { version = "2", features = ["rand"] }

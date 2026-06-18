@@ -238,6 +238,7 @@ pub struct AppSettings {
   pub active_repair_mode: Option<String>,
   pub active_repair_started_at: Option<u64>,
   pub advanced_shell_enabled: bool,
+  pub active_vault_wallet_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -265,6 +266,7 @@ impl Default for AppSettings {
       active_repair_mode: None,
       active_repair_started_at: None,
       advanced_shell_enabled: false,
+      active_vault_wallet_name: None,
     }
   }
 }

@@ -60,6 +60,7 @@ pub fn run() {
             commands::validate_wallet_migration,
             commands::restore_wallet_migration,
             commands::wallet_encrypt,
+            commands::wallet_encrypt_named,
             commands::wallet_unlock,
             commands::wallet_lock,
             commands::change_wallet_password,
@@ -138,9 +139,13 @@ pub fn run() {
             // Commands from modules::process
             process::start_node,
             process::stop_node,
+            process::restart_node_with_wallet,
             process::set_network_mode,
             process::restart_app,
             process::restore_wallet,
+            process::restore_legacy_wallet_dat,
+            process::switch_to_legacy_wallet_dat,
+            process::validate_wallet_file,
             process::create_new_wallet,
             // Commands from modules::files
             files::init_config,
@@ -289,6 +294,7 @@ pub fn run() {
             vault::vault_get_vault_index,
             vault::vault_set_vault_label,
             vault::vault_archive_current_vault,
+            vault::vault_read_raw_content,
             vault::vault_setup,
             vault::vault_get_supported_record_types,
             vault::vault_get_supported_derivation_profiles,
@@ -305,6 +311,13 @@ pub fn run() {
             vault::vault_get_address_book_record_summary,
             vault::vault_export_address_book_record,
             vault::vault_import_address_book_record,
+            // Vault Wallet Alignment (slice 64c)
+            vault::vault_get_wallet_alignment_status,
+            vault::vault_create_or_update_alignment_record,
+            // Vault WebCom -> Core Bridge (slice 64d)
+            vault::vault_connect_webcom_primary_wallet_to_core,
+            vault::vault_get_wallet_alignment_status_v2,
+            vault::vault_create_or_update_connection_intent,
             // Vault cached-session wrappers for the Wallet page
             provider_settings::ipfs_vault_setup_and_unlock,
             provider_settings::ipfs_vault_unlock_status,
@@ -318,6 +331,33 @@ pub fn run() {
             provider_settings::ipfs_vault_get_address_book_record_summary,
             provider_settings::ipfs_vault_export_address_book_record,
             provider_settings::ipfs_vault_import_address_book_record,
+            // Vault Wallet Alignment cached-session wrappers (slice 64c)
+            provider_settings::ipfs_vault_get_wallet_alignment_status,
+            provider_settings::ipfs_vault_create_or_update_alignment_record,
+            // Vault WebCom -> Core Bridge cached-session wrappers (slice 64d)
+            provider_settings::ipfs_vault_connect_webcom_primary_wallet_to_core,
+            // Vault WebCom -> Core guided connect wrapper (slice 64f)
+            provider_settings::ipfs_vault_connect_webcom_primary_wallet_to_core_guided,
+            provider_settings::ipfs_vault_get_wallet_alignment_status_v2,
+            provider_settings::ipfs_vault_preview_connect_webcom_primary_to_core,
+            provider_settings::ipfs_vault_preview_export_core_wallet_to_webcom_primary,
+            provider_settings::ipfs_vault_backup_current_core_wallet_before_alignment,
+            // Vault Commander-managed wallet commands (slice 64i)
+            vault::vault_set_active_wallet_name,
+            vault::vault_get_active_wallet_name,
+            vault::vault_get_active_wallet_startup_state,
+            vault::vault_restart_core_with_wallet,
+            vault::vault_load_wallet_into_core,
+            vault::vault_check_named_wallet_restore_state,
+            vault::vault_unload_wallet,
+            vault::vault_refresh_wallet_utxos,
+            vault::vault_recover_wallet_history,
+            vault::vault_start_wallet_history_recovery,
+            vault::vault_restore_from_recovery_phrase,
+            vault::vault_generate_bip39_mnemonic,
+            // Vault passphrase rotation + unload/fallback (slice 64p)
+            vault::vault_change_passphrase,
+            vault::vault_unload_vault_and_use_wallet_dat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

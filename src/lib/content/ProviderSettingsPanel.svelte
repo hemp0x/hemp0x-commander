@@ -4,6 +4,7 @@
     import { core } from "@tauri-apps/api";
     import { open as shellOpen } from "@tauri-apps/plugin-shell";
     import { vaultStatus } from "../../stores.js";
+    import { addToolNotification } from "../stores/notifications.js";
     import eyeOpen from "../../assets/eye-open.png";
     import eyeClosed from "../../assets/eye-closed.png";
 
@@ -133,6 +134,16 @@
         settingsError = "";
     }
 
+    function notifyVaultNeedsSave(reason = "Provider token changed") {
+        addToolNotification(
+            "Save Hemp0x Vault",
+            `${reason}. Save your Hemp0x Vault file after important changes.`,
+            "warning",
+            null,
+            true,
+        );
+    }
+
     function formatSize(bytes) {
         if (!bytes) return "0 B";
         if (bytes < 1024) return bytes + " B";
@@ -154,12 +165,19 @@
                 ...providerSettings,
                 gateways: { viewing_gateways: gateways },
             };
+            const tokenChanged = Boolean(
+                (updated.pinata_api_token && updated.pinata_api_token.trim()) ||
+                (updated.filebase_token && updated.filebase_token.trim()),
+            );
 
             providerSettings = normalizeSettings(await core.invoke("ipfs_update_provider_settings", { settings: updated }));
             gatewayInput = providerSettings.gateways.viewing_gateways.join("\n");
             settingsEdited = false;
             settingsMsg = "Settings saved.";
             await loadTokenPresence();
+            if (tokenChanged) {
+                notifyVaultNeedsSave("Provider token was saved to your vault");
+            }
         } catch (err) {
             settingsError = friendlyError(err);
             if (isVaultAccessError(err)) requestVaultUnlock();
@@ -192,6 +210,7 @@
             vaultMsg = `${providerLabel(providerId)} token removed from vault.`;
             await loadTokenPresence();
             await loadProviderSettings();
+            notifyVaultNeedsSave(`${providerLabel(providerId)} token was removed from your vault`);
         } catch (err) {
             vaultError = friendlyError(err);
             if (isVaultAccessError(err)) requestVaultUnlock();

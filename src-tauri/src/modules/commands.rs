@@ -393,9 +393,6 @@ pub fn get_network_mode() -> Result<String, String> {
   }
 }
 
-// NOTE: set_network_mode needs stop_node which is in process.rs. 
-// We will move set_network_mode to process.rs to avoid circular dependency.
-
 #[tauri::command]
 pub fn send_hemp(to: String, amount: String) -> Result<String, String> {
   ensure_config()?;
@@ -987,27 +984,10 @@ fn validate_migration_passphrase(passphrase: &str, required: bool, label: &str) 
 }
 
 fn validate_migration_wallet_name(wallet_name: &str) -> Result<String, String> {
-  let name = wallet_name.trim().to_string();
-  if name.is_empty() {
-    return Err("Wallet name is required".to_string());
-  }
-  if name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.contains(':') {
-    return Err("Wallet name cannot contain path separators, drive separators, '.', or '..'".to_string());
-  }
-  if name.chars().any(|c| c.is_control() || matches!(c, '*' | '?' | '"' | '<' | '>' | '|')) {
-    return Err("Wallet name contains characters that are not safe for wallet file names".to_string());
-  }
-  let upper = name.to_uppercase();
-  let device_name = upper.split('.').next().unwrap_or("");
-  let reserved = [
-    "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-  ];
-  if reserved.contains(&device_name) {
-    return Err("Wallet name cannot be a reserved device name".to_string());
-  }
-  Ok(name)
+  // Delegate to the shared Core wallet filename validator so every
+  // vault-wallet flow enforces the same character set (letters, digits,
+  // `_`, `-` only; no spaces, no path separators, no `.`, max 64 chars).
+  crate::modules::utils::validate_core_wallet_filename(wallet_name)
 }
 
 #[tauri::command]
@@ -1029,7 +1009,13 @@ pub fn export_wallet_migration(
   if include_private {
     params.push(serde_json::Value::String(export_passphrase));
   }
-  rpc::call_rpc("exportwalletmigration", &params)
+  // Export can be slow on large wallets; allow up to 10 minutes.
+  rpc::call_rpc_with_timeouts(
+    "exportwalletmigration",
+    &params,
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(10 * 60),
+  )
 }
 
 #[tauri::command]
@@ -1045,7 +1031,14 @@ pub fn validate_wallet_migration(
   if !passphrase.is_empty() {
     params.push(serde_json::Value::String(passphrase));
   }
-  rpc::call_rpc("validatewalletmigration", &params)
+  // Validation can be slow on large migration envelopes; allow up to 10
+  // minutes. (Defensive — the 15s default is too tight for big envelopes.)
+  rpc::call_rpc_with_timeouts(
+    "validatewalletmigration",
+    &params,
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(10 * 60),
+  )
 }
 
 #[tauri::command]
@@ -1071,7 +1064,15 @@ pub fn restore_wallet_migration(
     }
     params.push(serde_json::Value::Number(serde_json::value::Number::from(h)));
   }
-  rpc::call_rpc("restorewalletmigration", &params)
+  // restorewalletmigration creates a new wallet AND triggers a rescan. The
+  // rescan can take far longer than the 15s default RPC read timeout, so use
+  // a generous read timeout here. The HTTP connect timeout stays short.
+  rpc::call_rpc_with_timeouts(
+    "restorewalletmigration",
+    &params,
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(30 * 60),
+  )
 }
 
 #[tauri::command]
@@ -1090,6 +1091,17 @@ pub fn wallet_encrypt(password: String) -> Result<String, String> {
   ensure_config()?;
   let result = rpc::call_rpc("encryptwallet", &[serde_json::Value::String(password)])?;
   Ok(result.as_str().unwrap_or("").to_string())
+}
+
+#[tauri::command]
+pub fn wallet_encrypt_named(wallet_name: String, password: String) -> Result<String, String> {
+  ensure_config()?;
+  let args = vec![
+    format!("-wallet={}", wallet_name),
+    String::from("encryptwallet"),
+    password,
+  ];
+  run_cli(&args)
 }
 
 #[tauri::command]

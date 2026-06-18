@@ -9,6 +9,7 @@
     networkInfo,
     systemStatus as systemStore,
     daemonRuntime,
+    coreBusyUntil,
   } from "./stores.js";
   import { addRuntimeNotification } from "./lib/stores/notifications.js";
 
@@ -25,6 +26,11 @@
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
   import { vaultStatus } from "./stores.js";
   import { APP_VERSION } from "./lib/constants.js";
+
+  let coreBusyUntilMs = 0;
+  const unsubscribeCoreBusy = coreBusyUntil.subscribe((value) => {
+    coreBusyUntilMs = Number(value || 0);
+  });
 
   /**
    * @typedef {{ name: string, address: string, category: string, amount: string|number, time: number|string, date?: string, type?: string, txid?: string, asset?: string, conf?: number, confirmations?: number, direction?: string }} RecentTx
@@ -190,6 +196,8 @@
     if (choice === "continue") {
       await core.invoke("release_daemon_ownership");
       addRuntimeNotification("Using existing daemon", "", "info");
+      // An existing daemon may not have the active vault wallet loaded.
+      await verifyActiveVaultWalletLoaded();
     } else if (choice === "stop_and_use_bundled") {
       try {
         await core.invoke("stop_node");
@@ -207,6 +215,8 @@
           await refreshRpcAuthStatus();
           lastDaemonStartSuccessAt = Date.now();
           addRuntimeNotification("Bundled daemon ready", "", "success");
+          // Verify the active vault wallet is loaded after switching daemons.
+          await verifyActiveVaultWalletLoaded();
         }
       } catch (e) {
         lastError = String(e || "Failed to switch daemon");
@@ -648,6 +658,29 @@
     }
   }
 
+  /**
+   * After Core is running, verify the active vault wallet (if any) is
+   * actually loaded/queryable. Surface a clear, actionable notification
+   * when it is not, so the user is never silently left on the wrong/no
+   * wallet after start/auto-start. Never throws.
+   */
+  async function verifyActiveVaultWalletLoaded() {
+    try {
+      const startup = await core.invoke("vault_get_active_wallet_startup_state");
+      if (startup?.active_wallet_name && !startup?.wallet_queryable) {
+        const name = startup.active_wallet_name;
+        lastError = startup.load_error
+          || `Active vault wallet "${name}" is not loaded in Core. Use the Wallet page to restore/load it, or restart Core through Commander.`;
+        addRuntimeNotification("Vault wallet not loaded", lastError, "warning");
+        return false;
+      }
+      return true;
+    } catch (e) {
+      // Probe is best-effort; do not block startup on it.
+      return true;
+    }
+  }
+
   async function handleStart() {
     if (!tauriReady) return;
     addRuntimeNotification("Daemon start requested", "", "info");
@@ -662,6 +695,8 @@
         lastDaemonStartSuccessAt = Date.now();
         await refreshRpcAuthStatus();
         addRuntimeNotification("Daemon started", "", "success");
+        // Verify the active vault wallet is loaded; warn if not.
+        await verifyActiveVaultWalletLoaded();
       }
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
@@ -868,6 +903,8 @@
                 await refreshRpcAuthStatus();
                 lastDaemonStartSuccessAt = Date.now();
                 addRuntimeNotification("Daemon started (auto)", "", "success");
+                // Verify the active vault wallet is loaded after auto-start.
+                await verifyActiveVaultWalletLoaded();
               }
               conflictResolved = true;
               daemonRuntime.update((d) => ({ ...d, conflictResolved: true }));
@@ -918,6 +955,10 @@
 
     // Adaptive Polling Logic for Performance
     const performPoll = async () => {
+      if (Date.now() < coreBusyUntilMs) {
+        timer = setTimeout(performPoll, 5000);
+        return;
+      }
       if (conflictResolved) {
         await refreshDashboard();
         await refreshStratumStatus();
@@ -936,6 +977,7 @@
 
     return () => {
       clearTimeout(timer);
+      unsubscribeCoreBusy();
       window.removeEventListener("resize", updateScale);
       window.removeEventListener("commander-open-content-library", openLibraryHandler);
       window.removeEventListener("commander-open-vault-unlock", vaultUnlockHandler);
@@ -1389,8 +1431,9 @@
     ></button>
     <div class="modal">
       <h3 class="modal-title">
-        {walletPromptMode === "encrypt" ? "Encrypt Wallet" : "Unlock Wallet"}
+        {walletPromptMode === "encrypt" ? "ENCRYPT WALLET" : "UNLOCK WALLET"}
       </h3>
+      <div class="modal-divider"></div>
       {#if walletPromptMode === "encrypt"}
         <p class="modal-text">
           Encryption is permanent. If you lose this password, funds are lost.
@@ -1435,10 +1478,10 @@
         <div class="modal-error" role="alert">{walletPromptError}</div>
       {/if}
       <div class="modal-actions">
-        <button class="btn-sm ghost" on:click={closeWalletPrompt}>Cancel</button
+        <button class="btn-sm ghost" on:click={closeWalletPrompt}>CANCEL</button
         >
-        <button class="btn-sm" on:click={confirmWalletPrompt}>
-          {walletPromptMode === "encrypt" ? "Encrypt" : "Unlock"}
+        <button class="btn-sm primary" on:click={confirmWalletPrompt}>
+          {walletPromptMode === "encrypt" ? "ENCRYPT" : "UNLOCK"}
         </button>
       </div>
     </div>
@@ -2390,8 +2433,8 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(6px);
+    background: rgba(0, 0, 0, 0.82);
+    backdrop-filter: blur(3px);
     z-index: 20000;
     border: none;
     padding: 0;
@@ -2402,39 +2445,50 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(420px, 90vw);
-    background: rgba(8, 12, 10, 0.98);
-    border: 1px solid rgba(0, 255, 65, 0.3);
+    width: min(400px, 90vw);
+    background: rgba(5, 10, 7, 0.96);
+    border: 1px solid rgba(0, 255, 65, 0.32);
     border-radius: 8px;
-    padding: 1.25rem 1.75rem;
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.1);
+    padding: 1.5rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
     z-index: 20001;
   }
   .modal-title {
-    margin: 0 0 0.5rem 0;
-    color: #fff;
+    margin: 0;
+    color: var(--color-primary);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
     letter-spacing: 1px;
+    text-align: center;
+  }
+  .modal-divider {
+    height: 1px;
+    margin: 0.75rem 0;
+    background: linear-gradient(90deg, transparent, rgba(0, 255, 65, 0.32), transparent);
   }
   .modal-text {
     margin: 0 0 0.75rem 0;
-    color: var(--color-muted);
-    font-size: 0.85rem;
+    color: #aaa;
+    font-size: 0.7rem;
+    line-height: 1.45;
   }
   .modal-label {
     display: block;
     margin: 0.5rem 0 0.35rem 0;
-    color: var(--color-muted);
-    font-size: 0.75rem;
+    color: #888;
+    font-size: 0.62rem;
     text-transform: uppercase;
     letter-spacing: 1px;
   }
   .modal-input {
     width: 100%;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.62);
+    border: 1px solid rgba(0, 255, 65, 0.24);
     color: #fff;
-    padding: 0.6rem 0.75rem;
-    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 0.55rem 0.65rem;
+    border-radius: 6px;
     outline: none;
   }
   .modal-input:focus {
@@ -2443,19 +2497,36 @@
   }
   .modal-error {
     margin-top: 0.75rem;
-    color: var(--color-danger);
-    font-size: 0.8rem;
+    border: 1px solid rgba(255, 85, 85, 0.28);
+    border-radius: 5px;
+    background: rgba(255, 85, 85, 0.09);
+    color: #ff7777;
+    font-size: 0.64rem;
+    padding: 0.5rem 0.6rem;
   }
   .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.6rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
     margin-top: 1rem;
+  }
+  .modal-actions .btn-sm {
+    min-height: 2.35rem;
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
   }
   .btn-sm.ghost {
     background: transparent;
     color: var(--color-muted);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+  .btn-sm.primary {
+    border: 1px solid var(--color-primary);
+    background: rgba(0, 255, 65, 0.12);
+    color: var(--color-primary);
   }
   .footer-link {
     font-family: var(--font-mono);

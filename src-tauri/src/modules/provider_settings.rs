@@ -26,7 +26,7 @@ pub fn clear_vault_passphrase() {
     }
 }
 
-fn get_cached_passphrase() -> Option<String> {
+pub fn get_cached_passphrase() -> Option<String> {
     vault_passphrase_cache()
         .lock()
         .ok()
@@ -578,32 +578,40 @@ pub fn ipfs_vault_unlock_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub fn ipfs_vault_list_wallet_migration_records(
+pub async fn ipfs_vault_list_wallet_migration_records(
     vault_passphrase: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let passphrase = resolve_vault_passphrase(vault_passphrase)?;
-    vault::vault_list_wallet_migration_records(Some(passphrase))
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_list_wallet_migration_records(Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault wallet record list task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn ipfs_vault_export_current_wallet_migration_record(
+pub async fn ipfs_vault_export_current_wallet_migration_record(
     label: String,
     migration_passphrase: String,
     vault_passphrase: Option<String>,
     recovery_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let passphrase = resolve_vault_passphrase(vault_passphrase)?;
-    vault::vault_export_current_wallet_migration_record(
-        label,
-        true,
-        migration_passphrase,
-        Some(passphrase),
-        recovery_mode,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_export_current_wallet_migration_record(
+            label,
+            true,
+            migration_passphrase,
+            Some(passphrase),
+            recovery_mode,
+        )
+    })
+    .await
+    .map_err(|e| format!("Vault wallet backup export task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn ipfs_vault_restore_wallet_migration_record(
+pub async fn ipfs_vault_restore_wallet_migration_record(
     record_id: String,
     wallet_name: String,
     migration_passphrase: String,
@@ -611,13 +619,17 @@ pub fn ipfs_vault_restore_wallet_migration_record(
     vault_passphrase: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let passphrase = resolve_vault_passphrase(vault_passphrase)?;
-    vault::vault_restore_wallet_migration_record(
-        record_id,
-        wallet_name,
-        migration_passphrase,
-        birth_height,
-        Some(passphrase),
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_restore_wallet_migration_record(
+            record_id,
+            wallet_name,
+            migration_passphrase,
+            birth_height,
+            Some(passphrase),
+        )
+    })
+    .await
+    .map_err(|e| format!("Vault wallet backup restore task failed: {e}"))?
 }
 
 // ─── WebCom / Hemp0x Vault Interop Cached-Session Wrappers ─────────────────
@@ -655,27 +667,161 @@ pub fn ipfs_vault_import_address_book_record(
 }
 
 #[tauri::command]
-pub fn ipfs_vault_remove_wallet_migration_record(
+pub async fn ipfs_vault_remove_wallet_migration_record(
     record_id: String,
     vault_passphrase: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let passphrase = resolve_vault_passphrase(vault_passphrase)?;
-    vault::vault_remove_wallet_migration_record(record_id, Some(passphrase))
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_remove_wallet_migration_record(record_id, Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault wallet backup remove task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn ipfs_vault_import_wallet_migration_record_from_path(
+pub async fn ipfs_vault_import_wallet_migration_record_from_path(
     path: String,
     label: String,
     migration_passphrase: Option<String>,
     vault_passphrase: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let passphrase = resolve_vault_passphrase(vault_passphrase)?;
-    vault::vault_import_wallet_migration_record_from_path(
-        path,
-        label,
-        migration_passphrase,
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_import_wallet_migration_record_from_path(
+            path,
+            label,
+            migration_passphrase,
+            Some(passphrase),
+        )
+    })
+    .await
+    .map_err(|e| format!("Vault wallet backup import task failed: {e}"))?
+}
+
+// ─── Portable Wallet Bridge cached-session wrappers (slice 64b) ──────────
+//
+// These are read-only, metadata-only wrappers. They do NOT write to
+// `wallet.webcom.hemp.primary`. Wallet record write/promotion is
+// intentionally deferred until the safety requirements in
+// `untracked/commander-v1.4/handoff-prompts/hemp0x-vault-portable-wallet-model-slice-64b.md`
+// are all met.
+
+#[tauri::command]
+pub async fn ipfs_vault_get_wallet_alignment_status(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_get_wallet_alignment_status(Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault alignment status task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn ipfs_vault_create_or_update_alignment_record(
+    _active_wallet_record_id: String,
+    _core_wallet_source: String,
+    _derivation_profile: String,
+    _core_migration_backup_record_id: Option<String>,
+    _active_wallet_fingerprint: Option<String>,
+    _notes: Option<Vec<String>>,
+    _vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    Err("Deprecated: alignment records can only be written by the verified Core restore flow (ipfs_vault_connect_webcom_primary_wallet_to_core). Manual metadata-only alignment is no longer supported.".to_string())
+}
+
+// ─── WebCom -> Core Bridge cached-session wrappers (slice 64d) ───────────
+
+#[tauri::command]
+pub fn ipfs_vault_connect_webcom_primary_wallet_to_core(
+    wallet_name: Option<String>,
+    birth_height: Option<i64>,
+    pre_connect_backup_record_id: Option<String>,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_connect_webcom_primary_wallet_to_core(
+        wallet_name,
+        birth_height,
+        pre_connect_backup_record_id,
         Some(passphrase),
+    )
+}
+
+#[tauri::command]
+pub async fn ipfs_vault_connect_webcom_primary_wallet_to_core_guided(
+    wallet_name: Option<String>,
+    birth_height: Option<i64>,
+    vault_passphrase: Option<String>,
+    skip_backup: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    // Resolve the (possibly cached) passphrase on the async thread, then
+    // run the heavy, blocking restore/align pipeline on a background
+    // thread so the webview event loop and the connect stepper stay
+    // responsive while Core does the restore/scan work.
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_connect_webcom_primary_wallet_to_core_guided(
+            wallet_name,
+            birth_height,
+            Some(passphrase),
+            skip_backup,
+        )
+    })
+    .await
+    .map_err(|e| format!("Vault connect task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn ipfs_vault_get_wallet_alignment_status_v2(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_get_wallet_alignment_status_v2(Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault alignment status task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn ipfs_vault_preview_connect_webcom_primary_to_core(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_get_wallet_alignment_status_v2(Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault connect preview task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn ipfs_vault_preview_export_core_wallet_to_webcom_primary(
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault::vault_get_wallet_alignment_status_v2(Some(passphrase))
+    })
+    .await
+    .map_err(|e| format!("Vault export preview task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn ipfs_vault_backup_current_core_wallet_before_alignment(
+    label: String,
+    vault_passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let passphrase = resolve_vault_passphrase(vault_passphrase)?;
+    vault::vault_export_current_wallet_migration_record(
+        label,
+        true,
+        passphrase.clone(),
+        Some(passphrase),
+        Some(String::from("vault_passphrase")),
     )
 }
 

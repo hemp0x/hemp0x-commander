@@ -227,6 +227,63 @@ pub fn version_is_old(subver: &str) -> bool {
   true
 }
 
+// ─── Core wallet filename validation ──────────────────────────────────────
+//
+// Any user-entered wallet name that becomes a Core `-wallet=<name>` filename
+// must pass through `validate_core_wallet_filename`. This is the single
+// shared backend gate used by every vault-wallet flow (recovery phrase
+// restore, create vault wallet, guided connect, backup-record restore, and
+// the migration restore path).
+
+/// Maximum length for a user-entered wallet name that becomes a Core
+/// `-wallet=<name>` filename.
+pub const CORE_WALLET_NAME_MAX_LEN: usize = 64;
+
+/// Validate a user-entered wallet name before it is used as a Core
+/// `-wallet=<name>` filename.
+///
+/// Rules:
+/// - Non-empty after trimming.
+/// - Only ASCII letters, digits, `_`, and `-`. No spaces, no `.`, no path
+///   separators (`/`, `\`), no drive separators (`:`), no control/glob
+///   characters.
+/// - Not `.` or `..`.
+/// - At most [`CORE_WALLET_NAME_MAX_LEN`] characters.
+/// - Not a reserved Windows device name (CON, PRN, AUX, NUL, COM1.., LPT1..).
+///
+/// Returns the trimmed name on success so callers always store the
+/// canonical form.
+pub fn validate_core_wallet_filename(name: &str) -> Result<String, String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Wallet name is required".to_string());
+  }
+  if trimmed == "." || trimmed == ".." {
+    return Err("Wallet name cannot be '.' or '..'".to_string());
+  }
+  if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains(':') {
+    return Err("Wallet name cannot contain path separators or drive separators".to_string());
+  }
+  if trimmed.chars().any(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-') {
+    return Err("Wallet name can only use letters, numbers, hyphen, and underscore.".to_string());
+  }
+  if trimmed.len() > CORE_WALLET_NAME_MAX_LEN {
+    return Err(format!(
+      "Wallet name must be at most {} characters",
+      CORE_WALLET_NAME_MAX_LEN
+    ));
+  }
+  let upper = trimmed.to_uppercase();
+  let reserved = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  ];
+  if reserved.contains(&upper.as_str()) {
+    return Err("Wallet name cannot be a reserved device name".to_string());
+  }
+  Ok(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -244,5 +301,58 @@ mod tests {
     assert!(version_is_old("/Satoshi:4.7.0/"));
     assert!(!version_is_old("/Hemp0x:4.7.0/"));
     assert!(!version_is_old("/Hemp0x Core:4.8.0/"));
+  }
+
+  #[test]
+  fn core_wallet_filename_accepts_valid_names() {
+    assert_eq!(
+      validate_core_wallet_filename("test-recovery-wallet").unwrap(),
+      "test-recovery-wallet"
+    );
+    assert_eq!(
+      validate_core_wallet_filename("test_recovery_wallet").unwrap(),
+      "test_recovery_wallet"
+    );
+    assert_eq!(
+      validate_core_wallet_filename("Main123").unwrap(),
+      "Main123"
+    );
+    assert_eq!(
+      validate_core_wallet_filename("  hemp0x-vault-main  ").unwrap(),
+      "hemp0x-vault-main"
+    );
+  }
+
+  #[test]
+  fn core_wallet_filename_rejects_spaces_and_path_separators() {
+    assert!(validate_core_wallet_filename("New Wallet").is_err());
+    assert!(validate_core_wallet_filename("bad/name").is_err());
+    assert!(validate_core_wallet_filename("bad\\name").is_err());
+    assert!(validate_core_wallet_filename("C:wallet").is_err());
+    assert!(validate_core_wallet_filename("wallet.dat").is_err());
+    assert!(validate_core_wallet_filename("./wallet").is_err());
+    assert!(validate_core_wallet_filename("../wallet").is_err());
+    assert!(validate_core_wallet_filename(".").is_err());
+    assert!(validate_core_wallet_filename("..").is_err());
+  }
+
+  #[test]
+  fn core_wallet_filename_rejects_empty_and_garbage() {
+    assert!(validate_core_wallet_filename("").is_err());
+    assert!(validate_core_wallet_filename("   ").is_err());
+    assert!(validate_core_wallet_filename("wallet?name").is_err());
+    assert!(validate_core_wallet_filename("wallet*name").is_err());
+    assert!(validate_core_wallet_filename("wallet\nname").is_err());
+  }
+
+  #[test]
+  fn core_wallet_filename_rejects_reserved_and_overlong() {
+    assert!(validate_core_wallet_filename("CON").is_err());
+    assert!(validate_core_wallet_filename("nul").is_err());
+    assert!(validate_core_wallet_filename("LPT1").is_err());
+    let long = "a".repeat(CORE_WALLET_NAME_MAX_LEN + 1);
+    assert!(validate_core_wallet_filename(&long).is_err());
+    let max = "a".repeat(CORE_WALLET_NAME_MAX_LEN);
+    assert!(validate_core_wallet_filename(&max).is_ok());
   }
 }

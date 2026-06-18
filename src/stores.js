@@ -69,6 +69,8 @@ export const vaultStatus = writable({
     unlocked: false,
 });
 
+export const coreBusyUntil = writable(0);
+
 export const daemonRuntime = writable({
     commanderOwns: false,
     bundledCoreNextReady: false,

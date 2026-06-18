@@ -153,6 +153,16 @@ impl RpcContext {
         method: &str,
         params: &[serde_json::Value],
     ) -> Result<serde_json::Value, String> {
+        self.call_with_timeouts(method, params, Duration::from_secs(5), Duration::from_secs(15))
+    }
+
+    pub(crate) fn call_with_timeouts(
+        &self,
+        method: &str,
+        params: &[serde_json::Value],
+        connect_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
         let body = serde_json::json!({
             "jsonrpc": "1.0",
             "id": "commander",
@@ -161,8 +171,8 @@ impl RpcContext {
         });
 
         let response_result = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(5))
-            .timeout_read(Duration::from_secs(15))
+            .timeout_connect(connect_timeout)
+            .timeout_read(read_timeout)
             .build()
             .post(&self.url)
             .set("Authorization", &self.auth)
@@ -198,6 +208,24 @@ impl RpcContext {
 pub(crate) fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
     let ctx = rpc_context()?;
     ctx.call(method, params)
+}
+
+pub(crate) fn call_rpc_with_timeouts(
+    method: &str,
+    params: &[serde_json::Value],
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    let ctx = rpc_context()?;
+    ctx.call_with_timeouts(method, params, connect_timeout, read_timeout)
+}
+
+pub(crate) fn is_rpc_transport_timeout_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    (lower.contains("rpc transport error") || lower.contains("rpc transport"))
+        && (lower.contains("timed out")
+            || lower.contains("timeout")
+            || lower.contains("status line"))
 }
 
 fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcResult {

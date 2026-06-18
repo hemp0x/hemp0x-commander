@@ -25,9 +25,9 @@
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
         <div class="vault-unlock-box" role="document" on:click|stopPropagation>
             <div class="vault-unlock-header">
-                <span class="vault-unlock-icon">&#x1f512;</span>
                 <h2 id="vault-unlock-title">{title}</h2>
             </div>
+            <div class="vault-unlock-divider"></div>
             <div class="vault-unlock-body">
                 <p>{body}</p>
                 <input
@@ -74,37 +74,40 @@
         backdrop-filter: blur(3px);
     }
     .vault-unlock-box {
-        width: min(30rem, 92vw);
+        width: min(25rem, 92vw);
         overflow: hidden;
         border: 1px solid rgba(0, 255, 65, 0.32);
         border-radius: 8px;
-        background: linear-gradient(180deg, #080b09 0%, #101310 100%);
+        background: rgba(5, 10, 7, 0.96);
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
+        padding: 1.5rem;
     }
     .vault-unlock-header {
         display: flex;
         align-items: center;
-        gap: 0.65rem;
-        padding: 0.85rem 1rem;
-        border-bottom: 1px solid rgba(0, 255, 65, 0.18);
-        background: rgba(0, 255, 65, 0.07);
+        justify-content: center;
+        padding: 0;
     }
-    .vault-unlock-icon { color: var(--color-primary); font-size: 1rem; }
     .vault-unlock-header h2 {
         margin: 0;
         color: var(--color-primary);
         font-family: var(--font-mono);
-        font-size: 0.82rem;
-        letter-spacing: 1.8px;
+        font-size: 0.9rem;
+        letter-spacing: 1px;
+    }
+    .vault-unlock-divider {
+        height: 1px;
+        margin: 0.75rem 0;
+        background: linear-gradient(90deg, transparent, rgba(0, 255, 65, 0.32), transparent);
     }
     .vault-unlock-body {
         display: grid;
         gap: 0.75rem;
-        padding: 1rem;
+        padding: 0;
     }
     .vault-unlock-body p {
         margin: 0;
-        color: #ffd36a;
+        color: #aaa;
         font-size: 0.7rem;
         line-height: 1.45;
     }
@@ -135,10 +138,9 @@
     .vault-unlock-footer {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 0.7rem;
-        padding: 0.85rem 1rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
-        background: rgba(0, 0, 0, 0.28);
+        gap: 0.5rem;
+        padding: 0.85rem 0 0;
+        background: transparent;
     }
     .vault-unlock-cancel,
     .vault-unlock-confirm {
@@ -151,7 +153,7 @@
         cursor: pointer;
     }
     .vault-unlock-cancel {
-        border: 1px solid #666;
+        border: 1px solid rgba(255,255,255,0.18);
         background: transparent;
         color: #999;
     }
@@ -161,7 +163,7 @@
     }
     .vault-unlock-confirm {
         border: 1px solid var(--color-primary);
-        background: rgba(0, 255, 65, 0.1);
+        background: rgba(0, 255, 65, 0.12);
         color: var(--color-primary);
     }
     .vault-unlock-confirm:hover:not(:disabled) {

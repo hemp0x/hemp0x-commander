@@ -640,7 +640,17 @@ pub struct DaemonReadiness {
 }
 
 #[tauri::command]
-pub fn wait_for_daemon_ready(timeout_ms: Option<u64>) -> DaemonReadiness {
+pub async fn wait_for_daemon_ready(timeout_ms: Option<u64>) -> Result<DaemonReadiness, String> {
+  // Polling loop with sleeps — run off the main thread so the UI does
+  // not freeze while waiting for Core RPC to come up.
+  tauri::async_runtime::spawn_blocking(move || {
+    Ok(wait_for_daemon_ready_blocking(timeout_ms))
+  })
+  .await
+  .map_err(|e| format!("Wait-for-daemon task failed: {e}"))?
+}
+
+pub fn wait_for_daemon_ready_blocking(timeout_ms: Option<u64>) -> DaemonReadiness {
     let timeout_dur = Duration::from_millis(timeout_ms.unwrap_or(30_000));
     let poll_interval = Duration::from_millis(500);
     let start = Instant::now();
@@ -808,7 +818,7 @@ mod tests {
     #[test]
     fn wait_for_daemon_ready_short_timeout_is_non_blocking() {
         let start = std::time::Instant::now();
-        let result = wait_for_daemon_ready(Some(100));
+        let result = wait_for_daemon_ready_blocking(Some(100));
         let elapsed = start.elapsed().as_millis();
         assert!(
             !result.ready || elapsed < 500,

@@ -11,7 +11,6 @@ use crate::modules::files::{commander_dir, load_app_settings_impl};
 
 const JOURNAL_SCHEMA: &str = "hemp0x.commander.tx_journal";
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
-const SUPPORTED_JOURNAL_SCHEMA_VERSIONS: &[u32] = &[1, 2];
 const ARCHIVES_DIR_NAME: &str = "journal_archives";
 static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
 
@@ -129,18 +128,17 @@ fn read_inner(path: &PathBuf) -> Result<TxJournal, String> {
     }
     let probe: VersionProbe = serde_json::from_str(&text)
         .map_err(|e| format!("Transaction journal is unreadable: {e}"))?;
-    if !SUPPORTED_JOURNAL_SCHEMA_VERSIONS.contains(&probe.schema_version) {
+    if probe.schema_version != JOURNAL_SCHEMA_VERSION {
         return Err(format!(
-            "Unsupported transaction journal schema version {} (supported: v1/v2)",
+            "Unsupported transaction journal schema version {} (supported: v1)",
             probe.schema_version
         ));
     }
-    let mut journal: TxJournal = serde_json::from_str(&text)
+    let journal: TxJournal = serde_json::from_str(&text)
         .map_err(|e| format!("Transaction journal is unreadable. Original file preserved: {e}"))?;
     if journal.schema != JOURNAL_SCHEMA {
         return Err("Unrecognized transaction journal schema identifier".to_string());
     }
-    journal.schema_version = JOURNAL_SCHEMA_VERSION;
     Ok(journal)
 }
 
@@ -559,37 +557,6 @@ mod tests {
             journal.entries[0].vault_display_name.as_deref(),
             Some("My Vault")
         );
-        cleanup_test_env();
-    }
-
-    #[test]
-    fn v2_journal_loads_and_normalizes_to_current_version() {
-        let _tmp = setup_test_env();
-        let v2 = serde_json::json!({
-            "schema": JOURNAL_SCHEMA,
-            "schema_version": 2,
-            "entries": [{
-                "id": "v2-1",
-                "status": "Broadcasted",
-                "operation_type": "send_hemp",
-                "summary": "old v2 entry",
-                "txid": "abc123",
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z",
-                "details": {"amount": "1.0"}
-            }],
-        });
-        let journal_path = journal_path().unwrap();
-        fs::write(&journal_path, serde_json::to_string_pretty(&v2).unwrap()).unwrap();
-
-        let journal = read_journal().unwrap();
-        assert_eq!(journal.schema_version, JOURNAL_SCHEMA_VERSION);
-        assert_eq!(journal.entries.len(), 1);
-        assert_eq!(journal.entries[0].id, "v2-1");
-        assert!(matches!(
-            journal.entries[0].status,
-            JournalStatus::Broadcasted
-        ));
         cleanup_test_env();
     }
 

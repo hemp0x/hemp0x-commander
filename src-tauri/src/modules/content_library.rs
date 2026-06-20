@@ -1159,9 +1159,7 @@ pub fn content_library_move_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    use crate::modules::files;
 
     fn test_library_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("content_library_test_{}", Uuid::new_v4()));
@@ -1170,11 +1168,25 @@ mod tests {
         dir
     }
 
-    fn setup_test_env() -> PathBuf {
-        let dir = test_library_dir();
-        let pkg_dir = dir.join("packages");
-        fs::create_dir_all(&pkg_dir).ok();
-        dir
+    struct ContentLibraryTestDir {
+        dir: PathBuf,
+    }
+
+    impl ContentLibraryTestDir {
+        fn new() -> Self {
+            let dir = test_library_dir();
+            files::TEST_COMMANDER_DIR.with(|cell| *cell.borrow_mut() = Some(dir.clone()));
+            files::TEST_DATA_DIR.with(|cell| *cell.borrow_mut() = Some(dir.clone()));
+            ContentLibraryTestDir { dir }
+        }
+    }
+
+    impl Drop for ContentLibraryTestDir {
+        fn drop(&mut self) {
+            files::TEST_COMMANDER_DIR.with(|cell| *cell.borrow_mut() = None);
+            files::TEST_DATA_DIR.with(|cell| *cell.borrow_mut() = None);
+            let _ = fs::remove_dir_all(&self.dir);
+        }
     }
 
     #[test]
@@ -1221,47 +1233,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_path_traversal_in_file_path() {
-        let dir = setup_test_env();
-        let pkg_dir = dir.join("packages").join("test-pkg");
-        let files_dir = pkg_dir.join("files");
-        fs::create_dir_all(&files_dir).ok();
-        let index_path = dir.join("index.json");
-        let index = ContentLibraryIndex {
-            version: 1,
-            packages: HashMap::new(),
-            folders: Vec::new(),
-        };
-        fs::write(&index_path, serde_json::to_string(&index).unwrap()).ok();
-
-        let manifest_path = pkg_dir.join("manifest.json");
-        fs::write(
-            &manifest_path,
-            serde_json::to_string(&serde_json::json!({
-              "id": "test-pkg",
-              "name": "Test",
-              "description": "",
-              "tags": [],
-              "created_at": "2026-01-01T00:00:00Z",
-              "updated_at": "2026-01-01T00:00:00Z",
-              "version": 1,
-              "status": "local",
-              "files": []
-            }))
-            .unwrap(),
-        )
-        .ok();
-    }
-
-    #[test]
-    fn validate_file_path_rejects_parent_traversal() {
-        let dir = setup_test_env();
-        let pkg_id = "test-pkg-id";
-        let files_dir = dir.join("packages").join(pkg_id).join("files");
-        fs::create_dir_all(&files_dir).ok();
-    }
-
-    #[test]
     fn guess_mime_detects_common_types() {
         assert_eq!(guess_mime("file.md", b""), "text/markdown");
         assert_eq!(guess_mime("file.json", b""), "application/json");
@@ -1292,14 +1263,6 @@ mod tests {
         let hash2 = compute_sha256(data);
         assert_eq!(hash1, hash2);
         assert_eq!(hash1.len(), 64);
-    }
-
-    #[test]
-    fn sanitize_file_path_rejects_empty() {
-        let dir = setup_test_env();
-        let pkg_id = "test-pkg-id";
-        let files_dir = dir.join("packages").join(pkg_id).join("files");
-        fs::create_dir_all(&files_dir).ok();
     }
 
     #[test]
@@ -1508,14 +1471,6 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_file_path_allows_normal_nested_path() {
-        let dir = test_library_dir();
-        let pkg_id = "test-pkg-id";
-        let files_dir = dir.join("packages").join(pkg_id).join("files");
-        fs::create_dir_all(&files_dir).ok();
-    }
-
-    #[test]
     fn cid_import_rejects_empty_cid() {
         let input = CidImportInput {
             cid: "".to_string(),
@@ -1553,10 +1508,7 @@ mod tests {
 
     #[test]
     fn cid_import_creates_external_package() {
-        let _lock = TEST_LOCK.lock().unwrap();
-        let dir = test_library_dir();
-        std::env::set_var("HOME", dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+        let _test_dir = ContentLibraryTestDir::new();
 
         let input = CidImportInput {
             cid: "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string(),
@@ -1578,16 +1530,11 @@ mod tests {
         let list = content_library_list().unwrap();
         assert!(list.iter().any(|s| s.id == result.id
             && s.cid == Some("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string())));
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn cid_import_uses_auto_name_when_none_provided() {
-        let _lock = TEST_LOCK.lock().unwrap();
-        let dir = test_library_dir();
-        std::env::set_var("HOME", dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+        let _test_dir = ContentLibraryTestDir::new();
 
         let input = CidImportInput {
             cid: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
@@ -1597,7 +1544,6 @@ mod tests {
         };
         let result = content_library_import_cid(input).unwrap();
         assert!(result.name.starts_with("CID: "));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1784,10 +1730,7 @@ mod tests {
 
     #[test]
     fn create_preserves_folder_from_input() {
-        let _lock = TEST_LOCK.lock().unwrap();
-        let dir = test_library_dir();
-        std::env::set_var("HOME", dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+        let _test_dir = ContentLibraryTestDir::new();
 
         let input = ContentPackageInput {
             name: "Foldered Package".to_string(),
@@ -1803,16 +1746,11 @@ mod tests {
         let list = content_library_list().unwrap();
         let found = list.iter().find(|s| s.id == result.id).unwrap();
         assert_eq!(found.folder, "My Folder");
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn update_preserves_existing_folder_when_not_provided() {
-        let _lock = TEST_LOCK.lock().unwrap();
-        let dir = test_library_dir();
-        std::env::set_var("HOME", dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+        let _test_dir = ContentLibraryTestDir::new();
 
         let create_input = ContentPackageInput {
             name: "Original".to_string(),
@@ -1834,16 +1772,11 @@ mod tests {
         };
         let updated = content_library_update(created.id.clone(), update_input).unwrap();
         assert_eq!(updated.folder, "Original Folder");
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn update_changes_folder_when_provided() {
-        let _lock = TEST_LOCK.lock().unwrap();
-        let dir = test_library_dir();
-        std::env::set_var("HOME", dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", dir.to_str().unwrap());
+        let _test_dir = ContentLibraryTestDir::new();
 
         let create_input = ContentPackageInput {
             name: "Original".to_string(),
@@ -1865,8 +1798,6 @@ mod tests {
         };
         let updated = content_library_update(created.id.clone(), update_input).unwrap();
         assert_eq!(updated.folder, "New Folder");
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

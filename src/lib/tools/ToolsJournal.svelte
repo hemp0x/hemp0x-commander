@@ -2,7 +2,7 @@
     import { onMount } from "svelte";
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
-    import { save } from "@tauri-apps/plugin-dialog";
+    import { save, open } from "@tauri-apps/plugin-dialog";
     import { systemStatus } from "../../stores.js";
     import { addToolNotification } from "../stores/notifications.js";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
@@ -21,6 +21,19 @@
     let operationTypes = [];
     let expandedEntry = null;
     let deleteConfirmId = null;
+    let statusMessage = null;
+    let statusMessageType = "info";
+    let archiveConfirm = false;
+    let restoreConfirmFilename = null;
+    let archives = [];
+    let editMode = false;
+    let selectedIds = new Set();
+    let bulkDeleteConfirm = false;
+
+    $: filtersActive = filterStatus !== "ALL" || filterOperation !== "ALL";
+    $: allVisibleIds = filteredEntries.map((e) => e.id);
+    $: allVisibleSelected = allVisibleIds.length > 0 && allVisibleIds.every((id) => selectedIds.has(id));
+    $: selectionCount = [...selectedIds].filter((id) => allVisibleIds.includes(id)).length;
 
     $: filteredEntries = (() => {
         let result = entries;
@@ -33,17 +46,90 @@
         return result.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     })();
 
+    function setStatus(msg, type = "info") {
+        statusMessage = msg;
+        statusMessageType = type;
+    }
+
+    function dismissStatus() {
+        statusMessage = null;
+    }
+
     async function loadEntries() {
         if (!tauriReady) return;
         loading = true;
+        dismissStatus();
         try {
             entries = await core.invoke("list_tx_journal_entries");
             const types = new Set(entries.map((e) => e.operation_type));
             operationTypes = [...types].sort();
         } catch (err) {
-            showToast("Failed to load journal: " + err, "error");
+            setStatus("Failed to load journal: " + err, "error");
         }
         loading = false;
+    }
+
+    function toggleEditMode() {
+        editMode = !editMode;
+        if (!editMode) {
+            selectedIds.clear();
+            bulkDeleteConfirm = false;
+            deleteConfirmId = null;
+        }
+    }
+
+    function toggleSelectEntry(id) {
+        if (selectedIds.has(id)) {
+            selectedIds.delete(id);
+        } else {
+            selectedIds.add(id);
+        }
+        selectedIds = selectedIds;
+    }
+
+    function toggleSelectAll() {
+        if (allVisibleSelected) {
+            for (const id of allVisibleIds) {
+                selectedIds.delete(id);
+            }
+        } else {
+            for (const id of allVisibleIds) {
+                selectedIds.add(id);
+            }
+        }
+        selectedIds = selectedIds;
+    }
+
+    function selectAll() {
+        for (const id of allVisibleIds) {
+            selectedIds.add(id);
+        }
+        selectedIds = selectedIds;
+    }
+
+    function deselectAll() {
+        for (const id of allVisibleIds) {
+            selectedIds.delete(id);
+        }
+        selectedIds = selectedIds;
+    }
+
+    async function bulkDelete() {
+        if (!tauriReady || selectionCount === 0) return;
+        bulkDeleteConfirm = false;
+        const idsToDelete = [...selectedIds].filter((id) => allVisibleIds.includes(id));
+        try {
+            const result = await core.invoke("delete_tx_journal_entries", { ids: idsToDelete });
+            setStatus(result, "success");
+            addToolNotification("Journal entries deleted", `${idsToDelete.length} entries removed`, "info");
+            for (const id of idsToDelete) {
+                selectedIds.delete(id);
+            }
+            selectedIds = selectedIds;
+            await loadEntries();
+        } catch (err) {
+            setStatus("Bulk delete failed: " + err, "error");
+        }
     }
 
     async function exportJournal() {
@@ -57,9 +143,64 @@
             });
             if (!filePath) return;
             await core.invoke("export_tx_journal", { path: filePath });
-            showToast("Journal exported to: " + filePath, "success");
+            setStatus("Journal exported to: " + filePath, "success");
         } catch (err) {
-            showToast("Export failed: " + err, "error");
+            setStatus("Export failed: " + err, "error");
+        }
+    }
+
+    async function importMergeJournal() {
+        if (!tauriReady) return;
+        try {
+            const selected = await open({
+                title: "Import Transaction Journal",
+                filters: [{ name: "JSON", extensions: ["json"] }],
+                multiple: false,
+            });
+            if (!selected) return;
+            const filePath = typeof selected === "string" ? selected : selected.path;
+            const result = await core.invoke("import_merge_tx_journal", { path: filePath });
+            setStatus(result, "success");
+            await loadEntries();
+        } catch (err) {
+            setStatus("Import failed: " + err, "error");
+        }
+    }
+
+    async function archiveJournal() {
+        if (!tauriReady) return;
+        archiveConfirm = false;
+        try {
+            const result = await core.invoke("archive_tx_journal");
+            setStatus(result, "success");
+            addToolNotification("Journal archived and reset", "Archived entries saved to journal_archives/", "info");
+            await loadEntries();
+            await loadArchives();
+        } catch (err) {
+            setStatus("Archive failed: " + err, "error");
+        }
+    }
+
+    async function loadArchives() {
+        if (!tauriReady) return;
+        try {
+            archives = await core.invoke("list_tx_journal_archives");
+        } catch {
+            archives = [];
+        }
+    }
+
+    async function restoreArchive(filename) {
+        if (!tauriReady) return;
+        restoreConfirmFilename = null;
+        try {
+            const result = await core.invoke("restore_tx_journal_archive", { filename });
+            setStatus(result, "success");
+            addToolNotification("Journal restored", "Previous journal backed up before restore", "info");
+            await loadEntries();
+            await loadArchives();
+        } catch (err) {
+            setStatus("Restore failed: " + err, "error");
         }
     }
 
@@ -67,9 +208,9 @@
         if (!tauriReady) return;
         try {
             const path = await core.invoke("get_tx_journal_path");
-            showToast("Journal path: " + path, "info");
+            setStatus("Journal path: " + path, "info");
         } catch (err) {
-            showToast("Failed to get journal path", "error");
+            setStatus("Failed to get journal path", "error");
         }
     }
 
@@ -80,7 +221,9 @@
             await core.invoke("delete_tx_journal_entry", { id });
             entries = entries.filter((e) => e.id !== id);
             deleteConfirmId = null;
-            showToast("Entry deleted", "success", false);
+            selectedIds.delete(id);
+            selectedIds = selectedIds;
+            setStatus("Entry deleted", "success");
             if (entry) {
                 addToolNotification(
                     "Journal entry deleted",
@@ -89,7 +232,18 @@
                 );
             }
         } catch (err) {
-            showToast("Delete failed: " + err, "error");
+            setStatus("Delete failed: " + err, "error");
+        }
+    }
+
+    async function deleteArchive(filename) {
+        if (!tauriReady) return;
+        try {
+            const result = await core.invoke("delete_tx_journal_archive", { filename });
+            setStatus(result, "info");
+            await loadArchives();
+        } catch (err) {
+            setStatus("Delete archive failed: " + err, "error");
         }
     }
 
@@ -111,6 +265,17 @@
         return value.length > max ? value.substring(0, max) + "..." : value;
     }
 
+    function hasContextData(entry) {
+        return entry.network || entry.core_wallet_name || entry.vault_display_name
+            || entry.vault_fingerprint || entry.wallet_record_id || entry.alignment_id;
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+        return (bytes / 1048576).toFixed(1) + " MB";
+    }
+
     const statusColors = {
         Previewed: "color: var(--color-primary);",
         Broadcasted: "color: #00ffc8;",
@@ -121,17 +286,32 @@
         Signed: "color: #ffaa00;",
     };
 
-    onMount(loadEntries);
+    onMount(() => {
+        loadEntries();
+        loadArchives();
+    });
 </script>
 
 <div class="journal-view">
     <div class="journal-controls">
-        <div style="display:flex; justify-content:flex-end;">
+        <div class="journal-title-row">
             <HelpHitbox title="Transaction Journal">
-                <p>The journal is a local activity log of previews and broadcasts, including warnings and selected inputs when available.</p>
+                <p>The journal is a local activity log of previews, broadcasts, asset operations, and operator actions.</p>
                 <p>Deleting entries only removes local records in Commander. It does not cancel or alter on-chain transactions.</p>
+                <p>Use IMPORT to merge entries from an exported journal file (duplicates by ID are skipped).</p>
+                <p>Use ARCHIVE to save the current journal to a timestamped backup and start fresh.</p>
+                <p>Journal entries can include non-secret context: network, wallet name, vault display name.</p>
+                <p>Toggle EDIT MODE to select and delete multiple entries at once.</p>
             </HelpHitbox>
         </div>
+
+        {#if statusMessage}
+            <div class="status-banner {statusMessageType}">
+                <span class="status-text">{statusMessage}</span>
+                <button class="status-dismiss" on:click={dismissStatus}>&times;</button>
+            </div>
+        {/if}
+
         <div class="filter-row">
             <div class="filter-group">
                 <label for="journal-filter-status">STATUS</label>
@@ -158,11 +338,45 @@
             <div class="filter-group actions-right">
                 <button class="cyber-btn ghost" on:click={showJournalPath}>PATH</button>
                 <button class="cyber-btn ghost" on:click={exportJournal}>EXPORT</button>
+                <button class="cyber-btn ghost" on:click={importMergeJournal}>IMPORT</button>
+                {#if !archiveConfirm}
+                    <button class="cyber-btn ghost" on:click={() => (archiveConfirm = true)}>ARCHIVE</button>
+                {:else}
+                    <span class="confirm-action-row">
+                        <button class="cyber-btn" on:click={archiveJournal}>CONFIRM</button>
+                        <button class="cyber-btn ghost" on:click={() => (archiveConfirm = false)}>CANCEL</button>
+                    </span>
+                {/if}
                 <button class="cyber-btn" on:click={loadEntries} disabled={loading}>
                     {loading ? "LOADING..." : "REFRESH"}
                 </button>
             </div>
         </div>
+
+        {#if entries.length > 0 && !loading}
+            <div class="edit-toolbar">
+                <button class="cyber-btn ghost" on:click={toggleEditMode} class:active={editMode}>
+                    {editMode ? "EXIT EDIT" : "EDIT"}
+                </button>
+                {#if editMode}
+                    <span class="selection-info">
+                        {selectionCount} of {allVisibleIds.length} selected
+                    </span>
+                    <button class="text-btn" on:click={selectAll}>SELECT ALL</button>
+                    <button class="text-btn" on:click={deselectAll}>DESELECT ALL</button>
+                    {#if !bulkDeleteConfirm}
+                        <button class="text-btn danger" on:click={() => (bulkDeleteConfirm = true)} disabled={selectionCount === 0}>
+                            DELETE SELECTED
+                        </button>
+                    {:else}
+                        <span class="confirm-action-row">
+                            <button class="text-btn danger" on:click={bulkDelete}>CONFIRM DELETE</button>
+                            <button class="text-btn" on:click={() => (bulkDeleteConfirm = false)}>CANCEL</button>
+                        </span>
+                    {/if}
+                {/if}
+            </div>
+        {/if}
     </div>
 
     <div class="journal-list">
@@ -177,17 +391,32 @@
                 <table class="journal-table">
                     <thead>
                         <tr>
+                            {#if editMode}
+                                <th class="check-col">
+                                    <button type="button" class="check-btn" on:click={toggleSelectAll}>
+                                        {allVisibleSelected ? "&#x2612;" : "&#x2610;"}
+                                    </button>
+                                </th>
+                            {/if}
                             <th>STATUS</th>
                             <th>TYPE</th>
                             <th>SUMMARY</th>
                             <th>TXID</th>
+                            <th>CTX</th>
                             <th>UPDATED</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         {#each filteredEntries as entry}
-                            <tr class="journal-row" class:expanded={expandedEntry === entry.id}>
+                            <tr class="journal-row" class:expanded={expandedEntry === entry.id} class:selected={selectedIds.has(entry.id)}>
+                                {#if editMode}
+                                    <td class="check-col">
+                                        <button type="button" class="check-btn" on:click={() => toggleSelectEntry(entry.id)}>
+                                            {selectedIds.has(entry.id) ? "&#x2612;" : "&#x2610;"}
+                                        </button>
+                                    </td>
+                                {/if}
                                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                                 <td class="status-cell" style={statusColors[entry.status] || ""} on:click={() => toggleDetails(entry.id)}>
@@ -196,21 +425,30 @@
                                 <td on:click={() => toggleDetails(entry.id)}>{entry.operation_type}</td>
                                 <td class="summary-cell" on:click={() => toggleDetails(entry.id)}>{truncate(entry.summary, 40)}</td>
                                 <td class="txid-cell mono" on:click={() => toggleDetails(entry.id)}>{truncate(entry.txid, 16)}</td>
+                                <td class="ctx-cell" on:click={() => toggleDetails(entry.id)}>
+                                    {#if hasContextData(entry)}
+                                        <span class="ctx-badge" title="Journal context data available">&bull;</span>
+                                    {:else}
+                                        <span class="ctx-none">-</span>
+                                    {/if}
+                                </td>
                                 <td class="time-cell" on:click={() => toggleDetails(entry.id)}>{formatTime(entry.updated_at)}</td>
                                 <td class="action-cell">
-                                    {#if deleteConfirmId === entry.id}
-                                        <span class="confirm-delete-row">
-                                            <button class="text-btn danger" on:click={() => deleteEntry(entry.id)}>YES</button>
-                                            <button class="text-btn" on:click={() => (deleteConfirmId = null)}>NO</button>
-                                        </span>
-                                    {:else}
-                                        <button class="text-btn danger" on:click={() => (deleteConfirmId = entry.id)} title="Delete entry">DEL</button>
+                                    {#if !editMode}
+                                        {#if deleteConfirmId === entry.id}
+                                            <span class="confirm-delete-row">
+                                                <button class="text-btn danger" on:click={() => deleteEntry(entry.id)}>YES</button>
+                                                <button class="text-btn" on:click={() => (deleteConfirmId = null)}>NO</button>
+                                            </span>
+                                        {:else}
+                                            <button class="text-btn danger" on:click={() => (deleteConfirmId = entry.id)} title="Delete entry">DEL</button>
+                                        {/if}
                                     {/if}
                                 </td>
                             </tr>
                             {#if expandedEntry === entry.id}
                                 <tr class="details-row">
-                                    <td colspan="6">
+                                    <td colspan={editMode ? 8 : 7}>
                                         <div class="details-panel">
                                             <div class="detail-line"><span class="detail-key">ID:</span><span class="detail-value mono">{entry.id}</span></div>
                                             <div class="detail-line"><span class="detail-key">Created:</span><span class="detail-value">{formatTime(entry.created_at)}</span></div>
@@ -218,8 +456,29 @@
                                             {#if entry.txid}
                                                 <div class="detail-line"><span class="detail-key">TXID:</span><span class="detail-value mono">{entry.txid}</span></div>
                                             {/if}
+                                            {#if hasContextData(entry)}
+                                                <div class="detail-section-title">Context</div>
+                                                {#if entry.network}
+                                                    <div class="detail-line"><span class="detail-key">Network:</span><span class="detail-value">{entry.network}</span></div>
+                                                {/if}
+                                                {#if entry.core_wallet_name}
+                                                    <div class="detail-line"><span class="detail-key">Wallet:</span><span class="detail-value">{entry.core_wallet_name}</span></div>
+                                                {/if}
+                                                {#if entry.vault_display_name}
+                                                    <div class="detail-line"><span class="detail-key">Vault:</span><span class="detail-value">{entry.vault_display_name}</span></div>
+                                                {/if}
+                                                {#if entry.vault_fingerprint}
+                                                    <div class="detail-line"><span class="detail-key">Vault FP:</span><span class="detail-value mono">{truncate(entry.vault_fingerprint, 24)}</span></div>
+                                                {/if}
+                                                {#if entry.wallet_record_id}
+                                                    <div class="detail-line"><span class="detail-key">Record ID:</span><span class="detail-value mono">{entry.wallet_record_id}</span></div>
+                                                {/if}
+                                                {#if entry.alignment_id}
+                                                    <div class="detail-line"><span class="detail-key">Align ID:</span><span class="detail-value mono">{truncate(entry.alignment_id, 16)}</span></div>
+                                                {/if}
+                                            {/if}
                                             {#if entry.details && typeof entry.details === "object" && Object.keys(entry.details).length > 0}
-                                                <div class="detail-line"><span class="detail-key">Details:</span></div>
+                                                <div class="detail-section-title">Details</div>
                                                 <pre class="detail-json">{JSON.stringify(entry.details, null, 2)}</pre>
                                             {/if}
                                         </div>
@@ -238,6 +497,33 @@
             <span class="entry-count mono">{filteredEntries.length} of {entries.length} entries</span>
         </div>
     {/if}
+
+    {#if archives.length > 0}
+        <div class="archives-section">
+            <div class="archives-header">
+                <span class="filter-group-label">Archives ({archives.length})</span>
+            </div>
+            <div class="archives-list">
+                {#each archives as archive}
+                    <div class="archive-row">
+                        <span class="archive-name mono">{archive.filename}</span>
+                        <span class="archive-meta">{archive.entry_count} entries &middot; {formatSize(archive.size_bytes)} &middot; {archive.created_at}</span>
+                        <span class="archive-actions">
+                            {#if restoreConfirmFilename === archive.filename}
+                                <span class="confirm-action-row">
+                                    <button class="text-btn danger" on:click={() => restoreArchive(archive.filename)}>RESTORE</button>
+                                    <button class="text-btn" on:click={() => (restoreConfirmFilename = null)}>CANCEL</button>
+                                </span>
+                            {:else}
+                                <button class="text-btn" on:click={() => (restoreConfirmFilename = archive.filename)}>RESTORE</button>
+                            {/if}
+                            <button class="text-btn danger" on:click={() => deleteArchive(archive.filename)}>DEL</button>
+                        </span>
+                    </div>
+                {/each}
+            </div>
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -250,6 +536,48 @@
     }
     .journal-controls {
         flex-shrink: 0;
+    }
+    .journal-title-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.3rem;
+    }
+    .status-banner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.45rem 0.7rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.72rem;
+        border-radius: 4px;
+    }
+    .status-banner.info, .status-banner.success {
+        background: rgba(0, 255, 65, 0.06);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        color: #aaffaa;
+    }
+    .status-banner.error {
+        background: rgba(255, 85, 85, 0.06);
+        border: 1px solid rgba(255, 85, 85, 0.15);
+        color: #ff8888;
+    }
+    .status-text {
+        flex: 1;
+        word-break: break-word;
+    }
+    .status-dismiss {
+        background: none;
+        border: none;
+        color: inherit;
+        cursor: pointer;
+        font-size: 1.3rem;
+        padding: 0 0 0 0.5rem;
+        line-height: 1;
+        opacity: 0.5;
+        flex-shrink: 0;
+    }
+    .status-dismiss:hover {
+        opacity: 1;
     }
     .filter-row {
         display: flex;
@@ -268,11 +596,30 @@
         letter-spacing: 1px;
         text-transform: uppercase;
     }
+    .filter-group-label {
+        font-size: 0.6rem;
+        color: #666;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }
     .actions-right {
         margin-left: auto;
         flex-direction: row;
         gap: 0.5rem;
         align-self: flex-end;
+    }
+    .edit-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        padding: 0.5rem 0;
+        margin-top: 0.3rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .selection-info {
+        font-size: 0.7rem;
+        color: var(--color-primary);
+        font-family: var(--font-mono);
     }
     .input-glass {
         background: rgba(0, 0, 0, 0.3);
@@ -328,6 +675,11 @@
         top: 0;
         z-index: 1;
     }
+    .journal-table th.check-col {
+        width: 28px;
+        text-align: center;
+        padding: 0.5rem 0.2rem;
+    }
     .journal-table td {
         padding: 0.45rem 0.6rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.03);
@@ -335,11 +687,19 @@
         cursor: pointer;
         white-space: nowrap;
     }
+    .journal-table td.check-col {
+        width: 28px;
+        text-align: center;
+        padding: 0.45rem 0.2rem;
+    }
     .journal-row:hover {
         background: rgba(0, 255, 65, 0.03);
     }
     .journal-row.expanded {
         background: rgba(0, 255, 65, 0.05);
+    }
+    .journal-row.selected {
+        background: rgba(0, 255, 65, 0.06);
     }
     .status-cell {
         font-weight: 600;
@@ -354,6 +714,30 @@
     .txid-cell, .time-cell {
         font-size: 0.7rem;
         color: #888;
+    }
+    .ctx-cell {
+        text-align: center;
+        width: 30px;
+    }
+    .ctx-badge {
+        color: var(--color-primary);
+        font-weight: bold;
+        font-size: 1.1rem;
+    }
+    .ctx-none {
+        color: #444;
+    }
+    .check-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1.1rem;
+        color: var(--color-primary);
+        padding: 0;
+        line-height: 1;
+    }
+    .check-btn:hover {
+        color: #fff;
     }
     .action-cell {
         text-align: center;
@@ -383,6 +767,16 @@
     .detail-value {
         word-break: break-all;
     }
+    .detail-section-title {
+        color: var(--color-primary);
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-top: 0.5rem;
+        margin-bottom: 0.2rem;
+        padding-top: 0.3rem;
+        border-top: 1px solid rgba(0, 255, 65, 0.1);
+    }
     .detail-json {
         margin: 0.5rem 0 0 0;
         padding: 0.5rem;
@@ -410,6 +804,50 @@
         color: #555;
         font-size: 0.65rem;
     }
+    .archives-section {
+        flex-shrink: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 0.5rem;
+        max-height: 160px;
+        overflow-y: auto;
+    }
+    .archives-header {
+        margin-bottom: 0.3rem;
+    }
+    .archives-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+    .archive-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0.4rem;
+        font-size: 0.68rem;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 3px;
+    }
+    .archive-row:hover {
+        background: rgba(0, 0, 0, 0.35);
+    }
+    .archive-name {
+        color: #aaa;
+        flex-shrink: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .archive-meta {
+        color: #555;
+        flex: 1;
+        white-space: nowrap;
+        font-size: 0.65rem;
+    }
+    .archive-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
     .text-btn {
         background: none;
         border: none;
@@ -418,17 +856,31 @@
         font-size: 0.7rem;
         padding: 0.15rem 0.4rem;
         font-family: var(--font-mono);
+        letter-spacing: 0.5px;
     }
     .text-btn:hover {
         text-decoration: underline;
     }
+    .text-btn:disabled {
+        color: #444;
+        cursor: not-allowed;
+        text-decoration: none;
+    }
     .text-btn.danger {
         color: #ff5555;
+    }
+    .text-btn.danger:disabled {
+        color: #552222;
     }
     .confirm-delete-row {
         display: flex;
         gap: 0.3rem;
         justify-content: center;
+    }
+    .confirm-action-row {
+        display: flex;
+        gap: 0.3rem;
+        align-items: center;
     }
     .cyber-btn {
         background: rgba(0, 255, 65, 0.05);
@@ -463,5 +915,10 @@
         color: #fff;
         box-shadow: none;
         background: rgba(255, 255, 255, 0.05);
+    }
+    .cyber-btn.active {
+        border-color: var(--color-primary);
+        color: #000;
+        background: var(--color-primary);
     }
 </style>

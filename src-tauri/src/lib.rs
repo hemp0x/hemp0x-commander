@@ -205,7 +205,13 @@ pub fn run() {
             journal::add_tx_journal_entry,
             journal::update_tx_journal_entry,
             journal::delete_tx_journal_entry,
+            journal::delete_tx_journal_entries,
             journal::export_tx_journal,
+            journal::import_merge_tx_journal,
+            journal::archive_tx_journal,
+            journal::list_tx_journal_archives,
+            journal::restore_tx_journal_archive,
+            journal::delete_tx_journal_archive,
             // Consolidation Commands
             commands::preview_wallet_consolidation,
             commands::broadcast_wallet_consolidation,

@@ -1,11 +1,11 @@
 use std::fs;
-use std::path::PathBuf;
 use std::io::Read;
-use std::time::Duration;
+use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use chrono::Utc;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -13,10 +13,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::modules::content_library::{content_library_dir, validate_import_cid};
 use crate::modules::provider_settings;
 
-const DEFAULT_GATEWAYS: &[&str] = &[
-    "https://dweb.link/ipfs/",
-    "https://ipfs.io/ipfs/",
-];
+const DEFAULT_GATEWAYS: &[&str] = &["https://dweb.link/ipfs/", "https://ipfs.io/ipfs/"];
 
 const FETCH_TIMEOUT_SECS: u64 = 30;
 const MAX_DOWNLOAD_SIZE: u64 = 16 * 1024 * 1024;
@@ -79,7 +76,13 @@ fn cid_meta_path(cid: &str) -> Result<PathBuf, String> {
 
 fn safe_cid_dirname(cid: &str) -> String {
     cid.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
 }
 
@@ -107,8 +110,15 @@ fn validate_cid_subpath(path: &str) -> Result<(), String> {
 }
 
 fn safe_subpath_dirname(path: &str) -> String {
-    let mut safe = path.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+    let mut safe = path
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     if safe.len() > 96 {
         safe.truncate(96);
@@ -223,7 +233,8 @@ fn fetch_from_gateway(cid: &str, gateway_base: &str) -> Result<(String, Vec<u8>)
         .timeout_write(Duration::from_secs(15))
         .build();
 
-    let response = agent.get(&url)
+    let response = agent
+        .get(&url)
         .set("User-Agent", "hemp0x-commander/2.0")
         .call()
         .map_err(|e| match e {
@@ -237,7 +248,9 @@ fn fetch_from_gateway(cid: &str, gateway_base: &str) -> Result<(String, Vec<u8>)
     let mut buf = Vec::new();
 
     let mut limited = reader.take(MAX_DOWNLOAD_SIZE + 1);
-    let bytes_read = limited.read_to_end(&mut buf).map_err(|e| format!("Read error: {}", e))?;
+    let bytes_read = limited
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Read error: {}", e))?;
 
     if bytes_read as u64 > MAX_DOWNLOAD_SIZE {
         return Err(format!(
@@ -249,7 +262,11 @@ fn fetch_from_gateway(cid: &str, gateway_base: &str) -> Result<(String, Vec<u8>)
     Ok((content_type, buf))
 }
 
-fn fetch_cid_subpath_from_gateway(cid: &str, path: &str, gateway_base: &str) -> Result<(String, Vec<u8>), String> {
+fn fetch_cid_subpath_from_gateway(
+    cid: &str,
+    path: &str,
+    gateway_base: &str,
+) -> Result<(String, Vec<u8>), String> {
     let clean_base = gateway_base.trim_end_matches('/');
     let url = format!("{}/{}/{}", clean_base, cid, encode_subpath_for_url(path));
 
@@ -259,7 +276,8 @@ fn fetch_cid_subpath_from_gateway(cid: &str, path: &str, gateway_base: &str) -> 
         .timeout_write(Duration::from_secs(15))
         .build();
 
-    let response = agent.get(&url)
+    let response = agent
+        .get(&url)
         .set("User-Agent", "hemp0x-commander/2.0")
         .call()
         .map_err(|e| match e {
@@ -273,7 +291,9 @@ fn fetch_cid_subpath_from_gateway(cid: &str, path: &str, gateway_base: &str) -> 
     let mut buf = Vec::new();
 
     let mut limited = reader.take(MAX_DOWNLOAD_SIZE + 1);
-    let bytes_read = limited.read_to_end(&mut buf).map_err(|e| format!("Read error: {}", e))?;
+    let bytes_read = limited
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Read error: {}", e))?;
 
     if bytes_read as u64 > MAX_DOWNLOAD_SIZE {
         return Err(format!(
@@ -285,11 +305,7 @@ fn fetch_cid_subpath_from_gateway(cid: &str, path: &str, gateway_base: &str) -> 
     Ok((content_type, buf))
 }
 
-fn guess_content_type_priority(
-    content_type_header: &str,
-    data: &[u8],
-    _cid: &str,
-) -> String {
+fn guess_content_type_priority(content_type_header: &str, data: &[u8], _cid: &str) -> String {
     let ct = content_type_header.to_lowercase();
     if ct.contains("text/plain") || ct.is_empty() {
         if serde_json::from_slice::<serde_json::Value>(data).is_ok() {
@@ -329,14 +345,20 @@ fn guess_content_type_priority(
 }
 
 fn is_likely_markdown(data: &[u8]) -> bool {
-    if !is_utf8_text(data) { return false; }
+    if !is_utf8_text(data) {
+        return false;
+    }
     let s = std::str::from_utf8(data).unwrap_or("");
     let lines: Vec<&str> = s.lines().take(10).collect();
     for line in &lines {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') || trimmed.starts_with("## ") || trimmed.starts_with("### ")
-            || trimmed.starts_with('-') || trimmed.starts_with('*')
-            || trimmed.starts_with('>') || trimmed.starts_with("```")
+        if trimmed.starts_with('#')
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || trimmed.starts_with('-')
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('>')
+            || trimmed.starts_with("```")
             || trimmed.starts_with('|')
         {
             return true;
@@ -367,7 +389,10 @@ fn is_gateway_directory_listing(content_type: &str, data: &[u8]) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+pub async fn content_library_fetch_cid(
+    cid: String,
+    gateway_index: Option<usize>,
+) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
 
@@ -379,7 +404,10 @@ pub async fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>
     let gateways = provider_settings::viewing_gateways();
     let idx = gateway_index.unwrap_or(0);
     if idx >= gateways.len() {
-        return Err(format!("Invalid gateway index (max {})", gateways.len().saturating_sub(1)));
+        return Err(format!(
+            "Invalid gateway index (max {})",
+            gateways.len().saturating_sub(1)
+        ));
     }
 
     let mut last_error = String::new();
@@ -406,7 +434,7 @@ pub async fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>
                 save_cache_meta(&cid, &entry)?;
 
                 let content_base64 = {
-                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    use base64::{engine::general_purpose::STANDARD, Engine as _};
                     STANDARD.encode(&data)
                 };
 
@@ -430,7 +458,11 @@ pub async fn content_library_fetch_cid(cid: String, gateway_index: Option<usize>
 }
 
 #[tauri::command]
-pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+pub async fn content_library_fetch_cid_path(
+    cid: String,
+    path: String,
+    gateway_index: Option<usize>,
+) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
     let path = path.trim().to_string();
@@ -443,7 +475,7 @@ pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_i
         let content_path = cid_subpath_content_path(&cid, &path)?;
         let data = fs::read(&content_path).map_err(|e| e.to_string())?;
         let content_base64 = {
-            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
             STANDARD.encode(&data)
         };
         return Ok(IpfsFetchResult {
@@ -460,7 +492,10 @@ pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_i
     let gateways = provider_settings::viewing_gateways();
     let idx = gateway_index.unwrap_or(0);
     if idx >= gateways.len() {
-        return Err(format!("Invalid gateway index (max {})", gateways.len().saturating_sub(1)));
+        return Err(format!(
+            "Invalid gateway index (max {})",
+            gateways.len().saturating_sub(1)
+        ));
     }
 
     let mut last_error = String::new();
@@ -469,7 +504,8 @@ pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_i
         let gw = gateways[gidx].as_str();
         match fetch_cid_subpath_from_gateway(&cid, &path, gw) {
             Ok((content_type, data)) => {
-                let final_type = guess_content_type_priority(&content_type, &data, &format!("{}/{}", cid, path));
+                let final_type =
+                    guess_content_type_priority(&content_type, &data, &format!("{}/{}", cid, path));
 
                 let local_path = save_cache_content_subpath(&cid, &path, &data)?;
                 let local_path_str = local_path.to_string_lossy().to_string();
@@ -487,7 +523,7 @@ pub async fn content_library_fetch_cid_path(cid: String, path: String, gateway_i
                 save_cache_meta_subpath(&cid, &path, &entry)?;
 
                 let content_base64 = {
-                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    use base64::{engine::general_purpose::STANDARD, Engine as _};
                     STANDARD.encode(&data)
                 };
 
@@ -524,7 +560,7 @@ pub fn content_library_get_cached(cid: String) -> Result<IpfsFetchResult, String
     let data = fs::read(&content_path).map_err(|e| e.to_string())?;
 
     let content_base64 = {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         STANDARD.encode(&data)
     };
 
@@ -540,7 +576,10 @@ pub fn content_library_get_cached(cid: String) -> Result<IpfsFetchResult, String
 }
 
 #[tauri::command]
-pub async fn content_library_refresh_cached(cid: String, gateway_index: Option<usize>) -> Result<IpfsFetchResult, String> {
+pub async fn content_library_refresh_cached(
+    cid: String,
+    gateway_index: Option<usize>,
+) -> Result<IpfsFetchResult, String> {
     let cid = cid.trim().to_string();
     validate_import_cid(&cid)?;
 
@@ -634,11 +673,15 @@ pub fn content_library_save_cached(cid: String, destination: String) -> Result<S
     if dest.is_dir() {
         return Err("Destination path is a directory, not a file.".to_string());
     }
-    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    let parent = dest
+        .parent()
+        .ok_or("Destination path has no parent directory")?;
     if !parent.exists() {
         return Err("Destination directory does not exist.".to_string());
     }
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
     let file_name = dest.file_name().ok_or("Destination path has no filename")?;
     let resolved = canonical_parent.join(file_name);
 
@@ -685,8 +728,7 @@ pub async fn dialog_content_library_save_cached(
             builder = builder.add_filter(name, &exts);
         }
     }
-    let file_path = builder.blocking_save_file()
-        .ok_or("No file selected")?;
+    let file_path = builder.blocking_save_file().ok_or("No file selected")?;
     let path = file_path.as_path().ok_or("Invalid file path")?;
 
     let dest = PathBuf::from(path);
@@ -696,11 +738,15 @@ pub async fn dialog_content_library_save_cached(
     if dest.is_dir() {
         return Err("Destination path is a directory, not a file.".to_string());
     }
-    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    let parent = dest
+        .parent()
+        .ok_or("Destination path has no parent directory")?;
     if !parent.exists() {
         return Err("Destination directory does not exist.".to_string());
     }
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
     let file_name = dest.file_name().ok_or("Destination path has no filename")?;
     let resolved = canonical_parent.join(file_name);
 
@@ -730,8 +776,7 @@ pub async fn dialog_content_library_write_to_path(
             builder = builder.add_filter(name, &exts);
         }
     }
-    let file_path = builder.blocking_save_file()
-        .ok_or("No file selected")?;
+    let file_path = builder.blocking_save_file().ok_or("No file selected")?;
     let path = file_path.as_path().ok_or("Invalid file path")?;
 
     let dest = PathBuf::from(path);
@@ -741,16 +786,21 @@ pub async fn dialog_content_library_write_to_path(
     if dest.is_dir() {
         return Err("Destination path is a directory, not a file.".to_string());
     }
-    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    let parent = dest
+        .parent()
+        .ok_or("Destination path has no parent directory")?;
     if !parent.exists() {
         return Err("Destination directory does not exist.".to_string());
     }
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
     let file_name = dest.file_name().ok_or("Destination path has no filename")?;
     let resolved = canonical_parent.join(file_name);
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let data = STANDARD.decode(content_base64.as_bytes())
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let data = STANDARD
+        .decode(content_base64.as_bytes())
         .map_err(|e| format!("Base64 decode error: {}", e))?;
 
     fs::write(&resolved, &data).map_err(|e| format!("Write failed: {}", e))?;
@@ -829,7 +879,10 @@ pub fn content_library_open_cache_folder() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn content_library_write_to_path(content_base64: String, destination: String) -> Result<String, String> {
+pub fn content_library_write_to_path(
+    content_base64: String,
+    destination: String,
+) -> Result<String, String> {
     let dest = PathBuf::from(destination.trim());
     if dest.exists() {
         return Err("Destination file already exists.".to_string());
@@ -837,11 +890,15 @@ pub fn content_library_write_to_path(content_base64: String, destination: String
     if dest.is_dir() {
         return Err("Destination path is a directory, not a file.".to_string());
     }
-    let parent = dest.parent().ok_or("Destination path has no parent directory")?;
+    let parent = dest
+        .parent()
+        .ok_or("Destination path has no parent directory")?;
     if !parent.exists() {
         return Err("Destination directory does not exist.".to_string());
     }
-    let canonical_parent = parent.canonicalize().map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent directory: {e}"))?;
     let file_name = dest.file_name().ok_or("Destination path has no filename")?;
     let resolved = canonical_parent.join(file_name);
 
@@ -854,8 +911,9 @@ pub fn content_library_write_to_path(content_base64: String, destination: String
         ));
     }
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let data = STANDARD.decode(content_base64.as_bytes())
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let data = STANDARD
+        .decode(content_base64.as_bytes())
         .map_err(|e| format!("Base64 decode error: {}", e))?;
 
     fs::write(&resolved, &data).map_err(|e| format!("Write failed: {}", e))?;
@@ -1003,16 +1061,14 @@ mod tests {
 
     #[test]
     fn cache_status_with_entries() {
-        let entries = vec![
-            CacheEntry {
-                cid: "cid1".to_string(),
-                gateway_used: "gw1".to_string(),
-                content_type: "text/plain".to_string(),
-                size_bytes: 100,
-                fetched_at: "2026-01-01T00:00:00Z".to_string(),
-                local_path: "/p1".to_string(),
-            },
-        ];
+        let entries = vec![CacheEntry {
+            cid: "cid1".to_string(),
+            gateway_used: "gw1".to_string(),
+            content_type: "text/plain".to_string(),
+            size_bytes: 100,
+            fetched_at: "2026-01-01T00:00:00Z".to_string(),
+            local_path: "/p1".to_string(),
+        }];
         let status = CacheStatus {
             cache_dir: "/tmp".to_string(),
             entry_count: 1,
@@ -1052,7 +1108,10 @@ mod tests {
 
     #[test]
     fn encode_subpath_for_url_encodes_segments() {
-        assert_eq!(encode_subpath_for_url("files/hello world.png"), "files/hello%20world.png");
+        assert_eq!(
+            encode_subpath_for_url("files/hello world.png"),
+            "files/hello%20world.png"
+        );
         assert_eq!(encode_subpath_for_url("metadata.json"), "metadata.json");
         assert_eq!(encode_subpath_for_url("a+b.txt"), "a%2Bb.txt");
     }
@@ -1061,7 +1120,10 @@ mod tests {
     fn is_gateway_directory_listing_detects_ipfs_html() {
         let html = b"<html><head><title>Index of /ipfs/Qm123</title></head><body><h1>Index of /ipfs/Qm123</h1></body></html>";
         assert!(is_gateway_directory_listing("text/html", html));
-        assert!(is_gateway_directory_listing("TEXT/HTML; charset=utf-8", html));
+        assert!(is_gateway_directory_listing(
+            "TEXT/HTML; charset=utf-8",
+            html
+        ));
     }
 
     #[test]

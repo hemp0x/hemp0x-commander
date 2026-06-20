@@ -311,16 +311,14 @@ fn expand_contractions(input: &str) -> String {
     let mut byte_pos = 0;
 
     while byte_pos < input.len() {
-        let at_boundary = byte_pos == 0
-            || !input.as_bytes()[byte_pos - 1].is_ascii_alphanumeric();
+        let at_boundary = byte_pos == 0 || !input.as_bytes()[byte_pos - 1].is_ascii_alphanumeric();
         if at_boundary {
             let mut matched = false;
             for &(contraction, expansion) in CONTRACTIONS {
                 let end = byte_pos + contraction.len();
                 if end <= input.len()
                     && input.as_bytes()[byte_pos..end] == *contraction.as_bytes()
-                    && (end >= input.len()
-                        || !input.as_bytes()[end].is_ascii_alphanumeric())
+                    && (end >= input.len() || !input.as_bytes()[end].is_ascii_alphanumeric())
                 {
                     result.push_str(expansion);
                     byte_pos = end;
@@ -479,8 +477,13 @@ fn restore_case_with_runtime(raw: &str, runtime: &ActiveRuntime) -> String {
         if ch == '^' {
             // Flush any accumulated word before processing the marker
             if !word.is_empty() {
-                sentence_start =
-                    flush_word_uppercase(&mut word, sentence_start, &mut out, runtime, uppercase_span);
+                sentence_start = flush_word_uppercase(
+                    &mut word,
+                    sentence_start,
+                    &mut out,
+                    runtime,
+                    uppercase_span,
+                );
             }
 
             if uppercase_span {
@@ -525,13 +528,8 @@ fn restore_case_with_runtime(raw: &str, runtime: &ActiveRuntime) -> String {
             continue;
         }
 
-        sentence_start = flush_word_uppercase(
-            &mut word,
-            sentence_start,
-            &mut out,
-            runtime,
-            uppercase_span,
-        );
+        sentence_start =
+            flush_word_uppercase(&mut word, sentence_start, &mut out, runtime, uppercase_span);
 
         out.push(ch);
         if is_sentence_boundary(ch) {
@@ -1436,7 +1434,9 @@ pub fn short_message_encode_chat(text: String) -> Result<ShortMessageEncodeResul
 }
 
 #[tauri::command]
-pub fn short_message_encode_chat_built_in(text: String) -> Result<ShortMessageEncodeResult, String> {
+pub fn short_message_encode_chat_built_in(
+    text: String,
+) -> Result<ShortMessageEncodeResult, String> {
     encode_chat_built_in(&text)
 }
 
@@ -1468,9 +1468,12 @@ mod tests {
 
     fn dict_payload(dict_idx: usize, text: &str) -> Vec<u8> {
         let (normalized, _) = normalize(text);
-        encode_dict(&normalized, &current_runtime().runtimes[dict_idx], PAYLOAD_MAX).unwrap_or_else(|| {
-            panic!("dictionary payload failed for dict {dict_idx}: {normalized:?}")
-        })
+        encode_dict(
+            &normalized,
+            &current_runtime().runtimes[dict_idx],
+            PAYLOAD_MAX,
+        )
+        .unwrap_or_else(|| panic!("dictionary payload failed for dict {dict_idx}: {normalized:?}"))
     }
 
     fn best_dict_payload(text: &str) -> (usize, Vec<u8>) {
@@ -1824,7 +1827,10 @@ mod tests {
         assert_eq!(bytes.len(), 32);
         assert_eq!(bytes[0], MAGIC_0);
         assert_eq!(bytes[1], MAGIC_1);
-        assert!(!is_v7_header(bytes[2]), "new encodes must use expanded layout");
+        assert!(
+            !is_v7_header(bytes[2]),
+            "new encodes must use expanded layout"
+        );
         assert_eq!(bytes[2] & EXPANDED_REVISION_MASK, EXPANDED_REVISION);
     }
 
@@ -2197,7 +2203,10 @@ mod tests {
         let dec = decode(&mutated_hex);
         // Should either reject (CRC mismatch) or not be a chat message
         if dec.is_short_message {
-            assert!(!dec.is_h0xc_chat_message, "mutated magic should not be chat");
+            assert!(
+                !dec.is_h0xc_chat_message,
+                "mutated magic should not be chat"
+            );
         }
     }
 
@@ -2469,7 +2478,11 @@ mod tests {
             let enc = encode(text).unwrap_or_else(|e| panic!("encode failed for {text}: {e}"));
             let dec = decode(&enc.hex);
             assert!(dec.is_short_message, "decode failed for {text}");
-            assert_eq!(dec.text.as_deref(), Some(expected), "roundtrip mismatch for {text}");
+            assert_eq!(
+                dec.text.as_deref(),
+                Some(expected),
+                "roundtrip mismatch for {text}"
+            );
         }
     }
 
@@ -2478,16 +2491,18 @@ mod tests {
         let _guard = crate::modules::short_message_table_packs::test_serialize_lock()
             .lock()
             .expect("test lock poisoned");
-        let cases: &[(&str, &str)] = &[
-            ("^hello world.", "HELLO WORLD."),
-            ("gm ^btc!", "GM BTC!"),
-        ];
+        let cases: &[(&str, &str)] = &[("^hello world.", "HELLO WORLD."), ("gm ^btc!", "GM BTC!")];
         for &(text, expected) in cases {
-            let enc = encode_chat(text).unwrap_or_else(|e| panic!("chat encode failed for {text}: {e}"));
+            let enc =
+                encode_chat(text).unwrap_or_else(|e| panic!("chat encode failed for {text}: {e}"));
             let dec = decode(&enc.hex);
             assert!(dec.is_short_message, "chat decode failed for {text}");
             assert!(dec.is_h0xc_chat_message);
-            assert_eq!(dec.text.as_deref(), Some(expected), "chat roundtrip mismatch for {text}");
+            assert_eq!(
+                dec.text.as_deref(),
+                Some(expected),
+                "chat roundtrip mismatch for {text}"
+            );
         }
     }
 
@@ -2689,7 +2704,10 @@ mod tests {
         frame[CRC_INDEX] ^= 1;
         let hex = hex::encode(frame);
         let dec = decode(&hex);
-        assert!(!dec.is_short_message, "v7 frame with bad CRC must be rejected");
+        assert!(
+            !dec.is_short_message,
+            "v7 frame with bad CRC must be rejected"
+        );
     }
 
     #[test]
@@ -2701,7 +2719,10 @@ mod tests {
         let mut bytes = hex::decode(&enc.hex).expect("hex");
         bytes[CRC_INDEX] ^= 1;
         let dec = decode(&hex::encode(bytes));
-        assert!(!dec.is_short_message, "expanded frame with bad CRC must be rejected");
+        assert!(
+            !dec.is_short_message,
+            "expanded frame with bad CRC must be rejected"
+        );
     }
 
     #[test]

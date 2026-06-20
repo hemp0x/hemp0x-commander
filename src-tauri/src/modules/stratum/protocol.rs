@@ -1002,7 +1002,8 @@ async fn adjust_difficulty_for_connection(
         .ok()
         .and_then(|s| s.current_bits.clone())
         .and_then(|bits| crate::modules::stratum::job::bits_to_difficulty(&bits).ok());
-    let adj = compute_vardiff_adjustment(conn.difficulty, &conn.share_history, deadline, network_diff);
+    let adj =
+        compute_vardiff_adjustment(conn.difficulty, &conn.share_history, deadline, network_diff);
 
     if adj.changed {
         conn.difficulty = adj.new_diff;
@@ -1039,8 +1040,8 @@ fn hex_str(bytes: &[u8]) -> String {
 }
 
 pub fn parse_kawpow_validity(result: &Value) -> (bool, bool) {
-    let is_valid = result["result"].as_str() == Some("true")
-        || result["result"].as_bool() == Some(true);
+    let is_valid =
+        result["result"].as_str() == Some("true") || result["result"].as_bool() == Some(true);
     let meets_target = result["meets_target"].as_str() == Some("true")
         || result["meets_target"].as_bool() == Some(true);
     (is_valid, meets_target)
@@ -1274,7 +1275,9 @@ mod tests {
 
     #[test]
     fn rpc_unavailable_error_detects_transport_failures() {
-        assert!(is_rpc_unavailable_error("Connection refused (os error 111)"));
+        assert!(is_rpc_unavailable_error(
+            "Connection refused (os error 111)"
+        ));
         assert!(is_rpc_unavailable_error("request timed out"));
         assert!(!is_rpc_unavailable_error("invalid params"));
     }

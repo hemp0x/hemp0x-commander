@@ -97,8 +97,8 @@ pub struct H0xCControlDecodeResult {
 }
 
 pub fn encode_control_delete(txid_hex: &str) -> Result<String, String> {
-    let txid_bytes = hex_to_bytes(txid_hex)
-        .ok_or_else(|| format!("Invalid txid hex: {txid_hex}"))?;
+    let txid_bytes =
+        hex_to_bytes(txid_hex).ok_or_else(|| format!("Invalid txid hex: {txid_hex}"))?;
     if txid_bytes.len() != 32 {
         return Err(format!("txid must be 32 bytes, got {}", txid_bytes.len()));
     }
@@ -190,9 +190,9 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
     let payload_len = bytes[PAYLOAD_LEN_INDEX] as usize;
 
     if payload_len > HC_PAYLOAD_MAX {
-        result
-            .warnings
-            .push(format!("Payload length {payload_len} exceeds maximum {HC_PAYLOAD_MAX}"));
+        result.warnings.push(format!(
+            "Payload length {payload_len} exceeds maximum {HC_PAYLOAD_MAX}"
+        ));
         return result;
     }
 
@@ -236,9 +236,7 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
             let suffix_end = suffix_start + frag_len;
 
             if suffix_end > PAYLOAD_INDEX + payload_len {
-                result
-                    .warnings
-                    .push("Delete payload truncated".to_string());
+                result.warnings.push("Delete payload truncated".to_string());
                 return result;
             }
 
@@ -248,7 +246,9 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
         CMD_LEAVE => {
             result.command = Some("leave".to_string());
             if payload_len != 0 {
-                result.warnings.push(format!("Leave payload must be 0 bytes, got {payload_len}"));
+                result
+                    .warnings
+                    .push(format!("Leave payload must be 0 bytes, got {payload_len}"));
                 return result;
             }
         }
@@ -270,17 +270,23 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
             ]);
 
             if status > 4 {
-                result.warnings.push(format!("Invalid status value {status}"));
+                result
+                    .warnings
+                    .push(format!("Invalid status value {status}"));
                 return result;
             }
             if expiry_mode > 3 {
-                result.warnings.push(format!("Invalid expiry mode {expiry_mode}"));
+                result
+                    .warnings
+                    .push(format!("Invalid expiry mode {expiry_mode}"));
                 return result;
             }
             match expiry_mode {
                 0 => {
                     if expiry_value != 0 {
-                        result.warnings.push("Expiry mode 0 requires value 0".to_string());
+                        result
+                            .warnings
+                            .push("Expiry mode 0 requires value 0".to_string());
                         return result;
                     }
                 }
@@ -298,18 +304,24 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
                         .unwrap_or_default()
                         .as_secs() as u32;
                     if expiry_value <= now_secs {
-                        result.warnings.push("Expiry mode 2 requires a future timestamp".to_string());
+                        result
+                            .warnings
+                            .push("Expiry mode 2 requires a future timestamp".to_string());
                         return result;
                     }
                     let max_delta = 90 * 86400;
                     if expiry_value > now_secs + max_delta {
-                        result.warnings.push("Expiry mode 2 must be within 90 days".to_string());
+                        result
+                            .warnings
+                            .push("Expiry mode 2 must be within 90 days".to_string());
                         return result;
                     }
                 }
                 3 => {
                     if expiry_value != 0 {
-                        result.warnings.push("Expiry mode 3 requires value 0".to_string());
+                        result
+                            .warnings
+                            .push("Expiry mode 3 requires value 0".to_string());
                         return result;
                     }
                 }
@@ -335,7 +347,9 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
             let frag_len = bytes[PAYLOAD_INDEX + 4] as usize;
 
             if target_type < 1 || target_type > 2 {
-                result.warnings.push(format!("Invalid target_type {target_type}"));
+                result
+                    .warnings
+                    .push(format!("Invalid target_type {target_type}"));
                 return result;
             }
             if reason < 1 || reason > 5 {
@@ -347,11 +361,15 @@ pub fn decode_control_frame(hex: &str) -> H0xCControlDecodeResult {
                 return result;
             }
             if duration_days > 180 {
-                result.warnings.push(format!("Invalid duration_days {duration_days}"));
+                result
+                    .warnings
+                    .push(format!("Invalid duration_days {duration_days}"));
                 return result;
             }
             if frag_len != 8 {
-                result.warnings.push(format!("Invalid fragment length {frag_len}, must be 8"));
+                result
+                    .warnings
+                    .push(format!("Invalid fragment length {frag_len}, must be 8"));
                 return result;
             }
 
@@ -424,7 +442,11 @@ pub fn channel_fingerprint(channel: &str) -> [u8; 16] {
 ///   byte 0: status enum (0=available, 1=away, 2=dnd, 3=hidden, 4=clear)
 ///   byte 1: expiry mode (0=default 24h, 1=duration hours, 2=absolute UTC, 3=until changed)
 ///   bytes 2..5: expiry value LE u32
-pub fn encode_control_status(status: u8, expiry_mode: u8, expiry_value: u32) -> Result<String, String> {
+pub fn encode_control_status(
+    status: u8,
+    expiry_mode: u8,
+    expiry_value: u32,
+) -> Result<String, String> {
     if status > 4 {
         return Err(format!("Invalid status value {status}, must be 0..4"));
     }
@@ -439,7 +461,9 @@ pub fn encode_control_status(status: u8, expiry_mode: u8, expiry_value: u32) -> 
         }
         1 => {
             if expiry_value < 1 || expiry_value > 2160 {
-                return Err(format!("Expiry mode 1 (hours) requires value 1..2160, got {expiry_value}"));
+                return Err(format!(
+                    "Expiry mode 1 (hours) requires value 1..2160, got {expiry_value}"
+                ));
             }
         }
         2 => {
@@ -493,12 +517,19 @@ pub fn encode_control_report_message(
     severity: u8,
     duration_days: u8,
 ) -> Result<String, String> {
-    let txid_bytes = hex_to_bytes(txid_hex)
-        .ok_or_else(|| format!("Invalid txid hex: {txid_hex}"))?;
+    let txid_bytes =
+        hex_to_bytes(txid_hex).ok_or_else(|| format!("Invalid txid hex: {txid_hex}"))?;
     if txid_bytes.len() != 32 {
         return Err(format!("txid must be 32 bytes, got {}", txid_bytes.len()));
     }
-    encode_control_report_common(1, reason, severity, duration_days, &txid_bytes[..8], &txid_bytes[24..])
+    encode_control_report_common(
+        1,
+        reason,
+        severity,
+        duration_days,
+        &txid_bytes[..8],
+        &txid_bytes[24..],
+    )
 }
 
 /// Encode an HC report command for a channel/user (command 0x09, target_type=2).
@@ -533,7 +564,9 @@ fn encode_control_report_common(
         return Err(format!("Invalid severity {severity}, must be 1..3"));
     }
     if duration_days > 180 {
-        return Err(format!("Invalid duration_days {duration_days}, must be 0..180"));
+        return Err(format!(
+            "Invalid duration_days {duration_days}, must be 0..180"
+        ));
     }
     if prefix.len() != 8 || suffix.len() != 8 {
         return Err("Prefix and suffix must be 8 bytes each".to_string());
@@ -568,7 +601,11 @@ pub fn h0xc_control_encode_leave() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn h0xc_control_encode_status(status: u8, expiry_mode: u8, expiry_value: u32) -> Result<String, String> {
+pub fn h0xc_control_encode_status(
+    status: u8,
+    expiry_mode: u8,
+    expiry_value: u32,
+) -> Result<String, String> {
     encode_control_status(status, expiry_mode, expiry_value)
 }
 
@@ -644,14 +681,8 @@ mod tests {
         assert!(result.is_control);
         assert_eq!(result.version, Some(1));
         assert_eq!(result.command.as_deref(), Some("delete"));
-        assert_eq!(
-            result.txid_prefix.as_deref(),
-            Some("84c1a733c585ba40")
-        );
-        assert_eq!(
-            result.txid_suffix.as_deref(),
-            Some("71be8cd8c09a311a")
-        );
+        assert_eq!(result.txid_prefix.as_deref(), Some("84c1a733c585ba40"));
+        assert_eq!(result.txid_suffix.as_deref(), Some("71be8cd8c09a311a"));
         assert!(result.warnings.is_empty());
     }
 
@@ -698,7 +729,10 @@ mod tests {
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
         assert_eq!(result.version, Some(0x99));
-        assert!(result.warnings.iter().any(|w| w.contains("Unknown HC version")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Unknown HC version")));
     }
 
     #[test]
@@ -713,7 +747,10 @@ mod tests {
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
         assert!(result.command.is_none());
-        assert!(result.warnings.iter().any(|w| w.contains("Unknown HC command")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Unknown HC command")));
     }
 
     #[test]
@@ -746,7 +783,10 @@ mod tests {
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
-        assert!(result.warnings.iter().any(|w| w.contains("exceeds maximum")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("exceeds maximum")));
     }
 
     #[test]
@@ -792,7 +832,10 @@ mod tests {
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
-        assert!(result.warnings.iter().any(|w| w.contains("fragment length")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("fragment length")));
     }
 
     #[test]
@@ -808,7 +851,10 @@ mod tests {
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
-        assert!(result.warnings.iter().any(|w| w.contains("fragment length")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("fragment length")));
     }
 
     #[test]
@@ -844,7 +890,9 @@ mod tests {
 
     #[test]
     fn encode_rejects_invalid_hex_chars() {
-        let result = encode_control_delete("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+        let result = encode_control_delete(
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        );
         assert!(result.is_err());
     }
 
@@ -1062,7 +1110,10 @@ mod tests {
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
         assert!(result.is_control);
-        assert!(result.warnings.iter().any(|w| w.contains("Unknown HC version")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Unknown HC version")));
     }
 
     #[test]
@@ -1241,7 +1292,10 @@ mod tests {
         frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
-        assert!(result.warnings.iter().any(|w| w.contains("Invalid expiry mode")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Invalid expiry mode")));
     }
 
     #[test]
@@ -1454,7 +1508,10 @@ mod tests {
         frame[CRC_INDEX] = crc8(&frame[..CRC_INDEX]);
         let hex = frame_from_bytes(&frame);
         let result = decode_control_frame(&hex);
-        assert!(result.warnings.iter().any(|w| w.contains("fragment length")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("fragment length")));
     }
 
     #[test]

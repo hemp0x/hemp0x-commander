@@ -161,9 +161,7 @@ pub fn start_stratum_server(
                     state.last_error =
                         Some("Node is not running or RPC is unavailable".to_string());
                 }
-                return Err(
-                    "Cannot start: node is not running or RPC is unavailable.".to_string(),
-                );
+                return Err("Cannot start: node is not running or RPC is unavailable.".to_string());
             }
         }
     }

@@ -381,8 +381,8 @@ pub fn validate_table_pack(
 /// rules are applied.
 pub fn built_in_table_pack() -> ValidatedTablePack {
     let raw_dicts: [&[&str; DICT_ENTRY_COUNT]; MAX_DICTIONARIES] = [
-        &DICT_A, &DICT_B, &DICT_C, &DICT_D, &DICT_E, &DICT_F, &DICT_G, &DICT_H,
-        &DICT_I, &DICT_J, &DICT_K, &DICT_L, &DICT_M, &DICT_N, &DICT_O, &DICT_P,
+        &DICT_A, &DICT_B, &DICT_C, &DICT_D, &DICT_E, &DICT_F, &DICT_G, &DICT_H, &DICT_I, &DICT_J,
+        &DICT_K, &DICT_L, &DICT_M, &DICT_N, &DICT_O, &DICT_P,
     ];
 
     let mut dictionaries: Vec<Vec<String>> = Vec::with_capacity(MAX_DICTIONARIES);

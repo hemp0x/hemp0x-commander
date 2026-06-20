@@ -695,8 +695,74 @@ to a Core runtime wallet:
    `verification_method: core_restorewalletmigration_from_generated_envelope`.
 8. Future vault loads detect verified alignment and do not repeat setup.
 
-The reverse direction (Commander → WebCom primary export) is deferred.
-Existing `exportwalletmigration` backups continue to work for Core recovery.
+The reverse direction (Core → WebCom primary export) is implemented via the
+Core-to-WebCom bridge (see below). Existing `exportwalletmigration` backups
+continue to work for Core recovery.
+
+### Core-to-WebCom Bridge (Canonical Pipeline)
+
+Commander supports the inverse direction: canonical Core wallet material → WebCom-compatible portable Hemp0x Vault primary record. All supported input types converge on one pipeline:
+
+```
+validated Core v2 private migration envelope → portable primary record → verified Core runtime alignment
+```
+
+**Supported input types:**
+
+1. **Encrypted private Core v2 migration envelope** — Decrypted locally using the same PBKDF2-HMAC-SHA512 / AES-256-GCM / AAD format as the WebCom-to-Core direction. The mnemonic never leaves the backend.
+
+2. **Core wallet.dat or extensionless named runtime wallet** — Commander queries `getwalletmigrationinfo`, verifies canonical BIP39/BIP44 coin420 support, calls Core `exportwalletmigration` with `include_private=true` into a guarded temporary file, then feeds the generated envelope into the same promotion pipeline.
+
+**Compatibility restrictions:**
+
+- Only canonical BIP39/BIP44 coin420 wallets can be promoted.
+- Envelope version must be `2` with schema `hemp0x-core.migration-envelope.v2`.
+- Network must be Core mainnet (`main`) mapping to vault `mainnet`.
+- Coin type must be exactly `420`.
+- Derivation profile must be exactly `hemp0x.mainnet.bip44.p2pkh.coin420.v1`.
+- Mnemonic must be valid BIP39 with 12, 18, or 24 words.
+- Public-only v1 envelopes are rejected for promotion.
+- Legacy or imported-key wallets cannot be converted losslessly into one mnemonic. They are preserved through the safe legacy/recovery paths.
+
+**Atomic replacement guarantees:**
+
+- Same-wallet promotion is idempotent (metadata update only).
+- Different-wallet replacement requires explicit user confirmation.
+- The previous primary wallet is preserved as an encrypted recovery snapshot.
+- Unrelated vault records are never modified.
+- The selected source file is never moved or deleted.
+- `hemp.conf` is never modified.
+- The resulting `wallet.webcom.hemp.primary` record survives Commander export → WebCom import → WebCom export → Commander import.
+
+**BIP39 mnemonic passphrase policy:**
+
+Wallets created with a non-empty BIP39 mnemonic passphrase cannot be promoted.
+The shared Hemp0x Vault / WebCom primary record format does not currently
+support storing the BIP39 passphrase. Export the wallet as a Core migration
+envelope for recovery instead. Promotion is rejected with a clear
+compatibility error.
+
+**Selected file identity verification:**
+
+External wallet files are staged under the Core datadir with collision-safe
+temporary names, loaded explicitly by that exact name, and verified against
+the loaded wallet list. The selected source file is never moved or deleted.
+Staging files are cleaned up after the operation.
+
+**Promotion commit ordering:**
+
+The vault is saved only after Core wallet restore/load and identity
+verification succeed. If Core operations fail, the vault is untouched.
+A retry after a transient failure is safe and idempotent.
+
+**WebCom interoperability:**
+
+The promoted primary record uses the exact same shape as recovery-phrase restore:
+- `record_id: wallet.webcom.hemp.primary`
+- `record_type: wallet.bip39`
+- `network: mainnet`
+- `derivation_profile: hemp0x.mainnet.bip44.p2pkh.coin420.v1`
+- Recovery metadata compatible with current WebCom exports.
 
 ### Pre-Connect Backup Gate
 

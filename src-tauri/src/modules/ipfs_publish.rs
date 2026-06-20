@@ -86,11 +86,14 @@ struct MetadataFileEntry {
 }
 
 fn create_staging_dir(package_id: &str) -> Result<PathBuf, String> {
-    let dir = content_library::content_library_dir()?.join(".staging").join(package_id);
+    let dir = content_library::content_library_dir()?
+        .join(".staging")
+        .join(package_id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("Failed to clean staging dir: {}", e))?;
     }
-    fs::create_dir_all(dir.join("files")).map_err(|e| format!("Failed to create staging dir: {}", e))?;
+    fs::create_dir_all(dir.join("files"))
+        .map_err(|e| format!("Failed to create staging dir: {}", e))?;
     Ok(dir)
 }
 
@@ -100,7 +103,10 @@ fn validate_package_relative_path(name: &str) -> Result<PathBuf, String> {
         return Err("File path is empty".to_string());
     }
     if trimmed.chars().any(|c| c.is_control()) {
-        return Err(format!("File path contains control characters: {}", trimmed));
+        return Err(format!(
+            "File path contains control characters: {}",
+            trimmed
+        ));
     }
     let candidate = Path::new(trimmed);
     if candidate.is_absolute() {
@@ -119,7 +125,9 @@ fn validate_package_relative_path(name: &str) -> Result<PathBuf, String> {
     Ok(clean)
 }
 
-fn build_staging(package_id: &str) -> Result<(PathBuf, PackageMetadata, Vec<(String, Vec<u8>)>), String> {
+fn build_staging(
+    package_id: &str,
+) -> Result<(PathBuf, PackageMetadata, Vec<(String, Vec<u8>)>), String> {
     let manifest = content_library::load_manifest(package_id)?;
     let staging_dir = create_staging_dir(package_id)?;
     let mut staged_files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -177,7 +185,10 @@ fn build_staging(package_id: &str) -> Result<(PathBuf, PackageMetadata, Vec<(Str
 
     let metadata_path = staging_dir.join("metadata.json");
     fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
-    staged_files.push(("metadata.json".to_string(), metadata_json.as_bytes().to_vec()));
+    staged_files.push((
+        "metadata.json".to_string(),
+        metadata_json.as_bytes().to_vec(),
+    ));
 
     Ok((staging_dir, metadata, staged_files))
 }
@@ -193,7 +204,8 @@ fn build_multipart_body(files: &[(String, Vec<u8>)], boundary: &str) -> Vec<u8> 
             format!(
                 "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
                 file_path.replace('"', "\\\"")
-            ).as_bytes(),
+            )
+            .as_bytes(),
         );
         body.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
         body.extend_from_slice(b"\r\n");
@@ -220,7 +232,12 @@ fn pinata_api_url(settings: &provider_settings::ProviderSettings) -> String {
 fn pinata_test_connection(settings: &provider_settings::ProviderSettings) -> ProviderTestResult {
     let (token, _) = match provider_settings::load_provider_tokens() {
         Ok(t) => t,
-        Err(e) => return ProviderTestResult { success: false, message: e },
+        Err(e) => {
+            return ProviderTestResult {
+                success: false,
+                message: e,
+            }
+        }
     };
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -237,7 +254,8 @@ fn pinata_test_connection(settings: &provider_settings::ProviderSettings) -> Pro
         .timeout_read(Duration::from_secs(15))
         .build();
 
-    match agent.get(&url)
+    match agent
+        .get(&url)
         .set("Authorization", &format!("Bearer {}", token))
         .set("User-Agent", "hemp0x-commander/2.0")
         .call()
@@ -269,7 +287,9 @@ fn pinata_upload(
     let (token, _) = provider_settings::load_provider_tokens()?;
     let token = token.trim().to_string();
     if token.is_empty() {
-        return Err("Pinata API token is not configured. Add your JWT in IPFS Settings.".to_string());
+        return Err(
+            "Pinata API token is not configured. Add your JWT in IPFS Settings.".to_string(),
+        );
     }
 
     let boundary = random_boundary();
@@ -284,19 +304,22 @@ fn pinata_upload(
         .timeout_write(Duration::from_secs(120))
         .build();
 
-    let response = agent.post(&url)
+    let response = agent
+        .post(&url)
         .set("Authorization", &format!("Bearer {}", token))
         .set("Content-Type", &content_type)
         .send_bytes(&body)
         .map_err(|e| match e {
             ureq::Error::Status(401, _) => {
-                "Pinata returned 401 Unauthorized. Your API token may be invalid or expired.".to_string()
+                "Pinata returned 401 Unauthorized. Your API token may be invalid or expired."
+                    .to_string()
             }
             ureq::Error::Status(403, _) => {
                 "Pinata returned 403 Forbidden. Check your account permissions.".to_string()
             }
             ureq::Error::Status(413, _) => {
-                "Pinata returned 413 Payload Too Large. Package exceeds the upload limit.".to_string()
+                "Pinata returned 413 Payload Too Large. Package exceeds the upload limit."
+                    .to_string()
             }
             ureq::Error::Status(429, _) => {
                 "Pinata returned 429 Rate Limited. Please wait and try again.".to_string()
@@ -309,7 +332,8 @@ fn pinata_upload(
             }
         })?;
 
-    let response_body: serde_json::Value = response.into_json()
+    let response_body: serde_json::Value = response
+        .into_json()
         .map_err(|e| format!("Failed to parse Pinata response: {}", e))?;
 
     let cid = response_body
@@ -360,8 +384,7 @@ fn ipfs_rpc_test(api_endpoint: &str, bearer_token: Option<&str>) -> ProviderTest
         .timeout_read(Duration::from_secs(15))
         .build();
 
-    let mut req = agent.post(&url)
-        .set("User-Agent", "hemp0x-commander/2.0");
+    let mut req = agent.post(&url).set("User-Agent", "hemp0x-commander/2.0");
     if let Some(token) = bearer_token {
         req = req.set("Authorization", &format!("Bearer {}", token));
     }
@@ -382,7 +405,10 @@ fn ipfs_rpc_test(api_endpoint: &str, bearer_token: Option<&str>) -> ProviderTest
                 }
                 Err(_) => ProviderTestResult {
                     success: true,
-                    message: format!("IPFS RPC responded at {} but version info could not be parsed.", api_endpoint),
+                    message: format!(
+                        "IPFS RPC responded at {} but version info could not be parsed.",
+                        api_endpoint
+                    ),
                 },
             }
         }
@@ -410,7 +436,10 @@ fn ipfs_rpc_add(
     let body = build_multipart_body(files, &boundary);
     let content_type = format!("multipart/form-data; boundary={}", boundary);
 
-    let url = format!("{}/api/v0/add?pin=true&wrap-with-directory=true", api_endpoint);
+    let url = format!(
+        "{}/api/v0/add?pin=true&wrap-with-directory=true",
+        api_endpoint
+    );
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
@@ -418,30 +447,34 @@ fn ipfs_rpc_add(
         .timeout_write(Duration::from_secs(120))
         .build();
 
-    let mut req = agent.post(&url)
+    let mut req = agent
+        .post(&url)
         .set("Content-Type", &content_type)
         .set("User-Agent", "hemp0x-commander/2.0");
     if let Some(token) = bearer_token {
         req = req.set("Authorization", &format!("Bearer {}", token));
     }
 
-    let response = req.send_bytes(&body)
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => {
-                "IPFS RPC returned 401 Unauthorized. Check your API token.".to_string()
-            }
-            ureq::Error::Status(403, _) => {
-                "IPFS RPC returned 403 Forbidden. Check your account permissions.".to_string()
-            }
-            ureq::Error::Status(code, _) => {
-                format!("IPFS RPC returned HTTP {}: upload failed.", code)
-            }
-            ureq::Error::Transport(t) => {
-                format!("Cannot connect to IPFS RPC: {}. Verify the endpoint is correct.", t)
-            }
-        })?;
+    let response = req.send_bytes(&body).map_err(|e| match e {
+        ureq::Error::Status(401, _) => {
+            "IPFS RPC returned 401 Unauthorized. Check your API token.".to_string()
+        }
+        ureq::Error::Status(403, _) => {
+            "IPFS RPC returned 403 Forbidden. Check your account permissions.".to_string()
+        }
+        ureq::Error::Status(code, _) => {
+            format!("IPFS RPC returned HTTP {}: upload failed.", code)
+        }
+        ureq::Error::Transport(t) => {
+            format!(
+                "Cannot connect to IPFS RPC: {}. Verify the endpoint is correct.",
+                t
+            )
+        }
+    })?;
 
-    let response_text = response.into_string()
+    let response_text = response
+        .into_string()
         .map_err(|e| format!("Failed to read IPFS RPC response: {}", e))?;
 
     let mut root_cid: Option<String> = None;
@@ -466,7 +499,11 @@ fn ipfs_rpc_add(
     root_cid.ok_or_else(|| {
         format!(
             "IPFS RPC did not return a directory CID. Response: {}",
-            if response_text.len() > 500 { &response_text[..500] } else { &response_text }
+            if response_text.len() > 500 {
+                &response_text[..500]
+            } else {
+                &response_text
+            }
         )
     })
 }
@@ -485,7 +522,12 @@ fn kubo_upload(
 fn filebase_test_connection(settings: &provider_settings::ProviderSettings) -> ProviderTestResult {
     let (_, token) = match provider_settings::load_provider_tokens() {
         Ok(t) => t,
-        Err(e) => return ProviderTestResult { success: false, message: e },
+        Err(e) => {
+            return ProviderTestResult {
+                success: false,
+                message: e,
+            }
+        }
     };
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -578,7 +620,8 @@ fn pinata_list_pins(
         .timeout_read(Duration::from_secs(30))
         .build();
 
-    let response = agent.get(&url)
+    let response = agent
+        .get(&url)
         .set("Authorization", &format!("Bearer {}", token))
         .set("User-Agent", "hemp0x-commander/2.0")
         .call()
@@ -590,15 +633,21 @@ fn pinata_list_pins(
             ureq::Error::Transport(t) => format!("Pinata connection failed: {}", t),
         })?;
 
-    let body: serde_json::Value = response.into_json()
+    let body: serde_json::Value = response
+        .into_json()
         .map_err(|e| format!("Failed to parse Pinata response: {}", e))?;
 
-    let rows = body.get("rows").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let rows = body
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let row_count = rows.len();
     let mut items = Vec::new();
 
     for row in rows {
-        let cid = row.get("ipfs_pin_hash")
+        let cid = row
+            .get("ipfs_pin_hash")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -607,20 +656,22 @@ fn pinata_list_pins(
             continue;
         }
 
-        let name = row.get("metadata")
+        let name = row
+            .get("metadata")
             .and_then(|m| m.get("name"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let size_bytes = row.get("size")
-            .and_then(|v| v.as_u64());
+        let size_bytes = row.get("size").and_then(|v| v.as_u64());
 
-        let created_at = row.get("date_pinned")
+        let created_at = row
+            .get("date_pinned")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         let status = Some("pinned".to_string());
-        let request_id = row.get("id")
+        let request_id = row
+            .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -648,7 +699,11 @@ fn pinata_list_pins(
         if !trimmed.is_empty() {
             items.retain(|item| {
                 item.cid.to_lowercase().contains(&trimmed)
-                    || item.name.as_ref().map(|n| n.to_lowercase().contains(&trimmed)).unwrap_or(false)
+                    || item
+                        .name
+                        .as_ref()
+                        .map(|n| n.to_lowercase().contains(&trimmed))
+                        .unwrap_or(false)
             });
         }
     }
@@ -676,27 +731,31 @@ fn kubo_list_pins(
         .timeout_read(Duration::from_secs(30))
         .build();
 
-    let mut req = agent.post(&url)
-        .set("User-Agent", "hemp0x-commander/2.0");
+    let mut req = agent.post(&url).set("User-Agent", "hemp0x-commander/2.0");
     if let Some(token) = bearer_token {
         req = req.set("Authorization", &format!("Bearer {}", token));
     }
 
-    let response = req.call()
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
-            ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
-            ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
-        })?;
+    let response = req.call().map_err(|e| match e {
+        ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
+        ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
+        ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
+    })?;
 
-    let body: serde_json::Value = response.into_json()
+    let body: serde_json::Value = response
+        .into_json()
         .map_err(|e| format!("Failed to parse IPFS RPC pin/ls response: {}", e))?;
 
-    let keys = body.get("Keys").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let keys = body
+        .get("Keys")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
     let mut items = Vec::new();
 
     for (cid, info) in keys {
-        let status = info.get("Type")
+        let status = info
+            .get("Type")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -744,7 +803,10 @@ fn kubo_list_pins(
     })
 }
 
-fn pinata_unpin(cid: &str, settings: &provider_settings::ProviderSettings) -> Result<String, String> {
+fn pinata_unpin(
+    cid: &str,
+    settings: &provider_settings::ProviderSettings,
+) -> Result<String, String> {
     let (token, _) = provider_settings::load_provider_tokens()?;
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -758,7 +820,8 @@ fn pinata_unpin(cid: &str, settings: &provider_settings::ProviderSettings) -> Re
         .timeout_read(Duration::from_secs(30))
         .build();
 
-    match agent.delete(&url)
+    match agent
+        .delete(&url)
         .set("Authorization", &format!("Bearer {}", token))
         .set("User-Agent", "hemp0x-commander/2.0")
         .call()
@@ -783,20 +846,19 @@ fn kubo_unpin(cid: &str, api_endpoint: &str, bearer_token: Option<&str>) -> Resu
         .timeout_read(Duration::from_secs(30))
         .build();
 
-    let mut req = agent.post(&url)
-        .set("User-Agent", "hemp0x-commander/2.0");
+    let mut req = agent.post(&url).set("User-Agent", "hemp0x-commander/2.0");
     if let Some(token) = bearer_token {
         req = req.set("Authorization", &format!("Bearer {}", token));
     }
 
-    let response = req.call()
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
-            ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
-            ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
-        })?;
+    let response = req.call().map_err(|e| match e {
+        ureq::Error::Status(401, _) => "IPFS RPC returned 401 Unauthorized.".to_string(),
+        ureq::Error::Status(code, _) => format!("IPFS RPC returned HTTP {}.", code),
+        ureq::Error::Transport(t) => format!("IPFS RPC connection failed: {}", t),
+    })?;
 
-    let body: serde_json::Value = response.into_json()
+    let body: serde_json::Value = response
+        .into_json()
         .map_err(|e| format!("Failed to parse IPFS RPC response: {}", e))?;
 
     if let Some(msg) = body.get("Message").and_then(|v| v.as_str()) {
@@ -818,7 +880,11 @@ fn kubo_unpin(cid: &str, api_endpoint: &str, bearer_token: Option<&str>) -> Resu
     Ok("Unpin request sent to IPFS node.".to_string())
 }
 
-fn do_unpin_provider_cid(provider: &str, cid: &str, settings: &provider_settings::ProviderSettings) -> Result<String, String> {
+fn do_unpin_provider_cid(
+    provider: &str,
+    cid: &str,
+    settings: &provider_settings::ProviderSettings,
+) -> Result<String, String> {
     match provider {
         "pinata" => pinata_unpin(cid, settings),
         "filebase" => {
@@ -862,15 +928,30 @@ pub fn ipfs_list_provider_pins(
             if token.is_empty() {
                 return Err("Filebase access token is not configured.".to_string());
             }
-            kubo_list_pins(&filebase_endpoint(&settings), Some(&token), page, query.as_deref(), "filebase")
+            kubo_list_pins(
+                &filebase_endpoint(&settings),
+                Some(&token),
+                page,
+                query.as_deref(),
+                "filebase",
+            )
         }
-        "installed_kubo" => kubo_list_pins(&kubo_endpoint(&settings), None, page, query.as_deref(), "installed_kubo"),
+        "installed_kubo" => kubo_list_pins(
+            &kubo_endpoint(&settings),
+            None,
+            page,
+            query.as_deref(),
+            "installed_kubo",
+        ),
         _ => unreachable!(),
     }
 }
 
 #[tauri::command]
-pub fn ipfs_unpin_provider_cid(provider: String, cid: String) -> Result<ProviderUnpinResult, String> {
+pub fn ipfs_unpin_provider_cid(
+    provider: String,
+    cid: String,
+) -> Result<ProviderUnpinResult, String> {
     let provider = provider.trim().to_string();
     let cid = cid.trim().to_string();
     let valid_providers = ["pinata", "installed_kubo", "filebase"];
@@ -903,7 +984,10 @@ pub fn ipfs_unpin_provider_cid(provider: String, cid: String) -> Result<Provider
 }
 
 #[tauri::command]
-pub fn ipfs_unpin_provider_cids(provider: String, cids: Vec<String>) -> Result<Vec<ProviderUnpinResult>, String> {
+pub fn ipfs_unpin_provider_cids(
+    provider: String,
+    cids: Vec<String>,
+) -> Result<Vec<ProviderUnpinResult>, String> {
     let provider = provider.trim().to_string();
     let valid_providers = ["pinata", "installed_kubo", "filebase"];
     if !valid_providers.contains(&provider.as_str()) {
@@ -961,7 +1045,10 @@ pub fn ipfs_test_publish_provider(provider: String) -> Result<ProviderTestResult
             success: true,
             message: "Manual CID linking is always available.".to_string(),
         }),
-        _ => Err(format!("Unknown provider: {}. Valid providers: manual, pinata, installed_kubo, filebase", provider)),
+        _ => Err(format!(
+            "Unknown provider: {}. Valid providers: manual, pinata, installed_kubo, filebase",
+            provider
+        )),
     }
 }
 
@@ -992,7 +1079,9 @@ pub fn content_library_publish_package(
     let manifest = content_library::load_manifest(&pkg_id)?;
 
     if manifest.files.is_empty() {
-        return Err("Package has no files to publish. Add content or attachments first.".to_string());
+        return Err(
+            "Package has no files to publish. Add content or attachments first.".to_string(),
+        );
     }
 
     let (_staging_dir, _metadata, staged_files) = build_staging(&pkg_id)?;
@@ -1040,15 +1129,20 @@ pub fn content_library_publish_package(
     fs::write(&hist_path, hist_content).map_err(|e| e.to_string())?;
 
     let mut index = content_library::load_index()?;
-    index.packages.insert(pkg_id.clone(), content_library::IndexPackageEntry {
-        name: pkg.name.clone(),
-        tags: pkg.tags.clone(),
-        folder: pkg.folder.clone(),
-    });
+    index.packages.insert(
+        pkg_id.clone(),
+        content_library::IndexPackageEntry {
+            name: pkg.name.clone(),
+            tags: pkg.tags.clone(),
+            folder: pkg.folder.clone(),
+        },
+    );
     content_library::ensure_folder_in_index(&mut index, &pkg.folder);
     content_library::save_index(&index)?;
 
-    let staging_dir = content_library::content_library_dir()?.join(".staging").join(&pkg_id);
+    let staging_dir = content_library::content_library_dir()?
+        .join(".staging")
+        .join(&pkg_id);
     let _ = fs::remove_dir_all(&staging_dir);
 
     Ok(PublishResult {
@@ -1099,7 +1193,8 @@ mod tests {
 
         let body_str = String::from_utf8_lossy(&body);
         assert!(body_str.starts_with("--test-boundary-123\r\n"));
-        assert!(body_str.contains("Content-Disposition: form-data; name=\"file\"; filename=\"content.md\""));
+        assert!(body_str
+            .contains("Content-Disposition: form-data; name=\"file\"; filename=\"content.md\""));
         assert!(body_str.ends_with("--test-boundary-123--\r\n"));
     }
 
@@ -1222,7 +1317,10 @@ mod tests {
 
     #[test]
     fn unpin_provider_cid_rejects_unknown_provider() {
-        let result = ipfs_unpin_provider_cid("evil_provider".to_string(), "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string());
+        let result = ipfs_unpin_provider_cid(
+            "evil_provider".to_string(),
+            "QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26".to_string(),
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Unknown provider"));

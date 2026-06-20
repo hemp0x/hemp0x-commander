@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::modules::content_library::content_library_dir;
@@ -112,19 +112,23 @@ fn provider_settings_temp_path() -> Result<PathBuf, String> {
 }
 
 fn legacy_provider_settings_path() -> Result<PathBuf, String> {
-    Ok(crate::modules::files::data_dir()?.join("content-library").join("provider_settings.json"))
+    Ok(crate::modules::files::data_dir()?
+        .join("content-library")
+        .join("provider_settings.json"))
 }
 
 pub fn load_provider_settings() -> Result<ProviderSettings, String> {
     let path = provider_settings_path()?;
     if path.exists() {
         let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        return serde_json::from_str(&content).map_err(|e| format!("Corrupt provider settings: {e}"));
+        return serde_json::from_str(&content)
+            .map_err(|e| format!("Corrupt provider settings: {e}"));
     }
     let legacy = legacy_provider_settings_path()?;
     if legacy.exists() {
         let content = fs::read_to_string(&legacy).map_err(|e| e.to_string())?;
-        let settings: ProviderSettings = serde_json::from_str(&content).map_err(|e| format!("Corrupt legacy provider settings: {e}"))?;
+        let settings: ProviderSettings = serde_json::from_str(&content)
+            .map_err(|e| format!("Corrupt legacy provider settings: {e}"))?;
         save_provider_settings_atomic(&settings)?;
         return Ok(settings);
     }
@@ -148,7 +152,9 @@ pub fn load_provider_tokens() -> Result<(String, String), String> {
                     let plaintext_pinata = is_real_token_value(&settings.pinata_api_token);
                     let plaintext_filebase = is_real_token_value(&settings.filebase_token);
 
-                    if (pinata.is_empty() && plaintext_pinata) || (filebase.is_empty() && plaintext_filebase) {
+                    if (pinata.is_empty() && plaintext_pinata)
+                        || (filebase.is_empty() && plaintext_filebase)
+                    {
                         let pinata_update = if pinata.is_empty() && plaintext_pinata {
                             settings.pinata_api_token.clone()
                         } else {
@@ -166,7 +172,7 @@ pub fn load_provider_tokens() -> Result<(String, String), String> {
                             &settings.pinata_api_url,
                             &settings.filebase_endpoint,
                         )
-                            .map_err(|e| format!("Failed to move provider tokens into vault: {e}"))?;
+                        .map_err(|e| format!("Failed to move provider tokens into vault: {e}"))?;
 
                         let mut cleaned = settings;
                         cleaned.pinata_api_token = String::new();
@@ -190,10 +196,16 @@ pub fn load_provider_tokens() -> Result<(String, String), String> {
                 }
             }
         }
-        return Err("Provider token vault is locked. Unlock your vault to use saved provider tokens.".to_string());
+        return Err(
+            "Provider token vault is locked. Unlock your vault to use saved provider tokens."
+                .to_string(),
+        );
     }
     let settings = load_provider_settings()?;
-    Ok((settings.pinata_api_token.clone(), settings.filebase_token.clone()))
+    Ok((
+        settings.pinata_api_token.clone(),
+        settings.filebase_token.clone(),
+    ))
 }
 
 pub fn viewing_gateways() -> Vec<String> {
@@ -215,7 +227,9 @@ fn save_provider_settings_atomic(settings: &ProviderSettings) -> Result<(), Stri
 }
 
 fn clean_temp_files() {
-    let _ = provider_settings_temp_path().map(|tmp| { let _ = fs::remove_file(&tmp); });
+    let _ = provider_settings_temp_path().map(|tmp| {
+        let _ = fs::remove_file(&tmp);
+    });
     let _ = crate::modules::files::commander_dir().map(|d| {
         let vault_tmp = d.join("vault.json.tmp");
         let _ = fs::remove_file(&vault_tmp);
@@ -226,21 +240,32 @@ pub fn mask_secrets(settings: &ProviderSettings) -> ProviderSettings {
     let mut masked = settings.clone();
     if is_real_token_value(&masked.pinata_api_token) && masked.pinata_api_token.len() > 8 {
         let len = masked.pinata_api_token.len();
-        masked.pinata_api_token = format!("{}...{}", &masked.pinata_api_token[..4], &masked.pinata_api_token[len-4..]);
+        masked.pinata_api_token = format!(
+            "{}...{}",
+            &masked.pinata_api_token[..4],
+            &masked.pinata_api_token[len - 4..]
+        );
     }
     if is_real_token_value(&masked.filebase_token) && masked.filebase_token.len() > 8 {
         let len = masked.filebase_token.len();
-        masked.filebase_token = format!("{}...{}", &masked.filebase_token[..4], &masked.filebase_token[len-4..]);
+        masked.filebase_token = format!(
+            "{}...{}",
+            &masked.filebase_token[..4],
+            &masked.filebase_token[len - 4..]
+        );
     }
     masked
 }
 
 fn merge_existing_secrets(mut incoming: ProviderSettings) -> Result<ProviderSettings, String> {
     let existing = load_provider_settings().unwrap_or_default();
-    if is_masked_secret(&incoming.pinata_api_token) || is_vault_placeholder(&incoming.pinata_api_token) {
+    if is_masked_secret(&incoming.pinata_api_token)
+        || is_vault_placeholder(&incoming.pinata_api_token)
+    {
         incoming.pinata_api_token = existing.pinata_api_token;
     }
-    if is_masked_secret(&incoming.filebase_token) || is_vault_placeholder(&incoming.filebase_token) {
+    if is_masked_secret(&incoming.filebase_token) || is_vault_placeholder(&incoming.filebase_token)
+    {
         incoming.filebase_token = existing.filebase_token;
     }
     Ok(incoming)
@@ -258,14 +283,20 @@ pub fn ipfs_get_provider_settings() -> Result<ProviderSettings, String> {
 }
 
 #[tauri::command]
-pub fn ipfs_update_provider_settings(settings: ProviderSettings) -> Result<ProviderSettings, String> {
+pub fn ipfs_update_provider_settings(
+    settings: ProviderSettings,
+) -> Result<ProviderSettings, String> {
     let settings = merge_existing_secrets(settings)?;
     if settings.selected_publish_provider.is_empty() {
         return Err("Publish provider selection must not be empty".to_string());
     }
     let valid_providers = ["manual", "pinata", "installed_kubo", "filebase"];
     if !valid_providers.contains(&settings.selected_publish_provider.as_str()) {
-        return Err(format!("Invalid publish provider: {}. Must be one of: {}", settings.selected_publish_provider, valid_providers.join(", ")));
+        return Err(format!(
+            "Invalid publish provider: {}. Must be one of: {}",
+            settings.selected_publish_provider,
+            valid_providers.join(", ")
+        ));
     }
     if settings.gateways.viewing_gateways.is_empty() {
         return Err("At least one viewing gateway is required".to_string());
@@ -276,16 +307,25 @@ pub fn ipfs_update_provider_settings(settings: ProviderSettings) -> Result<Provi
             return Err("Gateway URLs must not be empty".to_string());
         }
         if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-            return Err(format!("Gateway URL must start with http:// or https://: {}", trimmed));
+            return Err(format!(
+                "Gateway URL must start with http:// or https://: {}",
+                trimmed
+            ));
         }
     }
-    if !settings.kubo_endpoint.is_empty() && !settings.kubo_endpoint.starts_with("http://") && !settings.kubo_endpoint.starts_with("https://") {
+    if !settings.kubo_endpoint.is_empty()
+        && !settings.kubo_endpoint.starts_with("http://")
+        && !settings.kubo_endpoint.starts_with("https://")
+    {
         return Err("Kubo endpoint must start with http:// or https://".to_string());
     }
     if !settings.pinata_api_url.is_empty() && !settings.pinata_api_url.starts_with("https://") {
         return Err("Pinata API URL must start with https://".to_string());
     }
-    if !settings.filebase_endpoint.is_empty() && !settings.filebase_endpoint.starts_with("http://") && !settings.filebase_endpoint.starts_with("https://") {
+    if !settings.filebase_endpoint.is_empty()
+        && !settings.filebase_endpoint.starts_with("http://")
+        && !settings.filebase_endpoint.starts_with("https://")
+    {
         return Err("Filebase endpoint must start with http:// or https://".to_string());
     }
 
@@ -297,8 +337,10 @@ pub fn ipfs_update_provider_settings(settings: ProviderSettings) -> Result<Provi
         let has_filebase_token = is_real_token_value(&settings.filebase_token);
         let has_existing_pinata_token = is_real_token_value(&existing.pinata_api_token);
         let has_existing_filebase_token = is_real_token_value(&existing.filebase_token);
-        let should_update_vault_tokens =
-            has_pinata_token || has_filebase_token || has_existing_pinata_token || has_existing_filebase_token;
+        let should_update_vault_tokens = has_pinata_token
+            || has_filebase_token
+            || has_existing_pinata_token
+            || has_existing_filebase_token;
 
         if should_update_vault_tokens {
             if let Some(passphrase) = get_cached_passphrase() {
@@ -323,7 +365,7 @@ pub fn ipfs_update_provider_settings(settings: ProviderSettings) -> Result<Provi
                     &settings.pinata_api_url,
                     &settings.filebase_endpoint,
                 )
-                    .map_err(|e| format!("Failed to update vault tokens: {e}"))?;
+                .map_err(|e| format!("Failed to update vault tokens: {e}"))?;
             } else {
                 return Err("Provider token vault is locked. Unlock your vault before saving provider tokens.".to_string());
             }
@@ -344,7 +386,9 @@ pub fn ipfs_update_provider_settings(settings: ProviderSettings) -> Result<Provi
 }
 
 #[tauri::command]
-pub fn ipfs_migrate_provider_tokens_to_vault(passphrase: String) -> Result<serde_json::Value, String> {
+pub fn ipfs_migrate_provider_tokens_to_vault(
+    passphrase: String,
+) -> Result<serde_json::Value, String> {
     if !vault::vault_exists() {
         return Err("Vault does not exist. Set up a vault first.".to_string());
     }
@@ -425,8 +469,7 @@ pub fn ipfs_vault_status() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub fn ipfs_vault_provider_status() -> Result<serde_json::Value, String> {
-    let passphrase = get_cached_passphrase()
-        .ok_or("Vault is locked. Unlock it first.")?;
+    let passphrase = get_cached_passphrase().ok_or("Vault is locked. Unlock it first.")?;
     vault::check_provider_token_records(&passphrase)
 }
 
@@ -492,7 +535,10 @@ pub fn ipfs_provider_token_presence() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub fn ipfs_vault_import_bundle_replace(path: String, passphrase: Option<String>) -> Result<serde_json::Value, String> {
+pub fn ipfs_vault_import_bundle_replace(
+    path: String,
+    passphrase: Option<String>,
+) -> Result<serde_json::Value, String> {
     let result = vault::import_bundle_replace_from_path(&path, passphrase.as_deref())?;
     clear_vault_passphrase();
     Ok(result)
@@ -500,8 +546,7 @@ pub fn ipfs_vault_import_bundle_replace(path: String, passphrase: Option<String>
 
 #[tauri::command]
 pub fn ipfs_vault_remove_provider_token(provider_id: String) -> Result<serde_json::Value, String> {
-    let passphrase = get_cached_passphrase()
-        .ok_or("Vault is locked. Unlock it first.")?;
+    let passphrase = get_cached_passphrase().ok_or("Vault is locked. Unlock it first.")?;
     let record_id = match provider_id.as_str() {
         "pinata" => "provider.pinata.api_token",
         "filebase" => "provider.filebase.token",
@@ -535,7 +580,7 @@ pub fn ipfs_vault_remove_provider_token(provider_id: String) -> Result<serde_jso
 //     adapters that resolve the passphrase and call the existing
 //     `vault::*` commands.
 
-fn resolve_vault_passphrase(explicit: Option<String>) -> Result<String, String> {
+pub fn resolve_vault_passphrase(explicit: Option<String>) -> Result<String, String> {
     if let Some(p) = explicit {
         if p.is_empty() {
             return Err("Vault passphrase must not be empty".to_string());
@@ -880,8 +925,7 @@ mod tests {
     #[test]
     fn resolve_vault_passphrase_returns_explicit_value_when_provided() {
         // This works regardless of cache state — explicit always wins.
-        let result =
-            resolve_vault_passphrase(Some("explicit-override-12345".to_string()));
+        let result = resolve_vault_passphrase(Some("explicit-override-12345".to_string()));
         assert_eq!(result.unwrap(), "explicit-override-12345");
     }
 
@@ -895,8 +939,7 @@ mod tests {
         // but we explicitly cache after success in callers. Here we
         // verify the resolver itself returns the value, and trust
         // the caller to set_vault_passphrase on success.
-        let result =
-            resolve_vault_passphrase(Some("just-this-one".to_string()));
+        let result = resolve_vault_passphrase(Some("just-this-one".to_string()));
         assert!(result.is_ok());
     }
 
@@ -921,7 +964,10 @@ mod tests {
         assert!(res["vault_exists"].is_boolean());
         assert!(res.get("source").is_some());
         let source = res["source"].as_str().unwrap();
-        assert!(matches!(source, "vault" | "vault_locked" | "plaintext" | "none"));
+        assert!(matches!(
+            source,
+            "vault" | "vault_locked" | "plaintext" | "none"
+        ));
         assert!(res.get("vault_locked").is_some());
         assert!(res["vault_locked"].is_boolean());
         assert!(res.get("has_plaintext_tokens").is_some());

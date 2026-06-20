@@ -52,10 +52,7 @@ fn rpc_auth_for_paths(
         let cookie = cookie.trim().to_string();
         if !cookie.is_empty() && cookie.contains(':') {
             return Ok((
-                format!(
-                    "Basic {}",
-                    BASE64_STANDARD.encode(cookie.as_bytes())
-                ),
+                format!("Basic {}", BASE64_STANDARD.encode(cookie.as_bytes())),
                 RpcAuthMode::Cookie,
             ));
         }
@@ -153,7 +150,12 @@ impl RpcContext {
         method: &str,
         params: &[serde_json::Value],
     ) -> Result<serde_json::Value, String> {
-        self.call_with_timeouts(method, params, Duration::from_secs(5), Duration::from_secs(15))
+        self.call_with_timeouts(
+            method,
+            params,
+            Duration::from_secs(5),
+            Duration::from_secs(15),
+        )
     }
 
     pub(crate) fn call_with_timeouts(
@@ -205,7 +207,10 @@ impl RpcContext {
     }
 }
 
-pub(crate) fn call_rpc(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+pub(crate) fn call_rpc(
+    method: &str,
+    params: &[serde_json::Value],
+) -> Result<serde_json::Value, String> {
     let ctx = rpc_context()?;
     ctx.call(method, params)
 }
@@ -226,6 +231,93 @@ pub(crate) fn is_rpc_transport_timeout_error(err: &str) -> bool {
         && (lower.contains("timed out")
             || lower.contains("timeout")
             || lower.contains("status line"))
+}
+
+/// Call an RPC method targeting a specific named wallet via Core's
+/// `/wallet/<name>` URL-path routing. Secrets (passphrases) are sent
+/// in the JSON-RPC body, never in process arguments.
+pub(crate) fn call_rpc_wallet(
+    wallet_name: &str,
+    method: &str,
+    params: &[serde_json::Value],
+) -> Result<serde_json::Value, String> {
+    call_rpc_wallet_with_timeouts(
+        wallet_name,
+        method,
+        params,
+        Duration::from_secs(5),
+        Duration::from_secs(15),
+    )
+}
+
+pub(crate) fn call_rpc_wallet_with_timeouts(
+    wallet_name: &str,
+    method: &str,
+    params: &[serde_json::Value],
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    if wallet_name.is_empty() {
+        return Err("Wallet name must not be empty for targeted RPC".to_string());
+    }
+    // Validate wallet name: same rules as Core wallet filenames
+    if !wallet_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "Invalid wallet name for RPC routing: {wallet_name}"
+        ));
+    }
+    if wallet_name.len() > 64 {
+        return Err("Wallet name too long for RPC routing".to_string());
+    }
+
+    let base_url = rpc_url()?;
+    let wallet_url = format!("{base_url}/wallet/{wallet_name}");
+    let (auth, _auth_mode) = rpc_auth()?;
+
+    let body = serde_json::json!({
+        "jsonrpc": "1.0",
+        "id": "commander",
+        "method": method,
+        "params": params,
+    });
+
+    let response_result = ureq::AgentBuilder::new()
+        .timeout_connect(connect_timeout)
+        .timeout_read(read_timeout)
+        .build()
+        .post(&wallet_url)
+        .set("Authorization", &auth)
+        .set("Content-Type", "application/json")
+        .send_json(&body);
+
+    let raw: serde_json::Value = match response_result {
+        Ok(resp) => resp
+            .into_json()
+            .map_err(|e| format!("RPC parse error ({method} on wallet {wallet_name}): {e}"))?,
+        Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
+            format!("RPC HTTP {status} with unreadable response body ({method} on wallet {wallet_name}): {e}")
+        })?,
+        Err(e) => return Err(format!("RPC transport error ({method} on wallet {wallet_name}): {e}")),
+    };
+
+    if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown RPC error");
+        return Err(format!(
+            "RPC error ({method} on wallet {wallet_name}): {msg}"
+        ));
+    }
+
+    let result = raw
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok(result)
 }
 
 fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcResult {
@@ -255,7 +347,37 @@ pub fn rpc_get_network_info() -> RpcResult {
 
 #[tauri::command]
 pub fn rpc_get_wallet_info() -> RpcResult {
-    rpc_command_with_result("getwalletinfo", &[])
+    match call_rpc("getwalletinfo", &[]) {
+        Ok(mut data) => {
+            if let Ok(migration_info) = call_rpc("getwalletmigrationinfo", &[]) {
+                merge_wallet_security_status(&mut data, &migration_info);
+            }
+            RpcResult {
+                success: true,
+                data,
+                error: String::new(),
+            }
+        }
+        Err(e) => RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: e,
+        },
+    }
+}
+
+fn merge_wallet_security_status(
+    wallet_info: &mut serde_json::Value,
+    migration_info: &serde_json::Value,
+) {
+    let Some(wallet) = wallet_info.as_object_mut() else {
+        return;
+    };
+    for field in ["encrypted", "locked"] {
+        if let Some(value) = migration_info.get(field).and_then(|value| value.as_bool()) {
+            wallet.insert(field.to_string(), serde_json::Value::Bool(value));
+        }
+    }
 }
 
 const ALLOWED_METHODS: &[&str] = &[
@@ -472,6 +594,33 @@ mod tests {
     }
 
     #[test]
+    fn wallet_status_uses_explicit_core_encryption_fields() {
+        let mut wallet_info = serde_json::json!({
+            "walletname": "wallet.dat",
+            "balance": 42.0
+        });
+        let migration_info = serde_json::json!({
+            "encrypted": true,
+            "locked": true
+        });
+
+        merge_wallet_security_status(&mut wallet_info, &migration_info);
+
+        assert_eq!(wallet_info["encrypted"], true);
+        assert_eq!(wallet_info["locked"], true);
+    }
+
+    #[test]
+    fn wallet_status_does_not_invent_missing_security_fields() {
+        let mut wallet_info = serde_json::json!({
+            "walletname": "wallet.dat"
+        });
+        merge_wallet_security_status(&mut wallet_info, &serde_json::json!({}));
+        assert!(wallet_info.get("encrypted").is_none());
+        assert!(wallet_info.get("locked").is_none());
+    }
+
+    #[test]
     fn allowed_methods_include_informational_rpcs() {
         assert!(ALLOWED_METHODS.contains(&"getinfo"));
         assert!(ALLOWED_METHODS.contains(&"getblockchaininfo"));
@@ -541,11 +690,8 @@ mod tests {
     fn make_temp_dir() -> std::path::PathBuf {
         static CNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = CNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "hemp0x_rpc_test_{:x}_{:x}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hemp0x_rpc_test_{:x}_{:x}", std::process::id(), n));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -565,7 +711,11 @@ mod tests {
         let config_path = temp_config_path(&tmp);
 
         fs::write(&cookie_path, "cookie_user:cookie_pass").unwrap();
-        fs::write(&config_path, "rpcuser=config_user\nrpcpassword=config_pass\n").unwrap();
+        fs::write(
+            &config_path,
+            "rpcuser=config_user\nrpcpassword=config_pass\n",
+        )
+        .unwrap();
 
         let result = rpc_auth_for_paths(&cookie_path, &config_path);
         let _ = fs::remove_dir_all(&tmp);

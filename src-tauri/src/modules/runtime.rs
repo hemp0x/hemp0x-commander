@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::modules::files::load_app_settings_impl;
 use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
-use crate::modules::files::load_app_settings_impl;
 
 const REQUIRED_CORE_NEXT_COMMIT: &str = "fbbf578d6";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.7.0.0";
@@ -95,13 +95,15 @@ impl DaemonProcessIdentity {
 }
 
 fn bundled_daemon_path() -> PathBuf {
-  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
-  let path = if let Some(ref d) = custom_bin_dir {
-    resolve_bin_with_override("hemp0xd", Some(d))
-  } else {
-    resolve_bin("hemp0xd")
-  };
-  PathBuf::from(path)
+    let custom_bin_dir = load_app_settings_impl()
+        .ok()
+        .and_then(|s| s.custom_core_binary_dir);
+    let path = if let Some(ref d) = custom_bin_dir {
+        resolve_bin_with_override("hemp0xd", Some(d))
+    } else {
+        resolve_bin("hemp0xd")
+    };
+    PathBuf::from(path)
 }
 
 #[cfg(target_os = "linux")]
@@ -199,11 +201,9 @@ pub fn get_daemon_process_identity() -> DaemonProcessIdentity {
         } else {
             None
         };
-        let version_commit_match = version_raw
-            .as_ref()
-            .map_or(false, |v| {
-                parse_commit_hash(v).as_deref() == Some(REQUIRED_CORE_NEXT_COMMIT)
-            });
+        let version_commit_match = version_raw.as_ref().map_or(false, |v| {
+            parse_commit_hash(v).as_deref() == Some(REQUIRED_CORE_NEXT_COMMIT)
+        });
 
         let confidence = if matches_bundled_path && sha256_match && version_commit_match {
             "exact"
@@ -288,13 +288,15 @@ fn parse_commit_hash(raw: &str) -> Option<String> {
 }
 
 fn binary_version(name: &str) -> BinaryVersion {
-  let custom_bin_dir = load_app_settings_impl().ok().and_then(|s| s.custom_core_binary_dir);
-  let path = if let Some(ref d) = custom_bin_dir {
-    resolve_bin_with_override(name, Some(d))
-  } else {
-    resolve_bin(name)
-  };
-  let exists = PathBuf::from(&path).exists();
+    let custom_bin_dir = load_app_settings_impl()
+        .ok()
+        .and_then(|s| s.custom_core_binary_dir);
+    let path = if let Some(ref d) = custom_bin_dir {
+        resolve_bin_with_override(name, Some(d))
+    } else {
+        resolve_bin(name)
+    };
+    let exists = PathBuf::from(&path).exists();
     let raw = if exists {
         command_version(&path).unwrap_or_else(|e| format!("Version check failed: {e}"))
     } else {
@@ -440,20 +442,16 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
         && lower.contains("validatewalletmigration")
         && lower.contains("restorewalletmigration");
 
-    let messaging = lower.contains("viewallmessages")
-        && lower.contains("viewallmessagechannels");
+    let messaging = lower.contains("viewallmessages") && lower.contains("viewallmessagechannels");
 
-    let restricted_assets = lower.contains("listrestrictedassets")
-        && lower.contains("issuerestrictedasset");
+    let restricted_assets =
+        lower.contains("listrestrictedassets") && lower.contains("issuerestrictedasset");
 
-    let qualifiers = lower.contains("listqualifiers")
-        && lower.contains("issuequalifierasset");
+    let qualifiers = lower.contains("listqualifiers") && lower.contains("issuequalifierasset");
 
-    let rewards = lower.contains("distributereward")
-        && lower.contains("getdistributestatus");
+    let rewards = lower.contains("distributereward") && lower.contains("getdistributestatus");
 
-    let snapshots = lower.contains("requestsnapshot")
-        && lower.contains("getsnapshot");
+    let snapshots = lower.contains("requestsnapshot") && lower.contains("getsnapshot");
 
     let has_view_channel_messages = lower.contains("viewchannelmessages");
     let has_message_txid_lookup = lower.contains("getmessagetxid");
@@ -641,13 +639,11 @@ pub struct DaemonReadiness {
 
 #[tauri::command]
 pub async fn wait_for_daemon_ready(timeout_ms: Option<u64>) -> Result<DaemonReadiness, String> {
-  // Polling loop with sleeps — run off the main thread so the UI does
-  // not freeze while waiting for Core RPC to come up.
-  tauri::async_runtime::spawn_blocking(move || {
-    Ok(wait_for_daemon_ready_blocking(timeout_ms))
-  })
-  .await
-  .map_err(|e| format!("Wait-for-daemon task failed: {e}"))?
+    // Polling loop with sleeps — run off the main thread so the UI does
+    // not freeze while waiting for Core RPC to come up.
+    tauri::async_runtime::spawn_blocking(move || Ok(wait_for_daemon_ready_blocking(timeout_ms)))
+        .await
+        .map_err(|e| format!("Wait-for-daemon task failed: {e}"))?
 }
 
 pub fn wait_for_daemon_ready_blocking(timeout_ms: Option<u64>) -> DaemonReadiness {
@@ -914,7 +910,8 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn returns_default_for_no_core_next_rpcs() {
-        let help = "== Blockchain ==\ngetbestblockhash\ngetblockchaininfo\n== Control ==\nhelp\nstop\n";
+        let help =
+            "== Blockchain ==\ngetbestblockhash\ngetblockchaininfo\n== Control ==\nhelp\nstop\n";
         let caps = parse_capabilities_from_help(help);
         assert!(caps.help_probe_success);
         assert!(!caps.wallet_migration);
@@ -930,7 +927,11 @@ generatetoaddress nblocks address (maxtries)
     fn detects_rpc_names_in_synthetic_help() {
         let caps = parse_capabilities_from_help(synthetic_help());
         assert!(!caps.detected_rpc_names.is_empty());
-        let names_lower: Vec<String> = caps.detected_rpc_names.iter().map(|n| n.to_lowercase()).collect();
+        let names_lower: Vec<String> = caps
+            .detected_rpc_names
+            .iter()
+            .map(|n| n.to_lowercase())
+            .collect();
         let joined = names_lower.join(" ");
         assert!(joined.contains("exportwalletmigration"));
         assert!(joined.contains("getmessaginginfo"));
@@ -954,7 +955,8 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn compute_sha256_different_content_different_hash() {
-        let dir = std::env::temp_dir().join(format!("hemp0x_sha256_test2_{:x}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hemp0x_sha256_test2_{:x}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");

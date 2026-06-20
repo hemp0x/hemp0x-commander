@@ -228,6 +228,8 @@
     let showEncryptModal = false;
     let newEncPass = "";
     let newEncPassConfirm = "";
+    let encryptTargetWalletName = null;
+    let encryptedWalletRestartName = "";
 
     async function proceedNewWallet() {
         try {
@@ -302,8 +304,13 @@
         encryptWorking = true;
 
         try {
-            const activeWalletName = connectResult?.core_wallet_name || walletStatus?.walletname || null;
-            if (activeWalletName && activeWalletName !== "default") {
+            const activeWalletName = encryptTargetWalletName
+                || unifiedPromotionResult?.core_wallet_name
+                || connectResult?.core_wallet_name
+                || walletStatus?.walletname
+                || null;
+            encryptedWalletRestartName = activeWalletName || "";
+            if (activeWalletName && activeWalletName !== "default" && activeWalletName !== "wallet.dat") {
                 await core.invoke("wallet_encrypt_named", { walletName: activeWalletName, password: newEncPass });
             } else {
                 await core.invoke("wallet_encrypt", { password: newEncPass });
@@ -314,10 +321,31 @@
             showEncryptModal = false;
             newEncPass = "";
             newEncPassConfirm = "";
+            encryptTargetWalletName = null;
             showEncryptCompleteOverlay = true;
         } catch (e) {
             encryptWorking = false;
             showToast("Encryption Failed: " + e, "error");
+        }
+    }
+
+    async function startPendingHistoryRecovery() {
+        const walletName = pendingHistoryRecoveryWallet;
+        if (!walletName) return;
+        pendingHistoryRecoveryWallet = "";
+        try {
+            await core.invoke("vault_start_wallet_history_recovery", {
+                walletName,
+                fromBlock: null,
+            });
+            historyRecoveryBackgroundActive = true;
+            coreBusyUntil.set(Date.now() + 120000);
+            showToast("Wallet history recovery started in the background.", "info", false);
+            window.setTimeout(() => {
+                historyRecoveryBackgroundActive = false;
+            }, 120000);
+        } catch (err) {
+            console.warn("Deferred history recovery did not start:", err);
         }
     }
 
@@ -569,16 +597,26 @@
         try {
             unlockError = "";
             const plainWalletUnlock = unlockModalPurpose === "wallet_unlock";
-            await core.invoke("wallet_unlock", {
-                password: unlockPassword,
-                duration: unlockModalPurpose === "vault_backup" || plainWalletUnlock ? 300 : 60,
-            });
-            showUnlockModal = false;
             const unlockDuration = unlockModalPurpose === "vault_backup" || plainWalletUnlock ? 300 : 60;
+            const runtimeWalletName = loadedRuntimeWalletName();
+            if (isDefaultRuntimeWalletName(runtimeWalletName)) {
+                await core.invoke("wallet_unlock", {
+                    password: unlockPassword,
+                    duration: unlockDuration,
+                });
+            } else {
+                await core.invoke("wallet_unlock_named", {
+                    walletName: runtimeWalletName,
+                    password: unlockPassword,
+                    duration: unlockDuration,
+                });
+            }
+            showUnlockModal = false;
             if (walletStatus && isRuntimeWalletEncrypted(walletStatus)) {
                 walletStatus = {
                     ...walletStatus,
                     unlocked_until: Math.floor(Date.now() / 1000) + unlockDuration,
+                    locked: false,
                 };
             }
             const afterUnlock = unlockAfterWalletUnlock;
@@ -924,12 +962,6 @@
         recoveryPhrasePassphraseConfirm = "";
         recoveryPhraseError = "";
         vaultPageError = "";
-        showLegacyWalletImportModal = false;
-        legacyImportPath = "";
-        legacyImportConfirmChecked = false;
-        legacyImportWorking = false;
-        legacyImportError = "";
-        legacyImportResult = null;
         // 64p: vault security state
         showChangeVaultPassphraseModal = false;
         changeVaultPassCurrent = "";
@@ -938,11 +970,32 @@
         changeVaultPassWorking = false;
         changeVaultPassError = "";
         changeVaultPassResult = null;
+        showChangeRuntimeWalletPassModal = false;
+        changeRuntimeWalletPassCurrent = "";
+        changeRuntimeWalletPassNew = "";
+        changeRuntimeWalletPassConfirm = "";
+        changeRuntimeWalletPassWorking = false;
+        changeRuntimeWalletPassError = "";
+        changeRuntimeWalletPassResult = null;
         showUnloadVaultModal = false;
         unloadVaultConfirmChecked = false;
         unloadVaultWorking = false;
         unloadVaultError = "";
         unloadVaultResult = null;
+        // 65: unified wallet file import
+        showUnifiedImportModal = false;
+        unifiedImportPath = "";
+        unifiedImportDetectedType = null;
+        unifiedImportDetection = null;
+        unifiedImportWorking = false;
+        unifiedImportError = "";
+        unifiedImportResult = null;
+        unifiedImportConfirmChecked = false;
+        unifiedImportMigrationPassphrase = "";
+        unifiedImportSnapshotLabel = "";
+        unifiedImportSnapshotWorking = false;
+        unifiedImportSnapshotResult = null;
+        unifiedImportSnapshotError = "";
     }
 
     async function ensureNamedCoreWalletLoaded(walletName, label = "wallet") {
@@ -974,19 +1027,58 @@
     // --- SKIP BACKUP ---
     let skipBackup = false;
 
-    // --- LEGACY WALLET IMPORT (64o) ---
-    let showLegacyWalletImportModal = false;
-    let legacyImportPath = "";
-    let legacyImportConfirmChecked = false;
-    let legacyImportWorking = false;
-    let legacyImportError = "";
-    let legacyImportResult = null;
     let activeVaultWalletName = null; // null = no vault wallet (legacy mode), string = vault wallet name
+
+    // --- UNIFIED WALLET FILE IMPORT (65) ---
+    let showUnifiedImportModal = false;
+    let unifiedImportPath = "";
+    let unifiedImportDetectedType = null; // "hemp0x_vault" | "legacy_core_wallet" | "core_migration_envelope" | "unknown" | null
+    let unifiedImportDetection = null;
+    let unifiedImportWorking = false;
+    let unifiedImportError = "";
+    let unifiedImportResult = null;
+    let unifiedImportConfirmChecked = false;
+    let unifiedImportMigrationPassphrase = "";
+    let unifiedImportSnapshotLabel = "";
+    let unifiedImportSnapshotWorking = false;
+    let unifiedImportSnapshotResult = null;
+    let unifiedImportSnapshotError = "";
+
+    // --- CORE-TO-WEBCOM PROMOTION (66/66b) ---
+    let unifiedPromotionWorking = false;
+    let unifiedPromotionError = "";
+    let unifiedPromotionResult = null;
+    let unifiedPromotionPassphrase = "";
+    let unifiedPromotionWalletName = "";
+    let unifiedPromotionReplaceExisting = false;
+    let unifiedPromotionWalletUnlockPass = "";
+    let unifiedPromotionProgressLabel = "";
+    let unifiedPromotionStep = 0;
+    let unifiedPromotionNeedsRuntimeLoad = false;
+    const UNIFIED_PROMOTION_STEPS = [
+        "Preparing wallet conversion",
+        "Verifying and adding wallet to vault",
+        "Selecting vault runtime wallet",
+        "Restarting Core and loading wallet",
+        "Confirming wallet status",
+        "Finishing wallet setup",
+    ];
+
+    // --- ADVANCED EXPORT (66b) ---
+    let showAdvancedExportModal = false;
+    let advancedExportPath = "";
+    let advancedExportPassphrase = "";
+    let advancedExportOverwrite = false;
+    let advancedExportWalletUnlockPass = "";
+    let advancedExportWorking = false;
+    let advancedExportError = "";
+    let advancedExportResult = null;
 
     // --- WALLET MAINTENANCE ---
     let utxoRefreshWorking = false;
     let historyRecoverWorking = false;
     let historyRecoveryBackgroundActive = false;
+    let pendingHistoryRecoveryWallet = "";
     let walletSwitchWorking = false;
     let walletSwitchTargetName = "";
     let restartingCore = false;
@@ -1026,6 +1118,13 @@
     let changeVaultPassWorking = false;
     let changeVaultPassError = "";
     let changeVaultPassResult = null; // { rotated, modified, kdf_profile }
+    let showChangeRuntimeWalletPassModal = false;
+    let changeRuntimeWalletPassCurrent = "";
+    let changeRuntimeWalletPassNew = "";
+    let changeRuntimeWalletPassConfirm = "";
+    let changeRuntimeWalletPassWorking = false;
+    let changeRuntimeWalletPassError = "";
+    let changeRuntimeWalletPassResult = null;
 
     let showUnloadVaultModal = false;
     let unloadVaultConfirmChecked = false;
@@ -1074,77 +1173,405 @@
         }
     }
 
-    async function importWalletFileFromPath(selected) {
+    // --- UNIFIED WALLET FILE IMPORT (65) ---
+    async function unifiedImportWalletFile() {
+        if (!tauriReady) return;
+        const selected = await open({
+            title: "Import Wallet File",
+            multiple: false,
+        });
         if (!selected) return;
-        legacyImportPath = selected;
-        legacyImportConfirmChecked = false;
-        legacyImportWorking = false;
-        legacyImportError = "";
-        legacyImportResult = null;
-        showLegacyWalletImportModal = true;
+        await openUnifiedImportPath(selected);
     }
 
-    async function executeLegacyWalletImport() {
-        if (!legacyImportPath || !legacyImportConfirmChecked) return;
-        legacyImportWorking = true;
-        legacyImportError = "";
-        legacyImportResult = null;
+    async function importCurrentRuntimeWalletToVault() {
+        if (!tauriReady) return;
+        try {
+            const config = await core.invoke("init_config");
+            const separator = String(config.data_dir).includes("\\") ? "\\" : "/";
+            const reportedName = String(walletStatus?.walletname || "").trim();
+            const walletFileName = !reportedName || reportedName === "default" || reportedName === "wallet.dat"
+                ? "wallet.dat"
+                : reportedName;
+            await openUnifiedImportPath(`${config.data_dir}${separator}${walletFileName}`);
+        } catch (err) {
+            showToast("Current runtime wallet is unavailable: " + err, "error");
+        }
+    }
+
+    async function openUnifiedImportPath(path) {
+        unifiedImportPath = path;
+        unifiedImportDetectedType = null;
+        unifiedImportDetection = null;
+        unifiedImportWorking = true;
+        unifiedImportError = "";
+        unifiedImportResult = null;
+        unifiedImportConfirmChecked = false;
+        unifiedImportMigrationPassphrase = "";
+        unifiedImportSnapshotLabel = "";
+        unifiedImportSnapshotWorking = false;
+        unifiedImportSnapshotResult = null;
+        unifiedImportSnapshotError = "";
+        unifiedPromotionNeedsRuntimeLoad = false;
+        showUnifiedImportModal = true;
+
+        try {
+            try {
+                const vaultDetection = await core.invoke("vault_validate_import_bundle", { path });
+                unifiedImportDetection = vaultDetection;
+                unifiedImportDetectedType = "hemp0x_vault";
+                return;
+            } catch (_) {
+                // Not a Hemp0x Vault JSON; continue with wallet/migration detection.
+            }
+            const detection = await core.invoke("detect_wallet_file_type", { path });
+            unifiedImportDetection = detection;
+            unifiedImportDetectedType = detection.detected_type;
+        } catch (err) {
+            unifiedImportError = String(err);
+            unifiedImportDetectedType = "unknown";
+        } finally {
+            unifiedImportWorking = false;
+        }
+    }
+
+    async function executeUnifiedVaultImport() {
+        if (!unifiedImportPath) return;
+        showUnifiedImportModal = false;
+        if (hasVault) {
+            switchImportPendingPath = unifiedImportPath;
+            switchImportPendingArchive = true;
+            switchImportArchiveArmed = true;
+            return;
+        }
+        await doImportVault(unifiedImportPath, false);
+    }
+
+    async function executeUnifiedLegacyImport() {
+        if (!unifiedImportPath || !unifiedImportConfirmChecked) return;
+        unifiedImportWorking = true;
+        unifiedImportError = "";
+        unifiedImportResult = null;
         try {
             const result = await core.invoke("restore_legacy_wallet_dat", {
-                path: legacyImportPath,
+                path: unifiedImportPath,
                 restartNode: true,
             });
-            legacyImportResult = result;
-
-            // Refresh all wallet/vault status to reflect the new state
+            unifiedImportResult = result;
             await refreshWalletHeader();
             await loadAlignmentStatus();
             await loadVaultWalletRecords();
-
             if (result.already_active) {
                 showToast("Already using this wallet.dat. Switched to legacy wallet mode.", "success");
             } else {
                 showToast("Legacy wallet.dat imported successfully.", "success");
             }
-
             if (result.hemp_conf_wallet) {
                 showToast("Warning: hemp.conf contains wallet=" + result.hemp_conf_wallet + " — Core may load that wallet instead of wallet.dat.", "warning", false);
             }
-
             if (result.restart_error) {
-                legacyImportError = result.restart_error;
+                unifiedImportError = result.restart_error;
                 showToast(result.restart_error, "error", false);
             }
+            return result;
         } catch (err) {
-            legacyImportError = String(err);
+            unifiedImportError = String(err);
             showToast("Legacy wallet import failed: " + err, "error");
+            return null;
         } finally {
-            legacyImportWorking = false;
+            unifiedImportWorking = false;
         }
     }
 
-    async function importWalletFile() {
-        if (!tauriReady) return;
-        const selected = await open({
-            title: "Select Wallet File to Import",
-            multiple: false,
-            filters: [
-                { name: "Wallet Files", extensions: ["dat"] },
-                { name: "All Files", extensions: ["*"] },
-            ],
-        });
-        if (!selected) return;
-        try {
-            const validation = await core.invoke("validate_wallet_file", { path: selected });
-            if (!validation?.valid) {
-                showToast("Not a valid wallet file.", "error");
+    async function loadSelectedWalletFileAsRuntime() {
+        if (!unifiedImportPath || unifiedImportDetectedType !== "legacy_core_wallet") return;
+        unifiedPromotionError = "";
+        unifiedPromotionNeedsRuntimeLoad = false;
+        const selectedName = vaultBasenameFromPath(unifiedImportPath);
+        if (selectedName && selectedName !== "wallet.dat") {
+            const config = await core.invoke("init_config");
+            const selectedDir = normalizePathForCompare(dirnameFromPath(unifiedImportPath));
+            const dataDir = normalizePathForCompare(config?.data_dir);
+            if (selectedDir !== dataDir) {
+                unifiedPromotionError = "Named Core runtime wallets must be inside the Hemp0x Core data folder. Use the legacy wallet option below for external wallet.dat files.";
                 return;
             }
-        } catch (err) {
-            showToast("Not a valid wallet file: " + err, "error");
+            unifiedImportWorking = true;
+            try {
+                await core.invoke("vault_restart_core_with_wallet", { walletName: selectedName });
+                activeVaultWalletName = selectedName;
+                await refreshWalletHeader();
+                await loadAlignmentStatus();
+                unifiedPromotionError = "This wallet is now loaded as the Core runtime wallet. Click Add to Hemp0x Vault again to promote it into the portable vault.";
+                showToast("Core is using the selected runtime wallet.", "success");
+            } catch (err) {
+                unifiedPromotionError = "Could not load selected runtime wallet: " + String(err);
+                showToast("Runtime wallet load failed: " + err, "error", false);
+            } finally {
+                unifiedImportWorking = false;
+            }
             return;
         }
-        await importWalletFileFromPath(selected);
+        unifiedImportConfirmChecked = true;
+        const result = await executeUnifiedLegacyImport();
+        if (result && !result.restart_error) {
+            unifiedPromotionError = "wallet.dat is now loaded as the Core runtime wallet. Click Add to Hemp0x Vault again to promote it into the portable vault.";
+        }
+    }
+
+    async function executeUnifiedSnapshotImport() {
+        if (!unifiedImportPath || !unifiedImportSnapshotLabel) {
+            unifiedImportSnapshotError = "File and label are required.";
+            return;
+        }
+        const explicit = vaultUnlocked ? null : (unifiedImportMigrationPassphrase || null);
+        if (!vaultUnlocked && !unifiedImportMigrationPassphrase) {
+            unifiedImportSnapshotError = "Vault passphrase is required (or unlock the vault first).";
+            return;
+        }
+        unifiedImportSnapshotWorking = true;
+        unifiedImportSnapshotError = "";
+        unifiedImportSnapshotResult = null;
+        try {
+            const result = await core.invoke(
+                "ipfs_vault_import_wallet_migration_record_from_path",
+                {
+                    path: unifiedImportPath,
+                    label: unifiedImportSnapshotLabel,
+                    migrationPassphrase: unifiedImportMigrationPassphrase || null,
+                    vaultPassphrase: explicit,
+                },
+            );
+            unifiedImportSnapshotResult = result;
+            unifiedImportSnapshotLabel = "";
+            unifiedImportMigrationPassphrase = "";
+            vaultWalletRecordsLoaded = false;
+            await loadVaultWalletRecords();
+            showToast("Migration envelope stored as vault recovery snapshot.", "success");
+        } catch (err) {
+            unifiedImportSnapshotError = String(err);
+        }
+        unifiedImportSnapshotWorking = false;
+    }
+
+    // --- CORE-TO-WEBCOM PROMOTION (66b) ---
+    async function executeUnifiedPromotion() {
+        if (!unifiedImportPath) {
+            unifiedPromotionError = "No file selected.";
+            return;
+        }
+        if (!vaultUnlocked) {
+            unifiedPromotionError = "Unlock the vault first.";
+            return;
+        }
+        unifiedPromotionWorking = true;
+        unifiedPromotionError = "";
+        unifiedPromotionNeedsRuntimeLoad = false;
+        unifiedPromotionResult = null;
+        unifiedPromotionStep = 0;
+        unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[0];
+        await tick();
+
+        let vaultUpdated = false;
+        try {
+            let result;
+            unifiedPromotionStep = 1;
+            unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[1];
+            await tick();
+            if (unifiedImportDetectedType === "core_migration_envelope") {
+                if (!unifiedPromotionPassphrase) {
+                    unifiedPromotionError = "Migration passphrase is required for encrypted envelopes.";
+                    unifiedPromotionWorking = false;
+                    unifiedPromotionProgressLabel = "";
+                    return;
+                }
+                result = await core.invoke("ipfs_vault_promote_core_migration_to_portable_primary", {
+                    path: unifiedImportPath,
+                    migrationPassphrase: unifiedPromotionPassphrase,
+                    vaultPassphrase: null,
+                    replaceExistingPrimary: unifiedPromotionReplaceExisting,
+                    runtimeWalletName: unifiedPromotionWalletName || null,
+                    walletUnlockPassphrase: unifiedPromotionWalletUnlockPass || null,
+                });
+            } else if (unifiedImportDetectedType === "legacy_core_wallet") {
+                result = await core.invoke("ipfs_vault_promote_core_wallet_to_portable_primary", {
+                    path: unifiedImportPath,
+                    vaultPassphrase: null,
+                    replaceExistingPrimary: unifiedPromotionReplaceExisting,
+                    runtimeWalletName: unifiedPromotionWalletName || null,
+                    walletUnlockPassphrase: unifiedPromotionWalletUnlockPass || null,
+                });
+            } else {
+                unifiedPromotionError = "This file type cannot be promoted to a portable vault wallet.";
+                unifiedPromotionWorking = false;
+                unifiedPromotionProgressLabel = "";
+                return;
+            }
+
+            vaultUpdated = true;
+            // CF10: clear secret-bearing variables immediately
+            unifiedPromotionPassphrase = "";
+            unifiedPromotionWalletUnlockPass = "";
+
+            const walletName = result?.core_wallet_name;
+            if (!walletName) {
+                throw new Error("The vault was updated, but Core did not return the runtime wallet name.");
+            }
+
+            unifiedPromotionStep = 2;
+            unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[2];
+            await tick();
+            await core.invoke("vault_set_active_wallet_name", { walletName });
+
+            unifiedPromotionStep = 3;
+            unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[3];
+            await tick();
+            const loadedState = await ensureNamedCoreWalletLoaded(walletName, "Promoted vault wallet");
+
+            unifiedPromotionStep = 4;
+            unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[4];
+            await tick();
+            result.named_wallet_loaded = true;
+            result.wallet_load_restart_required = false;
+            result.wallet_state = loadedState;
+            unifiedPromotionResult = result;
+
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            await Promise.allSettled([
+                refreshWalletHeader(),
+                loadAlignmentStatus(),
+                loadVaultWalletRecords(),
+            ]);
+
+            unifiedPromotionStep = 5;
+            unifiedPromotionProgressLabel = UNIFIED_PROMOTION_STEPS[5];
+            await tick();
+            pendingHistoryRecoveryWallet = walletName;
+
+            showToast("Wallet promoted to portable Hemp0x Vault primary record.", "success");
+            await autosaveActiveVaultExport("Vault primary wallet changed");
+        } catch (err) {
+            const errStr = String(err);
+            if (errStr.startsWith("WALLET_UNLOCK_REQUIRED::")) {
+                unifiedPromotionError = "Core wallet is locked. Enter the wallet unlock passphrase below.";
+            } else if (errStr.startsWith("EXTERNAL_FILE_NOT_LOADED::")) {
+                const detail = errStr.split("::").slice(1).join("::");
+                unifiedPromotionError = `${detail} Load this file as the current Core runtime wallet first, then run Add to Hemp0x Vault again.`;
+                unifiedPromotionNeedsRuntimeLoad = unifiedImportDetectedType === "legacy_core_wallet";
+            } else if (vaultUpdated) {
+                unifiedPromotionError = `The wallet was added to the Hemp0x Vault, but Core could not finish loading it. ${errStr}`;
+            } else {
+                unifiedPromotionError = errStr;
+            }
+            showToast(vaultUpdated ? "Vault updated, but Core activation failed." : "Promotion failed: " + errStr, "error", false);
+        } finally {
+            // CF10: clear secrets on all exit paths
+            unifiedPromotionPassphrase = "";
+            unifiedPromotionWalletUnlockPass = "";
+            unifiedPromotionWorking = false;
+            unifiedPromotionProgressLabel = "";
+            unifiedPromotionStep = 0;
+        }
+    }
+
+    // --- ADVANCED EXPORT (66b) ---
+    async function openAdvancedExportModal() {
+        advancedExportPath = "";
+        advancedExportPassphrase = "";
+        advancedExportOverwrite = false;
+        advancedExportWalletUnlockPass = "";
+        advancedExportWorking = false;
+        advancedExportError = "";
+        advancedExportResult = null;
+        showAdvancedExportModal = true;
+    }
+
+    function closeAdvancedExportModal() {
+        showAdvancedExportModal = false;
+        advancedExportPath = "";
+        advancedExportPassphrase = "";
+        advancedExportOverwrite = false;
+        advancedExportWalletUnlockPass = "";
+        advancedExportWorking = false;
+        advancedExportError = "";
+        advancedExportResult = null;
+    }
+
+    async function selectAdvancedExportPath() {
+        try {
+            const selected = await save({
+                title: "Export Core Migration Wallet",
+                defaultPath: "hemp0x_migration",
+            });
+            if (selected) {
+                advancedExportPath = selected;
+            }
+        } catch (e) { /* user cancelled */ }
+    }
+
+    async function executeAdvancedExport() {
+        if (!advancedExportPath) {
+            advancedExportError = "Select a destination file first.";
+            return;
+        }
+        if (!advancedExportPassphrase || advancedExportPassphrase.length < 8) {
+            advancedExportError = "Export passphrase must be at least 8 characters.";
+            return;
+        }
+        advancedExportWorking = true;
+        advancedExportError = "";
+        advancedExportResult = null;
+        try {
+            const result = await core.invoke("vault_export_core_migration_wallet", {
+                destPath: advancedExportPath,
+                exportPassphrase: advancedExportPassphrase,
+                allowOverwrite: advancedExportOverwrite,
+                walletUnlockPassphrase: advancedExportWalletUnlockPass || null,
+            });
+            advancedExportResult = result;
+            advancedExportPassphrase = "";
+            advancedExportWalletUnlockPass = "";
+            showToast("Core migration wallet exported successfully.", "success");
+        } catch (err) {
+            const errStr = String(err);
+            if (errStr.startsWith("WALLET_UNLOCK_REQUIRED::")) {
+                advancedExportError = "Core wallet is locked. Enter the wallet unlock passphrase below.";
+            } else {
+                advancedExportError = errStr;
+            }
+            showToast("Export failed: " + errStr, "error");
+        } finally {
+            advancedExportPassphrase = "";
+            advancedExportWalletUnlockPass = "";
+            advancedExportWorking = false;
+        }
+    }
+
+    function closeUnifiedImportModal() {
+        showUnifiedImportModal = false;
+        unifiedImportPath = "";
+        unifiedImportDetectedType = null;
+        unifiedImportDetection = null;
+        unifiedImportWorking = false;
+        unifiedImportError = "";
+        unifiedImportResult = null;
+        unifiedImportConfirmChecked = false;
+        unifiedImportMigrationPassphrase = "";
+        unifiedImportSnapshotLabel = "";
+        unifiedImportSnapshotWorking = false;
+        unifiedImportSnapshotResult = null;
+        unifiedImportSnapshotError = "";
+        // 66b: promotion state
+        unifiedPromotionWorking = false;
+        unifiedPromotionError = "";
+        unifiedPromotionResult = null;
+        unifiedPromotionPassphrase = "";
+        unifiedPromotionWalletName = "";
+        unifiedPromotionReplaceExisting = false;
+        unifiedPromotionWalletUnlockPass = "";
+        unifiedPromotionProgressLabel = "";
+        unifiedPromotionStep = 0;
+        unifiedPromotionNeedsRuntimeLoad = false;
     }
 
     async function loadWalletDatExists() {
@@ -1190,10 +1617,15 @@
     }
 
     function isRuntimeWalletEncrypted(status) {
-        return status && Object.prototype.hasOwnProperty.call(status, "unlocked_until");
+        if (!status) return false;
+        if (typeof status.encrypted === "boolean") return status.encrypted;
+        return Object.prototype.hasOwnProperty.call(status, "unlocked_until");
     }
 
     function isRuntimeWalletUnlocked(status) {
+        if (typeof status?.locked === "boolean" && isRuntimeWalletEncrypted(status)) {
+            return !status.locked;
+        }
         const unlockedUntil = Number(status?.unlocked_until ?? 0);
         return isRuntimeWalletEncrypted(status) && unlockedUntil > 0;
     }
@@ -1249,10 +1681,11 @@
         vaultPageError = "";
         try {
             await core.invoke("vault_restart_core_with_wallet", { walletName });
+            activeVaultWalletName = walletName;
             for (let i = 0; i < 8; i++) {
                 await refreshWalletHeader();
                 await loadAlignmentStatus();
-                if (walletStatus?.walletname === walletName || activeVaultWalletName === walletName) {
+                if (walletStatus?.walletname === walletName) {
                     break;
                 }
                 await new Promise((r) => setTimeout(r, 750));
@@ -1267,12 +1700,12 @@
     }
 
     function isVaultWalletActive(walletName) {
-        return !!walletName && (walletStatus?.walletname === walletName || activeVaultWalletName === walletName);
+        return !!walletName && walletStatus?.walletname === walletName;
     }
 
     function activeRuntimeWalletLabel() {
-        if (activeVaultWalletName) return activeVaultWalletName;
         if (walletStatus?.walletname && walletStatus.walletname !== "default") return walletStatus.walletname;
+        if (activeVaultWalletName) return `${activeVaultWalletName} (selected for restart)`;
         return "wallet.dat";
     }
 
@@ -1342,6 +1775,7 @@
         createVaultWorking = true;
         createVaultError = "";
         try {
+            const requestedName = createVaultName;
             await core.invoke("ipfs_vault_setup_and_unlock", {
                 passphrase: createVaultPassphrase,
             });
@@ -1350,13 +1784,23 @@
             vaultWalletRecords = [];
             vaultWalletRecordsLoaded = false;
             vaultWalletRecordsMsg = "";
-            if (createVaultName) {
-                try { await core.invoke("vault_set_vault_label", { label: createVaultName }); } catch (_) {}
+            if (requestedName) {
+                try { await core.invoke("vault_set_vault_label", { label: requestedName }); } catch (_) {}
                 createVaultName = "";
             }
             await refreshWalletHeader();
             vaultStatus.set({ exists: true, unlocked: true });
             showToast("Vault created and unlocked for this session.", "success");
+            try {
+                await promptSaveActiveVault(requestedName);
+            } catch (saveErr) {
+                if (String(saveErr) === "No file selected") {
+                    notifyVaultNeedsSave("Vault created");
+                } else {
+                    showToast("Vault created, but portable save failed: " + saveErr, "warning", false);
+                    notifyVaultNeedsSave("Vault created");
+                }
+            }
         } catch (err) {
             createVaultError = String(err);
         }
@@ -1371,9 +1815,6 @@
                 const target = alignedVaultWalletName();
                 if (alignmentStatus.connection_state === "verified_aligned" && target && !isVaultWalletActive(target)) {
                     await useVaultWallet(target);
-                } else if (alignmentStatus.connection_state !== "verified_aligned" && alignmentStatus.can_guided_connect) {
-                    await loadAlignmentConnectPlan();
-                    showAlignmentReviewModal = true;
                 }
             }
         } catch (e) {
@@ -1447,6 +1888,10 @@
         return parts.length ? parts[parts.length - 1] : String(p);
     }
 
+    function normalizePathForCompare(p) {
+        return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    }
+
     function formatBytes(n) {
         const num = Number(n);
         if (!num || num < 0) return "—";
@@ -1473,6 +1918,7 @@
 
     async function loadAlignmentStatus() {
         if (!tauriReady || !vaultUnlocked) return;
+        if (alignmentStatusLoading) return;
         alignmentStatusLoading = true;
         alignmentStatusError = "";
         try {
@@ -1593,6 +2039,7 @@
         if (connectResult?.core_wallet_name) {
             try {
                 await core.invoke("vault_set_active_wallet_name", { walletName: connectResult.core_wallet_name });
+                activeVaultWalletName = connectResult.core_wallet_name;
             } catch (e) {
                 console.warn("vault_set_active_wallet_name failed after connect:", e);
             }
@@ -1644,6 +2091,9 @@
         }
         justConnected = true;
         connectWorking = false;
+        if (connectResult?.named_wallet_loaded && connectResult?.core_wallet_name) {
+            pendingHistoryRecoveryWallet = connectResult.core_wallet_name;
+        }
         await tick();
 
         // Run non-critical refreshes after the success view has painted so the
@@ -1659,22 +2109,17 @@
             loadVaultWalletRecords().catch((e) => {
                 vaultPageError = (vaultPageError ? vaultPageError + " | " : "") + "Backup record list failed: " + String(e);
             });
-            if (connectResult?.named_wallet_loaded && connectResult?.core_wallet_name) {
-                core.invoke("vault_recover_wallet_history", {
-                    walletName: connectResult.core_wallet_name,
-                    fromBlock: null,
-                }).catch((err) => {
-                    vaultPageError = "History recovery did not start: " + String(err);
-                });
-            }
         }, 100);
         } catch (err) {
             if (stepperTimer) clearInterval(stepperTimer);
             const rawErr = String(err);
             if (isGuidedUnlockRequiredError(err)) {
-                connectErrorCode = "wallet_unlock_required";
-                connectError = "Core wallet unlock required. Commander needs to back up the current Core wallet before connecting. Unlock the runtime wallet, then retry the guided connect.";
+                connectWorking = false;
+                connectErrorCode = "";
+                connectError = "";
                 requestCoreWalletUnlockForGuidedConnect();
+                showToast("Unlock the current Core wallet to continue connecting the vault wallet.", "info", false);
+                return;
             } else if (isRestoreTimeoutError(err)) {
                 connectErrorCode = "restore_timeout";
                 const parts = rawErr.split("::");
@@ -1744,19 +2189,64 @@
         showVaultArchiveModal = true;
     }
 
+    function sanitizeVaultExportStem(input) {
+        const clean = String(input || "")
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+        return clean || `vault-${new Date().toISOString().slice(0, 10)}`;
+    }
+
+    function dirnameFromPath(path) {
+        const text = String(path || "");
+        const idx = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+        return idx > 0 ? text.slice(0, idx) : "";
+    }
+
+    function vaultExportDefaultPath(labelOverride = "") {
+        const stem = sanitizeVaultExportStem(labelOverride || vaultOverview?.display_label || "");
+        const dir = dirnameFromPath(vaultOverview?.vault_path);
+        return dir ? `${dir}/${stem}.json` : `${stem}.json`;
+    }
+
+    async function promptSaveActiveVault(labelOverride = "") {
+        const raw = await core.invoke("vault_read_raw_content");
+        const savedPath = await core.invoke("dialog_write_text_file", {
+            content: raw,
+            defaultPath: vaultExportDefaultPath(labelOverride),
+            title: "Save Hemp0x Vault",
+            filters: [["Hemp0x Vault", "json"]],
+        });
+        try {
+            await core.invoke("vault_set_active_export_path", { path: savedPath });
+        } catch (err) {
+            showToast("Vault saved, but automatic future saves were not enabled: " + err, "warning", false);
+        }
+        showToast(`Vault saved to ${vaultBasenameFromPath(savedPath)}.`, "success");
+        return savedPath;
+    }
+
+    async function autosaveActiveVaultExport(reason = "Vault contents changed") {
+        try {
+            const result = await core.invoke("vault_autosave_active_export_path");
+            if (result?.saved) {
+                showToast(`${reason}. Saved to ${vaultBasenameFromPath(result.path)}.`, "success", false);
+                return true;
+            }
+            notifyVaultNeedsSave(reason);
+            return false;
+        } catch (err) {
+            showToast(`${reason}, but autosave failed: ${err}`, "warning", false);
+            notifyVaultNeedsSave(reason);
+            return false;
+        }
+    }
+
     async function executeArchiveVault() {
         showVaultArchiveModal = false;
         vaultArchiveWorking = true;
         try {
-            const raw = await core.invoke("vault_read_raw_content");
-            const defaultName = "vault-" + new Date().toISOString().slice(0, 10) + ".json";
-            const savedPath = await core.invoke("dialog_write_text_file", {
-                content: raw,
-                defaultPath: defaultName,
-                title: "Save Vault",
-                filters: [["Vault Bundle", "json"]],
-            });
-            showToast(`Vault saved to ${vaultBasenameFromPath(savedPath)}.`, "success");
+            await promptSaveActiveVault();
         } catch (err) {
             if (String(err) !== "No file selected") {
                 showToast("Save failed: " + err, "error");
@@ -1827,6 +2317,15 @@
         showChangeVaultPassphraseModal = false;
     }
 
+    function loadedRuntimeWalletName() {
+        return walletStatus?.walletname || "";
+    }
+
+    function isDefaultRuntimeWalletName(name) {
+        const normalized = String(name || "").trim();
+        return !normalized || normalized === "default" || normalized === "wallet.dat";
+    }
+
     async function executeChangeVaultPassphrase() {
         changeVaultPassError = "";
         changeVaultPassResult = null;
@@ -1863,13 +2362,102 @@
             changeVaultPassCurrent = "";
             changeVaultPassNew = "";
             changeVaultPassConfirm = "";
-            showToast("Vault passphrase changed. Save/back up your vault file now.", "success");
-            notifyVaultNeedsSave("Vault passphrase changed");
+            showToast("Vault passphrase changed.", "success");
+            await autosaveActiveVaultExport("Vault passphrase changed");
         } catch (err) {
             changeVaultPassError = String(err);
             showToast("Vault passphrase change failed: " + err, "error");
         } finally {
             changeVaultPassWorking = false;
+        }
+    }
+
+    function openChangeRuntimeWalletPassModal() {
+        if (!walletStatus || !isRuntimeWalletEncrypted(walletStatus)) {
+            showToast("Encrypt the runtime wallet before changing its password.", "error");
+            return;
+        }
+        changeRuntimeWalletPassCurrent = "";
+        changeRuntimeWalletPassNew = "";
+        changeRuntimeWalletPassConfirm = "";
+        changeRuntimeWalletPassError = "";
+        changeRuntimeWalletPassResult = null;
+        changeRuntimeWalletPassWorking = false;
+        showChangeRuntimeWalletPassModal = true;
+    }
+
+    function closeChangeRuntimeWalletPassModal() {
+        if (changeRuntimeWalletPassWorking) return;
+        changeRuntimeWalletPassCurrent = "";
+        changeRuntimeWalletPassNew = "";
+        changeRuntimeWalletPassConfirm = "";
+        changeRuntimeWalletPassError = "";
+        if (!changeRuntimeWalletPassResult) {
+            showChangeRuntimeWalletPassModal = false;
+        }
+    }
+
+    function dismissChangeRuntimeWalletPassSuccess() {
+        changeRuntimeWalletPassResult = null;
+        showChangeRuntimeWalletPassModal = false;
+    }
+
+    async function executeChangeRuntimeWalletPassphrase() {
+        changeRuntimeWalletPassError = "";
+        changeRuntimeWalletPassResult = null;
+        if (!walletStatus || !isRuntimeWalletEncrypted(walletStatus)) {
+            changeRuntimeWalletPassError = "The loaded runtime wallet is not encrypted.";
+            return;
+        }
+        if (!changeRuntimeWalletPassCurrent) {
+            changeRuntimeWalletPassError = "Enter the current runtime wallet password.";
+            return;
+        }
+        if (!changeRuntimeWalletPassNew || changeRuntimeWalletPassNew.length < 8) {
+            changeRuntimeWalletPassError = "New wallet password must be at least 8 characters.";
+            return;
+        }
+        if (changeRuntimeWalletPassNew !== changeRuntimeWalletPassConfirm) {
+            changeRuntimeWalletPassError = "New wallet password and confirmation do not match.";
+            return;
+        }
+        if (changeRuntimeWalletPassNew === changeRuntimeWalletPassCurrent) {
+            changeRuntimeWalletPassError = "New wallet password must be different from the current password.";
+            return;
+        }
+
+        changeRuntimeWalletPassWorking = true;
+        const walletName = loadedRuntimeWalletName();
+        try {
+            if (isDefaultRuntimeWalletName(walletName)) {
+                await core.invoke("change_wallet_password", {
+                    oldPass: changeRuntimeWalletPassCurrent,
+                    newPass: changeRuntimeWalletPassNew,
+                });
+            } else {
+                await core.invoke("change_wallet_password_named", {
+                    walletName,
+                    oldPass: changeRuntimeWalletPassCurrent,
+                    newPass: changeRuntimeWalletPassNew,
+                });
+            }
+            changeRuntimeWalletPassCurrent = "";
+            changeRuntimeWalletPassNew = "";
+            changeRuntimeWalletPassConfirm = "";
+            changeRuntimeWalletPassResult = {
+                changed: true,
+                wallet_name: walletName || "wallet.dat",
+            };
+            showToast("Runtime wallet password changed.", "success");
+            if (hasVault) {
+                await autosaveActiveVaultExport("Runtime wallet password changed");
+            }
+            await refreshWalletHeader();
+        } catch (err) {
+            changeRuntimeWalletPassError = String(err);
+            showToast("Runtime wallet password change failed: " + err, "error");
+        } finally {
+            changeRuntimeWalletPassWorking = false;
         }
     }
 
@@ -2022,6 +2610,7 @@
         createVaultFormWorking = true;
         createVaultFormError = "";
         try {
+            const requestedName = createVaultFormName;
             if (hasVault) {
                 await createNewVaultAfterArchive(createVaultFormPass);
             } else {
@@ -2035,9 +2624,19 @@
                 vaultStatus.set({ exists: true, unlocked: true });
                 await refreshWalletHeader();
             }
-            if (createVaultFormName) {
-                try { await core.invoke("vault_set_vault_label", { label: createVaultFormName }); } catch (_) {}
+            if (requestedName) {
+                try { await core.invoke("vault_set_vault_label", { label: requestedName }); } catch (_) {}
                 await refreshWalletHeader();
+            }
+            try {
+                await promptSaveActiveVault(requestedName);
+            } catch (saveErr) {
+                if (String(saveErr) === "No file selected") {
+                    notifyVaultNeedsSave("Vault created");
+                } else {
+                    showToast("Vault created, but portable save failed: " + saveErr, "warning", false);
+                    notifyVaultNeedsSave("Vault created");
+                }
             }
             showCreateVaultForm = false;
             createVaultFormPass = "";
@@ -2102,6 +2701,11 @@
                 path,
                 passphrase: null,
             });
+            try {
+                await core.invoke("vault_set_active_export_path", { path });
+            } catch (_) {
+                notifyVaultNeedsSave("Vault imported");
+            }
             vaultUnlocked = false;
             vaultListPassphrase = "";
             vaultWalletRecords = [];
@@ -2147,13 +2751,9 @@
                 showImportUnlockPopup = false;
                 vaultUnlocked = true;
                 vaultStatus.set({ exists: true, unlocked: true });
-                refreshWalletHeader().catch((e) => {
-                    vaultPageError = "Wallet status refresh failed: " + String(e);
+                handlePostVaultUnlockConnection().catch((e) => {
+                    console.warn("Post-import vault connection check failed:", e);
                 });
-                loadVaultWalletRecords().catch((e) => {
-                    vaultPageError = (vaultPageError ? vaultPageError + " | " : "") + "Backup record list failed: " + String(e);
-                });
-                handlePostVaultUnlockConnection().catch(() => {});
             } else {
                 importUnlockError = "Incorrect passphrase.";
                 importUnlockErrorDetails = "The imported vault could not be decrypted with the passphrase you entered.";
@@ -2213,7 +2813,7 @@
             recoveryBirthHeight = "";
             if (result?.vault_created_or_updated) {
                 showToast("Wallet restored from recovery phrase. Your vault is unlocked for this session.", "success");
-                notifyVaultNeedsSave("Recovery wallet was added to your vault");
+                await autosaveActiveVaultExport("Recovery wallet was added to your vault");
             } else {
                 showToast("Wallet restored successfully.", "success");
             }
@@ -2351,7 +2951,7 @@
                 await refreshWalletHeader().catch(() => {});
                 loadAlignmentStatus().catch(() => {});
             }
-            notifyVaultNeedsSave("New wallet was stored in your vault");
+            await autosaveActiveVaultExport("New wallet was stored in your vault");
             if (coreLoadError) {
                 vaultPageError = coreLoadError;
                 showToast(coreLoadError, "warning", false);
@@ -2403,6 +3003,7 @@
     }
 
     async function loadVaultWalletRecords() {
+        if (vaultWalletRecordsLoading) return;
         vaultWalletRecordsLoading = true;
         vaultWalletRecordsError = "";
         try {
@@ -2468,6 +3069,7 @@
             vaultImportMigrationPassphrase = "";
             vaultWalletRecordsLoaded = false;
             await loadVaultWalletRecords();
+            await autosaveActiveVaultExport("Core migration snapshot added to your vault");
         } catch (err) {
             vaultWalletRecordsError = String(err);
         }
@@ -2509,6 +3111,7 @@
             vaultExportAdvancedRecovery = false;
             vaultWalletRecordsLoaded = false;
             await loadVaultWalletRecords();
+            await autosaveActiveVaultExport("Core wallet snapshot added to your vault");
         } catch (err) {
             if (isWalletUnlockError(err)) {
                 vaultWalletRecordsError = "Core wallet unlock required before backing up to the vault.";
@@ -2601,6 +3204,7 @@
             selectedRecordId = "";
             vaultWalletRecordsLoaded = false;
             await loadVaultWalletRecords();
+            await autosaveActiveVaultExport("Core wallet snapshot removed from your vault");
         } catch (err) {
             vaultWalletRecordsError = String(err);
         }
@@ -2833,6 +3437,15 @@
                     <button class="cyber-btn ghost small wide" on:click={importVaultBundle}>IMPORT VAULT FROM FILE</button>
                 </div>
 
+                <!-- Import Wallet File -->
+                <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.85rem 1rem;">
+                    <h4 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem; letter-spacing:0.5px;">IMPORT WALLET FILE</h4>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.7rem;">
+                        Import a legacy wallet.dat or a Core migration envelope. Commander detects the file type and guides you.
+                    </p>
+                    <button class="cyber-btn ghost small wide" on:click={unifiedImportWalletFile}>IMPORT WALLET FILE</button>
+                </div>
+
                 <!-- Restore From Recovery Phrase -->
                 <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.85rem 1rem;">
                     <h4 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem; letter-spacing:0.5px;">RESTORE FROM RECOVERY PHRASE</h4>
@@ -2848,7 +3461,6 @@
                 </button>
                 {#if showAdvancedRecovery}
                     <div style="display:flex; flex-direction:column; gap:0.4rem;">
-                        <button class="cyber-btn ghost tiny wide" on:click={importWalletFile}>IMPORT LEGACY WALLET FILE</button>
                         <div class="btn-row" style="gap:0.4rem;">
                             <button class="cyber-btn ghost tiny wide" on:click={openExportModal}>EXPORT KEYS</button>
                             <button class="cyber-btn ghost tiny wide" on:click={openImportModal}>IMPORT KEYS</button>
@@ -2906,7 +3518,7 @@
                 </div>
                 {#if showAdvancedRecovery}
                     <div style="max-width:340px; margin:0.5rem auto 0; display:flex; flex-direction:column; gap:0.35rem;">
-                        <button class="cyber-btn ghost tiny wide" on:click={importWalletFile}>IMPORT LEGACY WALLET FILE</button>
+                        <button class="cyber-btn ghost tiny wide" on:click={unifiedImportWalletFile}>IMPORT WALLET FILE</button>
                         <div class="btn-row" style="gap:0.35rem;">
                             <button class="cyber-btn ghost tiny wide" on:click={openExportModal}>EXPORT KEYS</button>
                             <button class="cyber-btn ghost tiny wide" on:click={openImportModal}>IMPORT KEYS</button>
@@ -3036,7 +3648,12 @@
                 </div>
             {:else if vaultWalletRecordsError}
                 <div style="padding:0.5rem 1rem; background:rgba(255,85,85,0.08); border-top:1px solid rgba(255,85,85,0.2);">
-                    <p style="color:#ff7777; font-size:0.7rem; margin:0; line-height:1.45; word-break:break-word;">{vaultWalletRecordsError}</p>
+                    <div style="display:flex; align-items:flex-start; gap:0.5rem;">
+                        <p style="color:#ff7777; font-size:0.7rem; margin:0; line-height:1.45; word-break:break-word; flex:1;">{vaultWalletRecordsError}</p>
+                        <button class="cyber-btn ghost tiny" style="white-space:nowrap;" on:click={() => { vaultWalletRecordsError = ""; }}>
+                            DISMISS
+                        </button>
+                    </div>
                 </div>
             {/if}
 
@@ -3071,20 +3688,9 @@
                     {:else if alignmentStatusError}
                         <p style="color:#ff5555; font-size:0.7rem; margin:0;">{alignmentStatusError}</p>
                     {:else if alignmentStatus}
-	                        {#if !activeVaultWalletName}
+	                        {#if !activeVaultWalletName && !isVaultWalletActive(alignedVaultWalletName())}
 	                            <p style="color:#888; font-size:0.7rem; margin:0 0 0.25rem;">Hemp0x Vault wallet: Not connected</p>
 	                            <p style="color:#666; font-size:0.6rem; margin:0 0 0.5rem;">Commander is using a legacy wallet.dat. Use the vault wallet below to switch Core back to portable Hemp0x Vault mode.</p>
-	                            {#if alignmentStatus.wallet_record_state === "webcom_primary_detected"}
-		                                {#if alignmentStatus.connection_state === "verified_aligned"}
-		                                    <button class="cyber-btn primary-glow tiny" on:click={() => useVaultWallet(alignedVaultWalletName())} disabled={walletSwitchWorking}>
-		                                        {walletSwitchWorking ? "SWITCHING…" : "USE THIS VAULT WALLET"}
-		                                    </button>
-	                                {:else if alignmentStatus.can_guided_connect}
-	                                    <button class="cyber-btn primary-glow small" on:click={async () => { await loadAlignmentConnectPlan(); showAlignmentReviewModal = true; }}>
-	                                        CONNECT VAULT WALLET
-	                                    </button>
-	                                {/if}
-	                            {/if}
                         {:else if alignmentStatus.wallet_record_state === "webcom_primary_detected"}
                             <p style="color:var(--color-primary); font-size:0.7rem; margin:0 0 0.25rem;">
                                 Vault contains a portable wallet
@@ -3121,7 +3727,7 @@
                         {#if alignmentStatus.wallet_record_state === "webcom_primary_detected"}
                             <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
                                 {#if alignmentStatus.connection_state === "verified_aligned" && !isVaultWalletActive(alignedVaultWalletName())}
-                                    <button class="cyber-btn primary-glow small" on:click={() => useVaultWallet(alignedVaultWalletName())} disabled={walletSwitchWorking}>
+                                    <button class="cyber-btn primary-glow tiny" on:click={() => useVaultWallet(alignedVaultWalletName())} disabled={walletSwitchWorking}>
                                         {walletSwitchWorking ? "SWITCHING..." : "USE THIS VAULT WALLET"}
                                     </button>
                                 {:else if alignmentStatus.connection_state !== "verified_aligned" && alignmentStatus.can_guided_connect}
@@ -3135,6 +3741,11 @@
                             </div>
                         {:else}
                             <div style="display:flex; gap:0.45rem; flex-wrap:wrap;">
+                                {#if walletStatus?.walletname || walletDatExists}
+                                    <button class="cyber-btn primary-glow small" on:click={importCurrentRuntimeWalletToVault}>
+                                        ADD CURRENT RUNTIME WALLET
+                                    </button>
+                                {/if}
                                 <button class="cyber-btn primary-glow small" on:click={() => {
                                     showCreateWalletModal = true;
                                     createWalletPassphrase = "";
@@ -3147,7 +3758,7 @@
                                     createWalletPhraseConfirmed = false;
                                 }}>CREATE NEW WALLET</button>
                                 <button class="cyber-btn ghost small" on:click={() => { showRecoveryPhraseModal = true; }}>RESTORE FROM RECOVERY PHRASE</button>
-                                <button class="cyber-btn ghost small" on:click={importWalletFile}>IMPORT LEGACY WALLET FILE</button>
+                                <button class="cyber-btn ghost small" on:click={unifiedImportWalletFile}>IMPORT WALLET FILE</button>
                             </div>
                         {/if}
 
@@ -3206,7 +3817,16 @@
                         {/if}
                         {#if walletStatus && isRuntimeWalletEncrypted(walletStatus) && isRuntimeWalletUnlocked(walletStatus)}
                             <button class="cyber-btn ghost tiny" on:click={async () => {
-                                try { await core.invoke("wallet_lock"); showToast("Wallet locked.", "info"); await refreshWalletHeader(); }
+                                try {
+                                    const runtimeWalletName = loadedRuntimeWalletName();
+                                    if (isDefaultRuntimeWalletName(runtimeWalletName)) {
+                                        await core.invoke("wallet_lock");
+                                    } else {
+                                        await core.invoke("wallet_lock_named", { walletName: runtimeWalletName });
+                                    }
+                                    showToast("Wallet locked.", "info");
+                                    await refreshWalletHeader();
+                                }
                                 catch (e) { showToast("Lock failed: " + e, "error"); }
                             }}>LOCK WALLET</button>
                         {/if}
@@ -3261,13 +3881,16 @@
 
                 <!-- SECTION 3b: Vault security (advanced) — passphrase rotation + unload/fallback (64p) -->
                 <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
-                    <h4 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.75rem; letter-spacing:0.5px;">VAULT SECURITY</h4>
+                    <h4 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.75rem; letter-spacing:0.5px;">VAULT / WALLET SECURITY</h4>
                     <p class="desc" style="margin:0 0 0.55rem; font-size:0.65rem;">
-                        Advanced vault operations. Rotate the vault passphrase, switch Core to wallet.dat while keeping this vault open, or unload this vault from Commander.
+                        Advanced security operations. Rotate the vault passphrase, change the loaded Core runtime wallet password, switch Core to wallet.dat while keeping this vault open, or unload this vault from Commander.
                     </p>
                     <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
                         <button class="cyber-btn ghost small" on:click={openChangeVaultPassphraseModal} disabled={!vaultUnlocked || !hasVault}>
                             CHANGE VAULT PASSPHRASE
+                        </button>
+                        <button class="cyber-btn ghost small" on:click={openChangeRuntimeWalletPassModal} disabled={!walletStatus || !isRuntimeWalletEncrypted(walletStatus)}>
+                            CHANGE WALLET PASSWORD
                         </button>
                         <button class="cyber-btn ghost small" on:click={useWalletDatRuntime} disabled={!hasVault || walletSwitchWorking}>
                             {walletSwitchWorking && walletSwitchTargetName === "wallet.dat" ? "SWITCHING…" : "USE WALLET.DAT"}
@@ -3398,7 +4021,7 @@
                             </p>
                             <div class="btn-row" style="gap:0.5rem; flex-wrap:wrap;">
                                 <button class="cyber-btn ghost tiny" on:click={backupWallet}>BACKUP WALLET.DAT</button>
-                                <button class="cyber-btn ghost tiny" on:click={importWalletFile}>IMPORT WALLET.DAT</button>
+                                <button class="cyber-btn ghost tiny" on:click={unifiedImportWalletFile}>IMPORT WALLET FILE</button>
                                 <button class="cyber-btn ghost tiny danger" on:click={createNewWallet}>NEW WALLET</button>
                             </div>
                             <div class="laser-divider" style="margin:0.6rem 0;"></div>
@@ -3410,7 +4033,7 @@
 
                         <!-- Core migration envelope -->
                         <details style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
-                            <summary style="cursor:pointer; color:var(--color-primary); font-size:0.7rem; letter-spacing:0.5px; font-weight:700;">EXPERT CORE MIGRATION FILES</summary>
+                            <summary style="cursor:pointer; color:var(--color-primary); font-size:0.7rem; letter-spacing:0.5px; font-weight:700;">EXPERT CORE MIGRATION</summary>
                             <p class="desc" style="margin:0.6rem 0 0.75rem; font-size:0.65rem;">
                                 Standalone Core migration envelope tools for diagnostics or offline recovery. Most users should use Import Hemp0x Vault, Save Hemp0x Vault, or the Core wallet snapshots above instead.
                             </p>
@@ -3419,15 +4042,11 @@
                                     <p style="color:#ff7777; font-size:0.65rem; margin:0; word-break:break-word;">{migrationError}</p>
                                 </div>
                             {/if}
-                            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+                            <div class="migration-tools-grid">
                                 <div style="display:flex; flex-direction:column; gap:0.4rem;">
                                     <h4 style="color:var(--color-primary); margin:0; font-size:0.7rem;">EXPORT</h4>
-                                    <button class="cyber-btn ghost tiny" on:click={migrateSelectExportPath}>{migrationExportPath ? migrationExportPath.split('/').pop().split('\\').pop() : "CHOOSE DESTINATION"}</button>
-                                    <label class="toggle" style="font-size:0.65rem; color:#888;"><input type="checkbox" bind:checked={migrationExportPrivate} /> Include private keys (encrypted)</label>
-                                    {#if migrationExportPrivate}<input type="password" class="input-glass" placeholder="Export passphrase (min 8)" bind:value={migrationExportPass} style="font-size:0.7rem; padding:0.4rem;"/>{/if}
-                                    <label class="toggle" style="font-size:0.65rem; color:#888;"><input type="checkbox" bind:checked={migrationExportOverwrite} /> Allow overwrite</label>
-                                    <button class="cyber-btn tiny" on:click={migrateExport} disabled={migrationWorking || !migrationExportPath}>{migrationWorking ? "…" : "EXPORT"}</button>
-                                    {#if migrationExportResult}<div style="background:rgba(0,255,65,0.05); padding:0.4rem; border-radius:4px; font-size:0.65rem;"><p style="color:var(--color-primary); margin:0;">Exported: {migrationExportResult.filename}</p></div>{/if}
+                                    <button class="cyber-btn ghost tiny" on:click={openAdvancedExportModal}>EXPORT LOADED WALLET</button>
+                                    <p class="desc" style="margin:0; font-size:0.58rem;">Encrypted private v2 export of the exact wallet currently loaded in Core.</p>
                                 </div>
                                 <div style="display:flex; flex-direction:column; gap:0.4rem;">
                                     <h4 style="color:var(--color-primary); margin:0; font-size:0.7rem;">VALIDATE</h4>
@@ -3454,6 +4073,7 @@
                                 </div>
                             </div>
                         </details>
+
                     </div>
                 {/if}
             </div>
@@ -3504,7 +4124,7 @@
                 </div>
             {:else}
                 <p class="vault-connect-help" style="margin-bottom:0.5rem;">
-                    Create a new encrypted vault for wallet backups and optional app secrets.
+                    Create a new encrypted active vault. Use Save Hemp0x Vault afterward to export a portable file.
                 </p>
             {/if}
             <p class="vault-connect-help" style="color:#ff8888; margin-bottom:0.6rem;">
@@ -3513,7 +4133,7 @@
 
             <div class="vault-connect-form">
                 <div>
-                    <label for="create-vault-form-name" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">VAULT NAME <span style="color:#666;">(optional)</span></label>
+                    <label for="create-vault-form-name" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">DISPLAY NAME <span style="color:#666;">(optional)</span></label>
                     <input id="create-vault-form-name" type="text" class="input-glass" bind:value={createVaultFormName} placeholder="e.g. Main Vault" style="font-size:0.75rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
                 </div>
                 <div>
@@ -3555,7 +4175,12 @@
 
 <!-- ENCRYPTION INPUT MODAL (New Wallet) -->
 {#if showEncryptModal}
-    <div class="modal-overlay" role="button" tabindex="0" on:keydown={(e) => e.key === "Escape" && !encryptWorking && (showEncryptModal = false)}>
+    <div class="modal-overlay" role="button" tabindex="0" on:keydown={(e) => {
+        if (e.key === "Escape" && !encryptWorking) {
+            showEncryptModal = false;
+            encryptTargetWalletName = null;
+        }
+    }}>
         <div class="vault-connect-modal" style="max-width:400px; padding:1.25rem;">
             <h3 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.85rem; letter-spacing:1px;">
                 SET WALLET PASSWORD
@@ -3586,7 +4211,10 @@
             {:else}
                 <div style="display:flex; gap:0.5rem;">
                     <button class="cyber-btn primary-glow small" style="flex:1;" on:click={performWalletEncrypt}>ENCRYPT</button>
-                    <button class="cyber-btn ghost small" style="flex:1;" on:click={() => (showEncryptModal = false)}>CANCEL</button>
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={() => {
+                        showEncryptModal = false;
+                        encryptTargetWalletName = null;
+                    }}>CANCEL</button>
                 </div>
             {/if}
         </div>
@@ -3716,6 +4344,7 @@
 {#if showUnlockModal}
     <div
         class="modal-overlay"
+        style="z-index:5000;"
         role="button"
         tabindex="0"
         on:keydown={(e) => e.key === "Escape" && closeUnlockModal()}
@@ -4473,15 +5102,18 @@
                         encryptCompleteRestarting = true;
                         await new Promise((r) => setTimeout(r, 50));
                         try {
-                            const activeWalletName = connectResult?.core_wallet_name || walletStatus?.walletname;
-                            if (activeWalletName && activeWalletName !== "default") {
+                            const activeWalletName = encryptedWalletRestartName
+                                || connectResult?.core_wallet_name
+                                || walletStatus?.walletname;
+                            if (activeWalletName && activeWalletName !== "default" && activeWalletName !== "wallet.dat") {
+                                await core.invoke("vault_set_active_wallet_name", { walletName: activeWalletName });
+                                activeVaultWalletName = activeWalletName;
                                 await core.invoke("vault_restart_core_with_wallet", { walletName: activeWalletName });
                                 for (let i = 0; i < 20; i++) {
                                     await new Promise((r) => setTimeout(r, 1500));
                                     try {
                                         const newState = await core.invoke("vault_load_wallet_into_core", { walletName: activeWalletName });
                                         if (newState.loaded) {
-                                            try { await core.invoke("vault_refresh_wallet_utxos", { walletName: activeWalletName }); } catch (_) {}
                                             break;
                                         }
                                     } catch (_) {}
@@ -4489,10 +5121,15 @@
                             } else {
                                 await core.invoke("start_node");
                             }
+                            await loadActiveVaultWalletName();
                             await refreshWalletHeader();
                             await loadAlignmentStatus();
+                            encryptedWalletRestartName = "";
                             showEncryptCompleteOverlay = false;
                             encryptCompleteRestarting = false;
+                            window.setTimeout(() => {
+                                startPendingHistoryRecovery();
+                            }, 250);
                         } catch (e) {
                             encryptCompleteRestarting = false;
                             showToast("Restart failed: " + e, "error");
@@ -4531,28 +5168,42 @@
     </div>
 {/if}
 
-<!-- LEGACY WALLET.DAT IMPORT MODAL (64o) -->
-{#if showLegacyWalletImportModal}
+<!-- UNIFIED WALLET FILE IMPORT MODAL (65) -->
+{#if showUnifiedImportModal}
     <div
         class="modal-overlay"
-        role="button"
-        tabindex="0"
-        on:click|self={() => { if (!legacyImportWorking) showLegacyWalletImportModal = false; }}
-        on:keydown={(e) => e.key === "Escape" && !legacyImportWorking && (showLegacyWalletImportModal = false)}
+        role="presentation"
+        style="align-items:flex-start; box-sizing:border-box; padding:0.35rem 0.75rem 1rem; overflow-y:auto;"
     >
-        <div class="vault-connect-modal" style="max-width:440px; padding:1.25rem;">
-            <h3 style="color:var(--color-primary); margin:0 0 0.35rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
-                IMPORT LEGACY WALLET.DAT
-            </h3>
+        <div class="vault-connect-modal unified-wallet-import-modal" style="max-width:440px; padding:0.85rem;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-bottom:0.35rem;">
+                <h3 style="color:var(--color-primary); margin:0; font-size:0.82rem; letter-spacing:1px;">
+                    IMPORT WALLET FILE
+                </h3>
+                <button
+                    class="cyber-btn ghost tiny"
+                    style="min-width:2rem; padding:0.3rem 0.45rem;"
+                    on:click={closeUnifiedImportModal}
+                    disabled={unifiedImportWorking || unifiedPromotionWorking || unifiedImportSnapshotWorking}
+                    aria-label="Close import wallet file"
+                >
+                    X
+                </button>
+            </div>
             <div class="laser-divider" style="margin:0 0 0.75rem;"></div>
 
-            {#if legacyImportResult}
-                <!-- SUCCESS VIEW -->
+            {#if unifiedImportWorking}
+                <div class="vault-connect-loading">
+                    <span class="vault-connect-spinner"></span>
+                    <p style="color:#aaa; font-size:0.7rem; margin:0;">Detecting file type…</p>
+                </div>
+            {:else if unifiedImportResult}
+                <!-- SUCCESS VIEW (legacy import result) -->
                 <div class="vault-connect-result">
                     <div class="vault-connect-success">
                         <span class="vault-connect-check">&#10003;</span>
                         <span>
-                            {#if legacyImportResult.already_active}
+                            {#if unifiedImportResult.already_active}
                                 Already using this wallet.dat. Switched to legacy wallet mode.
                             {:else}
                                 Legacy wallet.dat imported successfully.
@@ -4560,65 +5211,396 @@
                         </span>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.25rem; font-size:0.6rem; color:#aaa; margin-top:0.4rem;">
-                        <div><span style="color:#888;">Archived existing wallet:</span> {legacyImportResult.archived_existing ? 'Yes' : 'No previous wallet'}</div>
-                        {#if legacyImportResult.hemp_conf_wallet}
+                        <div><span style="color:#888;">Archived existing wallet:</span> {unifiedImportResult.archived_existing ? 'Yes' : 'No previous wallet'}</div>
+                        {#if unifiedImportResult.hemp_conf_wallet}
                             <div class="vault-connect-warn" style="margin-top:0.25rem;">
-                                <strong>Warning:</strong> hemp.conf contains <code>wallet={legacyImportResult.hemp_conf_wallet}</code>. Core may load that wallet instead of the default wallet.dat. Remove or edit the wallet= line in hemp.conf if you want to use the default wallet.
+                                <strong>Warning:</strong> hemp.conf contains <code>wallet={unifiedImportResult.hemp_conf_wallet}</code>. Core may load that wallet instead of the default wallet.dat.
                             </div>
                         {/if}
-                        {#if legacyImportResult.restart_error}
+                        {#if unifiedImportResult.restart_error}
                             <div class="vault-connect-error" style="margin-top:0.25rem;">
-                                {legacyImportResult.restart_error}
+                                {unifiedImportResult.restart_error}
                             </div>
                         {/if}
-                        {#if legacyImportResult.restarted}
+                        {#if unifiedImportResult.restarted}
                             <div style="color:var(--color-primary); margin-top:0.25rem;">Core restarted with default wallet mode.</div>
                         {/if}
                     </div>
                 </div>
                 <div class="laser-divider" style="margin:0.75rem 0;"></div>
                 <div style="display:flex; gap:0.5rem;">
-                    <button class="cyber-btn ghost small" style="flex:1;" on:click={() => { showLegacyWalletImportModal = false; }}>
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal}>
                         CLOSE
                     </button>
                 </div>
-            {:else if legacyImportWorking}
-                <div class="vault-connect-loading">
-                    <span class="vault-connect-spinner"></span>
-                    <p style="color:#aaa; font-size:0.7rem; margin:0;">Switching to wallet.dat and waiting for Core wallet status…</p>
+            {:else if unifiedImportSnapshotResult}
+                <!-- SUCCESS VIEW (snapshot import) -->
+                <div class="vault-connect-result">
+                    <div class="vault-connect-success">
+                        <span class="vault-connect-check">&#10003;</span>
+                        <span>Migration envelope stored as vault recovery snapshot.</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.25rem; font-size:0.6rem; color:#aaa; margin-top:0.4rem;">
+                        <div><span style="color:#888;">Record:</span> {unifiedImportSnapshotResult.label} ({unifiedImportSnapshotResult.record_id})</div>
+                    </div>
                 </div>
-            {:else if legacyImportError}
-                <div class="vault-connect-error">
-                    <strong>Import failed.</strong><br />{legacyImportError}
-                </div>
-                <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
-                    <button class="cyber-btn ghost small" style="flex:1;" on:click={() => { showLegacyWalletImportModal = false; legacyImportError = ""; }}>
-                        CLOSE
-                    </button>
-                </div>
-            {:else}
-                <!-- CONFIRMATION VIEW -->
-                <p class="vault-connect-help" style="margin-bottom:0.5rem;">
-                    Commander will use this wallet.dat as the Core runtime wallet. This is the legacy Core wallet mode, not the portable Hemp0x Vault wallet mode. Your selected file will be copied, not moved. The current runtime wallet will be archived first.
-                </p>
-                <div class="vault-connect-warn" style="margin-bottom:0.75rem;">
-                    <strong>After import, Commander will stop using the currently connected vault wallet for Core startup.</strong> You can reconnect a Hemp0x Vault later from the Wallet page.
-                </div>
-                <label class="vault-connect-confirm" style="margin-bottom:0.75rem;">
-                    <input type="checkbox" bind:checked={legacyImportConfirmChecked} />
-                    <span>I understand Commander will use this wallet.dat instead of the connected vault wallet.</span>
-                </label>
+                <div class="laser-divider" style="margin:0.75rem 0;"></div>
                 <div style="display:flex; gap:0.5rem;">
-                    <button
-                        class="cyber-btn primary-glow small"
-                        style="flex:1;"
-                        on:click={executeLegacyWalletImport}
-                        disabled={!legacyImportConfirmChecked || legacyImportWorking}
-                    >
-                        {legacyImportWorking ? "IMPORTING…" : "IMPORT WALLET.DAT"}
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal}>
+                        CLOSE
                     </button>
-                    <button class="cyber-btn ghost small" style="flex:1;" on:click={() => { showLegacyWalletImportModal = false; }} disabled={legacyImportWorking}>
-                        CANCEL
+                </div>
+            {:else if unifiedImportDetectedType === "hemp0x_vault"}
+                <div class="vault-connect-info" style="margin-bottom:0.6rem;">
+                    <strong>Detected: Hemp0x Vault</strong>
+                    {#if unifiedImportDetection?.network}
+                        <span style="color:#888;"> — {unifiedImportDetection.network}</span>
+                    {/if}
+                </div>
+                <p class="vault-connect-help" style="margin-bottom:0.65rem;">
+                    This file is a portable Hemp0x Vault. Commander can switch to it and then unlock it with that vault passphrase.
+                </p>
+                <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.6rem;">
+                    <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">IMPORT / SWITCH HEMP0X VAULT</h5>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.62rem;">
+                        Loads this vault file into Commander. If another vault is already loaded, Commander will ask before replacing it.
+                    </p>
+                    <button
+                        class="cyber-btn primary-glow tiny"
+                        on:click={executeUnifiedVaultImport}
+                    >
+                        {hasVault ? "SWITCH TO THIS VAULT" : "IMPORT HEMP0X VAULT"}
+                    </button>
+                </div>
+                <div class="laser-divider" style="margin:0.5rem 0;"></div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal}>
+                        CLOSE
+                    </button>
+                </div>
+            {:else if unifiedImportDetectedType === "legacy_core_wallet"}
+                <!-- DETECTED: Legacy Core wallet file -->
+                <div class="vault-connect-info" style="margin-bottom:0.6rem;">
+                    <strong>Detected: Legacy Core wallet file</strong>
+                    {#if unifiedImportDetection?.wallet_format}
+                        <span style="color:#888;"> ({unifiedImportDetection.wallet_format})</span>
+                    {/if}
+                </div>
+                <p class="vault-connect-help" style="margin-bottom:0.5rem;">
+                    Commander can use this wallet.dat as the Core runtime wallet (legacy mode), or promote it into the portable Hemp0x Vault if it is a canonical BIP39/coin420 wallet.
+                </p>
+
+                {#if unifiedImportError}
+                    <div class="vault-connect-error" style="margin-bottom:0.5rem;">
+                        {unifiedImportError}
+                    </div>
+                {/if}
+
+                <div class="wallet-import-options">
+                <!-- Option 1: Use as Legacy Core Wallet -->
+                <div class="wallet-import-option legacy" style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
+                    <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">USE AS LEGACY CORE WALLET</h5>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.62rem;">
+                        Use this wallet.dat as the Core runtime wallet. This is the legacy Core wallet mode. Your selected file will be copied, not moved. The current runtime wallet will be archived first.
+                    </p>
+                    <div class="vault-connect-warn" style="margin-bottom:0.5rem;">
+                        <strong>After import, Commander will stop using the currently connected vault wallet for Core startup.</strong>
+                    </div>
+                    <label class="vault-connect-confirm" style="margin-bottom:0.5rem;">
+                        <input type="checkbox" bind:checked={unifiedImportConfirmChecked} />
+                        <span>I understand Commander will use this wallet.dat instead of the connected vault wallet.</span>
+                    </label>
+                    <button
+                        class="cyber-btn primary-glow tiny"
+                        on:click={executeUnifiedLegacyImport}
+                        disabled={!unifiedImportConfirmChecked || unifiedImportWorking}
+                    >
+                        {unifiedImportWorking ? "IMPORTING…" : "IMPORT WALLET.DAT"}
+                    </button>
+                </div>
+
+                <!-- Option 2: Add to Hemp0x Vault -->
+                <div class="wallet-import-option vault" style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
+                    <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">ADD TO HEMP0X VAULT</h5>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.62rem;">
+                        Export this Core wallet as an encrypted migration envelope, then promote it into the WebCom-compatible portable Hemp0x Vault primary record. Only canonical BIP39/BIP44 coin420 wallets can be promoted. Legacy or imported-key wallets will be reported accurately.
+                    </p>
+                    {#if vaultUnlocked}
+                        {#if unifiedPromotionWorking}
+                            <div class="vault-connect-loading" style="padding:0.5rem 0;">
+                                <span class="vault-connect-spinner"></span>
+                                {#if unifiedPromotionProgressLabel}
+                                    <p style="color:#aaa; font-size:0.65rem; margin:0.3rem 0 0;">
+                                        {unifiedPromotionProgressLabel}
+                                    </p>
+                                {/if}
+                                <ol class="vault-connect-stepper" style="margin-top:0.65rem;">
+                                    {#each UNIFIED_PROMOTION_STEPS as step, i}
+                                        <li class:active={i === unifiedPromotionStep} class:done={i < unifiedPromotionStep}>
+                                            <span class="step-dot"></span>
+                                            <span>{step}</span>
+                                        </li>
+                                    {/each}
+                                </ol>
+                            </div>
+                        {:else if unifiedPromotionResult}
+                            <div class="vault-connect-success" style="margin-bottom:0.5rem;">
+                                <span class="vault-connect-check">&#10003;</span>
+                                <span>Wallet promoted to portable Hemp0x Vault primary record.</span>
+                            </div>
+                            <div style="font-size:0.6rem; color:#aaa; margin-bottom:0.5rem;">
+                                <div>Wallet: {unifiedPromotionResult.core_wallet_name}</div>
+                                <div>Profile: {unifiedPromotionResult.derivation_profile}</div>
+                                {#if unifiedPromotionResult.wallet_load_restart_required}
+                                    <div class="vault-connect-warn" style="margin-top:0.3rem;">Restart Core to load the vault wallet.</div>
+                                {/if}
+                            </div>
+                            {#if unifiedPromotionResult.runtime_wallet_encryption === "needs_user_action"}
+                                <div class="vault-connect-warn" style="margin-bottom:0.5rem;">
+                                    <strong>Runtime wallet needs encryption.</strong>
+                                    Set a wallet password before using this Core wallet.
+                                </div>
+                                <button
+                                    class="cyber-btn primary-glow tiny"
+                                    on:click={() => {
+                                        encryptTargetWalletName = unifiedPromotionResult.core_wallet_name;
+                                        closeUnifiedImportModal();
+                                        showEncryptModal = true;
+                                    }}
+                                >
+                                    ENCRYPT RUNTIME WALLET
+                                </button>
+                            {/if}
+                        {:else}
+                            <input type="text" class="input-glass" placeholder="Wallet name (default: hemp0x-vault-main)" bind:value={unifiedPromotionWalletName} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            <input type="password" class="input-glass" placeholder="Core wallet unlock passphrase (if encrypted)" bind:value={unifiedPromotionWalletUnlockPass} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            <label class="vault-connect-confirm" style="margin-bottom:0.5rem; font-size:0.62rem;">
+                                <input type="checkbox" bind:checked={unifiedPromotionReplaceExisting} />
+                                <span>Replace existing primary vault wallet (if different)</span>
+                            </label>
+                            {#if unifiedPromotionError}
+                                <div class="vault-connect-error" style="margin-bottom:0.4rem;">
+                                    {unifiedPromotionError}
+                                </div>
+                                {#if unifiedPromotionNeedsRuntimeLoad}
+                                    <button
+                                        class="cyber-btn ghost tiny"
+                                        style="margin-bottom:0.45rem;"
+                                        on:click={loadSelectedWalletFileAsRuntime}
+                                        disabled={unifiedImportWorking || unifiedPromotionWorking}
+                                    >
+                                        {unifiedImportWorking ? "LOADING WALLET…" : "LOAD AS RUNTIME WALLET"}
+                                    </button>
+                                {/if}
+                            {/if}
+                            <button
+                                class="cyber-btn primary-glow tiny"
+                                on:click={executeUnifiedPromotion}
+                            >
+                                ADD TO HEMP0X VAULT
+                            </button>
+                        {/if}
+                    {:else}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0;">
+                            Unlock your Hemp0x Vault first to add this wallet to the vault.
+                        </p>
+                    {/if}
+                </div>
+                </div>
+
+                <div class="laser-divider" style="margin:0.5rem 0;"></div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal} disabled={unifiedImportWorking || unifiedPromotionWorking}>
+                        CLOSE
+                    </button>
+                </div>
+            {:else if unifiedImportDetectedType === "core_migration_envelope"}
+                <!-- DETECTED: Core migration envelope -->
+                <div class="vault-connect-info" style="margin-bottom:0.6rem;">
+                    <strong>Detected: Core migration envelope</strong>
+                    {#if unifiedImportDetection?.migration_wallet_name}
+                        <span style="color:#888;"> — wallet: {unifiedImportDetection.migration_wallet_name}</span>
+                    {/if}
+                    {#if unifiedImportDetection?.migration_encrypted}
+                        <span style="color:#ffaa00;"> (encrypted)</span>
+                    {/if}
+                </div>
+                <p class="vault-connect-help" style="margin-bottom:0.6rem;">
+                    This is a Core Next wallet migration envelope. Commander can store it as a recovery snapshot inside your Hemp0x Vault, or you can use it as a standalone Core restore from the Expert Core Migration Files section.
+                </p>
+
+                {#if unifiedImportError}
+                    <div class="vault-connect-error" style="margin-bottom:0.5rem;">
+                        {unifiedImportError}
+                    </div>
+                {/if}
+
+                <!-- Option 1: Use as portable vault wallet -->
+                <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.6rem;">
+                    <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">USE AS PORTABLE VAULT WALLET</h5>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.62rem;">
+                        Decrypt this Core migration envelope, verify the canonical BIP39/coin420 profile, and promote it into the WebCom-compatible portable Hemp0x Vault primary record. The matching Core runtime wallet will be restored and aligned.
+                    </p>
+                    {#if !unifiedImportDetection?.migration_encrypted}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0 0 0.5rem;">
+                            This is a public-only migration envelope. It cannot be promoted to a portable wallet. Only encrypted private v2 envelopes can be promoted.
+                        </p>
+                    {:else if !unifiedImportDetection?.migration_private_keys_included}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0 0 0.5rem;">
+                            This envelope does not include private keys. Only private encrypted envelopes can be promoted.
+                        </p>
+                    {:else if vaultUnlocked}
+                        {#if unifiedPromotionWorking}
+                            <div class="vault-connect-loading" style="padding:0.5rem 0;">
+                                <span class="vault-connect-spinner"></span>
+                                {#if unifiedPromotionProgressLabel}
+                                    <p style="color:#aaa; font-size:0.65rem; margin:0.3rem 0 0;">
+                                        {unifiedPromotionProgressLabel}
+                                    </p>
+                                {/if}
+                                <ol class="vault-connect-stepper" style="margin-top:0.65rem;">
+                                    {#each UNIFIED_PROMOTION_STEPS as step, i}
+                                        <li class:active={i === unifiedPromotionStep} class:done={i < unifiedPromotionStep}>
+                                            <span class="step-dot"></span>
+                                            <span>{step}</span>
+                                        </li>
+                                    {/each}
+                                </ol>
+                            </div>
+                        {:else if unifiedPromotionResult}
+                            <div class="vault-connect-success" style="margin-bottom:0.5rem;">
+                                <span class="vault-connect-check">&#10003;</span>
+                                <span>Wallet promoted to portable Hemp0x Vault primary record.</span>
+                            </div>
+                            <div style="font-size:0.6rem; color:#aaa; margin-bottom:0.5rem;">
+                                <div>Wallet: {unifiedPromotionResult.core_wallet_name}</div>
+                                <div>Profile: {unifiedPromotionResult.derivation_profile}</div>
+                                {#if unifiedPromotionResult.wallet_load_restart_required}
+                                    <div class="vault-connect-warn" style="margin-top:0.3rem;">Restart Core to load the vault wallet.</div>
+                                {/if}
+                            </div>
+                            {#if unifiedPromotionResult.runtime_wallet_encryption === "needs_user_action"}
+                                <div class="vault-connect-warn" style="margin-bottom:0.5rem;">
+                                    <strong>Runtime wallet needs encryption.</strong>
+                                    Set a wallet password before using this Core wallet.
+                                </div>
+                                <button
+                                    class="cyber-btn primary-glow tiny"
+                                    on:click={() => {
+                                        encryptTargetWalletName = unifiedPromotionResult.core_wallet_name;
+                                        closeUnifiedImportModal();
+                                        showEncryptModal = true;
+                                    }}
+                                >
+                                    ENCRYPT RUNTIME WALLET
+                                </button>
+                            {/if}
+                        {:else}
+                            <input type="password" class="input-glass" placeholder="Migration file passphrase" bind:value={unifiedPromotionPassphrase} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            <input type="text" class="input-glass" placeholder="Wallet name (default: hemp0x-vault-main)" bind:value={unifiedPromotionWalletName} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            <input type="password" class="input-glass" placeholder="Core wallet unlock passphrase (if encrypted)" bind:value={unifiedPromotionWalletUnlockPass} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            <label class="vault-connect-confirm" style="margin-bottom:0.5rem; font-size:0.62rem;">
+                                <input type="checkbox" bind:checked={unifiedPromotionReplaceExisting} />
+                                <span>Replace existing primary vault wallet (if different)</span>
+                            </label>
+                            {#if unifiedPromotionError}
+                                <div class="vault-connect-error" style="margin-bottom:0.4rem;">
+                                    {unifiedPromotionError}
+                                </div>
+                            {/if}
+                            <button
+                                class="cyber-btn primary-glow tiny"
+                                on:click={executeUnifiedPromotion}
+                                disabled={!unifiedPromotionPassphrase}
+                            >
+                                PROMOTE TO PORTABLE VAULT WALLET
+                            </button>
+                        {/if}
+                    {:else}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0;">
+                            Unlock your Hemp0x Vault first to promote this migration envelope.
+                        </p>
+                    {/if}
+                </div>
+
+                <!-- Option 2: Store as recovery snapshot -->
+                <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.6rem;">
+                    <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">STORE AS VAULT RECOVERY SNAPSHOT</h5>
+                    <p class="desc" style="margin:0 0 0.5rem; font-size:0.62rem;">
+                        Stores this migration envelope as a recovery record inside your Hemp0x Vault. This does not replace the primary portable vault wallet. Requires an unlocked vault.
+                    </p>
+                    {#if !unifiedImportDetection?.migration_private_keys_included}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0;">
+                            This migration envelope is public metadata only. It can be inspected, but it cannot restore a wallet or be stored as a recovery snapshot.
+                        </p>
+                    {:else if vaultUnlocked}
+                        {#if unifiedImportSnapshotWorking}
+                            <div class="vault-connect-loading" style="padding:0.5rem 0;">
+                                <span class="vault-connect-spinner"></span>
+                                <p style="color:#aaa; font-size:0.65rem; margin:0;">Storing in vault...</p>
+                            </div>
+                        {:else}
+                            <input type="text" class="input-glass" placeholder="Record label (e.g. Old wallet backup)" bind:value={unifiedImportSnapshotLabel} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.4rem; width:100%; box-sizing:border-box;" />
+                            {#if unifiedImportDetection?.migration_encrypted}
+                                <input type="password" class="input-glass" placeholder="Migration file passphrase" bind:value={unifiedImportMigrationPassphrase} style="font-size:0.72rem; padding:0.45rem; margin-bottom:0.5rem; width:100%; box-sizing:border-box;" />
+                            {/if}
+                            {#if unifiedImportSnapshotError}
+                                <div class="vault-connect-error" style="margin-bottom:0.4rem;">
+                                    {unifiedImportSnapshotError}
+                                </div>
+                            {/if}
+                            <button
+                                class="cyber-btn primary-glow tiny"
+                                on:click={executeUnifiedSnapshotImport}
+                                disabled={!unifiedImportSnapshotLabel}
+                            >
+                                STORE IN VAULT
+                            </button>
+                        {/if}
+                    {:else}
+                        <p style="color:#ffaa00; font-size:0.65rem; margin:0;">
+                            Unlock your Hemp0x Vault first to store this migration envelope as a recovery snapshot.
+                        </p>
+                    {/if}
+                </div>
+
+                <div class="laser-divider" style="margin:0.5rem 0;"></div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal} disabled={unifiedImportWorking || unifiedImportSnapshotWorking || unifiedPromotionWorking}>
+                        CLOSE
+                    </button>
+                </div>
+            {:else if unifiedImportDetectedType === "unknown"}
+                <!-- DETECTED: Unknown -->
+                <div class="vault-connect-error" style="margin-bottom:0.6rem;">
+                    <strong>Unknown or unsupported file</strong>
+                </div>
+                <p class="vault-connect-help" style="margin-bottom:0.5rem;">
+                    Commander could not identify this file as a legacy Core wallet or a Core migration envelope.
+                </p>
+                {#if unifiedImportError}
+                    <div class="vault-connect-error" style="margin-bottom:0.5rem;">
+                        {unifiedImportError}
+                    </div>
+                {/if}
+                {#if unifiedImportDetection}
+                    <details style="margin-bottom:0.6rem;">
+                        <summary style="cursor:pointer; color:#888; font-size:0.6rem; letter-spacing:0.5px;">DETECTION DETAILS</summary>
+                        <div style="margin-top:0.4rem; font-size:0.6rem; color:#aaa; line-height:1.5;">
+                            {#if unifiedImportDetection.wallet_error}
+                                <div><span style="color:#888;">Wallet check:</span> {unifiedImportDetection.wallet_error}</div>
+                            {/if}
+                            {#if unifiedImportDetection.migration_error}
+                                <div><span style="color:#888;">Migration check:</span> {unifiedImportDetection.migration_error}</div>
+                            {/if}
+                            <div><span style="color:#888;">File:</span> {unifiedImportDetection.file_name} ({unifiedImportDetection.file_size} bytes)</div>
+                        </div>
+                    </details>
+                {/if}
+                <div class="laser-divider" style="margin:0.5rem 0;"></div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnifiedImportModal}>
+                        CLOSE
                     </button>
                 </div>
             {/if}
@@ -4709,6 +5691,86 @@
     </div>
 {/if}
 
+<!-- CHANGE RUNTIME WALLET PASSWORD MODAL -->
+{#if showChangeRuntimeWalletPassModal}
+    <div
+        class="modal-overlay"
+        role="button"
+        tabindex="0"
+        on:click|self={() => closeChangeRuntimeWalletPassModal()}
+        on:keydown={(e) => e.key === "Escape" && closeChangeRuntimeWalletPassModal()}
+    >
+        <div class="vault-connect-modal" style="max-width:440px; padding:1.25rem;">
+            <h3 style="color:var(--color-primary); margin:0 0 0.35rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
+                CHANGE WALLET PASSWORD
+            </h3>
+            <div class="laser-divider" style="margin:0 0 0.75rem;"></div>
+
+            {#if changeRuntimeWalletPassResult}
+                <div class="vault-connect-result">
+                    <div class="vault-connect-success">
+                        <span class="vault-connect-check">&#10003;</span>
+                        <span>Runtime wallet password changed successfully.</span>
+                    </div>
+                    <p class="vault-connect-help" style="margin-top:0.55rem;">
+                        Wallet: {changeRuntimeWalletPassResult.wallet_name || "wallet.dat"}
+                    </p>
+                </div>
+                <div class="laser-divider" style="margin:0.75rem 0;"></div>
+                <button class="cyber-btn primary-glow small wide" on:click={dismissChangeRuntimeWalletPassSuccess}>
+                    DONE
+                </button>
+            {:else if changeRuntimeWalletPassWorking}
+                <div class="vault-connect-loading">
+                    <span class="vault-connect-spinner"></span>
+                    <p style="color:#aaa; font-size:0.7rem; margin:0;">Changing runtime wallet password…</p>
+                </div>
+            {:else}
+                <p class="vault-connect-help" style="margin-bottom:0.6rem;">
+                    Change the Core password for the currently loaded runtime wallet. This is separate from your Hemp0x Vault passphrase.
+                </p>
+                <div class="vault-connect-form">
+                    <div style="font-size:0.62rem; color:#aaa;">
+                        <span style="color:#888;">Wallet:</span> {loadedRuntimeWalletName() || "wallet.dat"}
+                    </div>
+                    <div>
+                        <label for="chrwp-current" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">CURRENT WALLET PASSWORD</label>
+                        <input id="chrwp-current" type="password" class="input-glass" bind:value={changeRuntimeWalletPassCurrent} placeholder="Current wallet password" style="font-size:0.75rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label for="chrwp-new" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">NEW WALLET PASSWORD <span style="color:#ff8888;">(min 8 chars)</span></label>
+                        <input id="chrwp-new" type="password" class="input-glass" bind:value={changeRuntimeWalletPassNew} placeholder="At least 8 characters" style="font-size:0.75rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label for="chrwp-confirm" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">CONFIRM NEW PASSWORD</label>
+                        <input id="chrwp-confirm" type="password" class="input-glass" bind:value={changeRuntimeWalletPassConfirm} placeholder="Re-enter new wallet password" style="font-size:0.75rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    </div>
+                </div>
+
+                {#if changeRuntimeWalletPassError}
+                    <div class="vault-connect-error" style="margin-top:0.5rem;">
+                        {changeRuntimeWalletPassError}
+                    </div>
+                {/if}
+
+                <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+                    <button
+                        class="cyber-btn primary-glow small"
+                        style="flex:1;"
+                        on:click={executeChangeRuntimeWalletPassphrase}
+                        disabled={!changeRuntimeWalletPassCurrent || !changeRuntimeWalletPassNew || changeRuntimeWalletPassNew.length < 8 || changeRuntimeWalletPassNew !== changeRuntimeWalletPassConfirm}
+                    >
+                        CHANGE PASSWORD
+                    </button>
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeChangeRuntimeWalletPassModal}>
+                        CANCEL
+                    </button>
+                </div>
+            {/if}
+        </div>
+    </div>
+{/if}
+
 <!-- UNLOAD VAULT MODAL (64p) -->
 {#if showUnloadVaultModal}
     <div
@@ -4747,7 +5809,7 @@
                         <h5 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.7rem;">NEXT ACTIONS</h5>
                         <div style="display:flex; flex-direction:column; gap:0.4rem;">
                             <button class="cyber-btn ghost small wide" on:click={() => { dismissUnloadVaultResult(); createNewWallet(); }}>CREATE NEW WALLET.DAT</button>
-                            <button class="cyber-btn ghost small wide" on:click={() => { dismissUnloadVaultResult(); importWalletFile(); }}>IMPORT WALLET.DAT</button>
+                            <button class="cyber-btn ghost small wide" on:click={() => { dismissUnloadVaultResult(); unifiedImportWalletFile(); }}>IMPORT WALLET FILE</button>
                             <button class="cyber-btn ghost small wide" on:click={() => { dismissUnloadVaultResult(); importVaultBundle(); }}>IMPORT / SWITCH HEMP0X VAULT</button>
                         </div>
                     {:else}
@@ -4831,6 +5893,84 @@
                     </button>
                     <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnloadVaultModal} disabled={unloadVaultWorking}>
                         CANCEL
+                    </button>
+                </div>
+            {/if}
+        </div>
+    </div>
+{/if}
+
+<!-- ADVANCED EXPORT MODAL (66b) -->
+{#if showAdvancedExportModal}
+    <div
+        class="modal-overlay"
+        role="button"
+        tabindex="0"
+        on:click|self={() => { if (!advancedExportWorking) closeAdvancedExportModal(); }}
+        on:keydown={(e) => e.key === "Escape" && !advancedExportWorking && closeAdvancedExportModal()}
+    >
+        <div class="vault-connect-modal" style="max-width:460px; padding:1.25rem;">
+            <h3 style="color:var(--color-primary); margin:0 0 0.35rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
+                EXPORT CORE MIGRATION WALLET
+            </h3>
+            <div class="laser-divider" style="margin:0 0 0.75rem;"></div>
+
+            {#if advancedExportWorking}
+                <div class="vault-connect-loading">
+                    <span class="vault-connect-spinner"></span>
+                    <p style="color:#aaa; font-size:0.7rem; margin:0;">Exporting wallet…</p>
+                </div>
+            {:else if advancedExportResult}
+                <div class="vault-connect-result">
+                    <div class="vault-connect-success">
+                        <span class="vault-connect-check">&#10003;</span>
+                        <span>Core migration wallet exported successfully.</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.25rem; font-size:0.6rem; color:#aaa; margin-top:0.4rem;">
+                        <div><span style="color:#888;">Destination:</span> {advancedExportResult.destination}</div>
+                        {#if advancedExportResult.wallet_name}
+                            <div><span style="color:#888;">Wallet:</span> {advancedExportResult.wallet_name}</div>
+                        {/if}
+                        {#if advancedExportResult.exporting_wallet}
+                            <div><span style="color:#888;">Exported from:</span> {advancedExportResult.exporting_wallet}</div>
+                        {/if}
+                        {#if advancedExportResult.validated}
+                            <div style="color:var(--color-primary);">Core validation: passed</div>
+                        {/if}
+                    </div>
+                </div>
+                <div class="laser-divider" style="margin:0.75rem 0;"></div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeAdvancedExportModal}>
+                        CLOSE
+                    </button>
+                </div>
+            {:else}
+                <p class="vault-connect-help" style="margin-bottom:0.6rem;">
+                    Export the currently loaded Core wallet as an encrypted private v2 migration envelope to a user-chosen destination. The envelope can be restored later or promoted into a portable Hemp0x Vault wallet.
+                </p>
+                <div class="vault-connect-form">
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        <input type="text" class="input-glass" placeholder="Destination path" bind:value={advancedExportPath} style="flex:1; font-size:0.72rem; padding:0.45rem;" readonly />
+                        <button class="cyber-btn ghost tiny" on:click={selectAdvancedExportPath}>BROWSE</button>
+                    </div>
+                    <input type="password" class="input-glass" placeholder="Export passphrase (min 8 characters)" bind:value={advancedExportPassphrase} style="font-size:0.72rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    <input type="password" class="input-glass" placeholder="Core wallet unlock passphrase (if encrypted and locked)" bind:value={advancedExportWalletUnlockPass} style="font-size:0.72rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    <label class="vault-connect-confirm" style="margin-bottom:0.2rem;">
+                        <input type="checkbox" bind:checked={advancedExportOverwrite} />
+                        <span>Allow overwrite if destination exists</span>
+                    </label>
+                    {#if advancedExportError}
+                        <div class="vault-connect-error" style="margin-bottom:0.4rem;">
+                            {advancedExportError}
+                        </div>
+                    {/if}
+                    <button
+                        class="cyber-btn primary-glow small"
+                        on:click={executeAdvancedExport}
+                        disabled={!advancedExportPath || advancedExportPassphrase.length < 8}
+                    >
+                        EXPORT
                     </button>
                 </div>
             {/if}
@@ -5076,6 +6216,52 @@
         box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
         width: 90%;
         margin: 0 auto;
+    }
+    .unified-wallet-import-modal {
+        max-height: min(calc(100dvh - 6rem), 620px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        box-sizing: border-box;
+        margin-top: 0;
+    }
+    .wallet-import-options {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+    .wallet-import-option.vault {
+        order: 1;
+    }
+    .wallet-import-option.legacy {
+        order: 2;
+    }
+    .migration-tools-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+    }
+    @media (max-width: 850px), (max-height: 700px) {
+        .unified-wallet-import-modal {
+            width: calc(100% - 1rem);
+            max-height: min(calc(100dvh - 6.5rem), 560px);
+            padding: 0.65rem !important;
+        }
+        .unified-wallet-import-modal .wallet-import-option {
+            padding: 0.55rem 0.7rem !important;
+        }
+        .unified-wallet-import-modal .desc,
+        .unified-wallet-import-modal .vault-connect-help {
+            font-size: 0.58rem !important;
+            line-height: 1.35;
+        }
+        .unified-wallet-import-modal .input-glass {
+            padding: 0.36rem 0.45rem !important;
+            font-size: 0.66rem !important;
+        }
+        .migration-tools-grid {
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+        }
     }
     .vault-connect-result {
         display: flex;

@@ -144,6 +144,19 @@
         );
     }
 
+    async function autosaveActiveVaultExport(reason = "Provider token changed") {
+        try {
+            const result = await core.invoke("vault_autosave_active_export_path");
+            if (result?.saved) {
+                return true;
+            }
+        } catch (err) {
+            vaultError = `Vault setting saved, but portable vault autosave failed: ${err}`;
+        }
+        notifyVaultNeedsSave(reason);
+        return false;
+    }
+
     function formatSize(bytes) {
         if (!bytes) return "0 B";
         if (bytes < 1024) return bytes + " B";
@@ -176,7 +189,7 @@
             settingsMsg = "Settings saved.";
             await loadTokenPresence();
             if (tokenChanged) {
-                notifyVaultNeedsSave("Provider token was saved to your vault");
+                await autosaveActiveVaultExport("Provider token was saved to your vault");
             }
         } catch (err) {
             settingsError = friendlyError(err);
@@ -210,7 +223,7 @@
             vaultMsg = `${providerLabel(providerId)} token removed from vault.`;
             await loadTokenPresence();
             await loadProviderSettings();
-            notifyVaultNeedsSave(`${providerLabel(providerId)} token was removed from your vault`);
+            await autosaveActiveVaultExport(`${providerLabel(providerId)} token was removed from your vault`);
         } catch (err) {
             vaultError = friendlyError(err);
             if (isVaultAccessError(err)) requestVaultUnlock();

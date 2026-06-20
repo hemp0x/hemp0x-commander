@@ -62,8 +62,11 @@ pub fn run() {
             commands::wallet_encrypt,
             commands::wallet_encrypt_named,
             commands::wallet_unlock,
+            commands::wallet_unlock_named,
             commands::wallet_lock,
+            commands::wallet_lock_named,
             commands::change_wallet_password,
+            commands::change_wallet_password_named,
             commands::get_net_info,
             commands::execute_ping,
             commands::check_open_port,
@@ -146,6 +149,7 @@ pub fn run() {
             process::restore_legacy_wallet_dat,
             process::switch_to_legacy_wallet_dat,
             process::validate_wallet_file,
+            process::detect_wallet_file_type,
             process::create_new_wallet,
             // Commands from modules::files
             files::init_config,
@@ -293,6 +297,8 @@ pub fn run() {
             vault::vault_get_vault_overview,
             vault::vault_get_vault_index,
             vault::vault_set_vault_label,
+            vault::vault_set_active_export_path,
+            vault::vault_autosave_active_export_path,
             vault::vault_archive_current_vault,
             vault::vault_read_raw_content,
             vault::vault_setup,
@@ -355,6 +361,11 @@ pub fn run() {
             vault::vault_start_wallet_history_recovery,
             vault::vault_restore_from_recovery_phrase,
             vault::vault_generate_bip39_mnemonic,
+            // Vault Core-to-WebCom promotion (slice 66/66b)
+            vault::ipfs_vault_promote_core_migration_to_portable_primary,
+            vault::ipfs_vault_promote_core_wallet_to_portable_primary,
+            // Vault advanced export (slice 66b)
+            vault::vault_export_core_migration_wallet,
             // Vault passphrase rotation + unload/fallback (slice 64p)
             vault::vault_change_passphrase,
             vault::vault_unload_vault_and_use_wallet_dat,

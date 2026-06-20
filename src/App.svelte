@@ -110,6 +110,12 @@
   let coreNextMismatchNotified = false;
   let lastDaemonStartSuccessAt = 0;
 
+  // Daemon operation state (prevents spamming start/stop and shows live status)
+  let daemonOperation = "idle"; // "idle" | "starting" | "stopping"
+  let daemonStatusMessage = "";
+  let daemonPollProgress = "";
+  let daemonStatusClearTimer = null;
+
   $: daemonState = $daemonRuntime;
   $: stratumState = $stratumStatus;
   $: stratumRunning =
@@ -682,12 +688,23 @@
   }
 
   async function handleStart() {
-    if (!tauriReady) return;
+    if (!tauriReady || daemonOperation !== "idle") return;
+    if (daemonStatusClearTimer) {
+      clearTimeout(daemonStatusClearTimer);
+      daemonStatusClearTimer = null;
+    }
+    daemonOperation = "starting";
+    daemonStatusMessage = "Starting daemon...";
+    daemonPollProgress = "";
     addRuntimeNotification("Daemon start requested", "", "info");
     try {
       await core.invoke("start_node");
+      daemonStatusMessage = "Waiting for daemon to become ready...";
       const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 25000 });
       daemonRuntime.update((d) => ({ ...d, readiness }));
+      daemonPollProgress = readiness.ready
+        ? `Ready in ${(readiness.elapsed_ms / 1000).toFixed(1)}s (${readiness.retries} polls)`
+        : `Not ready after ${(readiness.elapsed_ms / 1000).toFixed(1)}s`;
       if (!readiness.ready) {
         lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
         addRuntimeNotification("Daemon readiness failed", lastError, "error");
@@ -702,20 +719,42 @@
     } catch (err) {
       lastError = String(err || "Failed to start node");
       addRuntimeNotification("Daemon start failed", lastError, "error");
+    } finally {
+      daemonOperation = "idle";
+      daemonStatusClearTimer = setTimeout(() => {
+        daemonStatusMessage = "";
+        daemonPollProgress = "";
+        daemonStatusClearTimer = null;
+      }, 5000);
     }
   }
 
   async function handleStop() {
-    if (!tauriReady) return;
+    if (!tauriReady || daemonOperation !== "idle") return;
+    if (daemonStatusClearTimer) {
+      clearTimeout(daemonStatusClearTimer);
+      daemonStatusClearTimer = null;
+    }
+    daemonOperation = "stopping";
+    daemonStatusMessage = "Stopping daemon...";
+    daemonPollProgress = "";
     addRuntimeNotification("Daemon stop requested", "", "info");
     try {
       await core.invoke("stop_node");
       await refreshRpcAuthStatus();
       addRuntimeNotification("Daemon stopped", "", "info");
+      daemonStatusMessage = "Daemon stopped";
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to stop node");
       addRuntimeNotification("Daemon stop failed", lastError, "error");
+    } finally {
+      daemonOperation = "idle";
+      daemonStatusClearTimer = setTimeout(() => {
+        daemonStatusMessage = "";
+        daemonPollProgress = "";
+        daemonStatusClearTimer = null;
+      }, 5000);
     }
   }
 
@@ -1174,8 +1213,22 @@
             </div>
 
             <div class="panel-actions">
-              <button class="btn-xs" on:click={handleStart}>START</button>
-              <button class="btn-xs ghost" on:click={handleStop}>STOP</button>
+              {#if daemonStatusMessage}
+                <span class="daemon-status-text">{daemonStatusMessage}</span>
+                {#if daemonPollProgress}
+                  <span class="daemon-poll-text">{daemonPollProgress}</span>
+                {/if}
+              {/if}
+              <button
+                class="btn-xs"
+                on:click={handleStart}
+                disabled={daemonOperation !== "idle"}
+              >{daemonOperation === "starting" ? "STARTING..." : "START"}</button>
+              <button
+                class="btn-xs ghost"
+                on:click={handleStop}
+                disabled={daemonOperation !== "idle"}
+              >{daemonOperation === "stopping" ? "STOPPING..." : "STOP"}</button>
             </div>
           </div>
 
@@ -2190,6 +2243,25 @@
   }
   .panel-actions.right {
     justify-content: flex-end;
+  }
+
+  .daemon-status-text {
+    font-size: 0.65rem;
+    color: #ffa500;
+    letter-spacing: 0.5px;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .daemon-poll-text {
+    font-size: 0.6rem;
+    color: #888;
+    letter-spacing: 0.3px;
+    flex: 0 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* SMALL ACTION BUTTONS */

@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 // use tauri::Emitter; // Unused
 
@@ -116,23 +116,31 @@ pub fn run_cli(args: &[String]) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn run_cli_command(command: String, args: String) -> Result<String, String> {
-    ensure_config()?;
-    let mut full = Vec::new();
-    if !command.trim().is_empty() {
-        full.push(command.trim().to_string());
-    }
-    if !args.trim().is_empty() {
-        full.extend(split_args(&args));
-    }
-    run_cli(&full)
+pub async fn run_cli_command(command: String, args: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_config()?;
+        let mut full = Vec::new();
+        if !command.trim().is_empty() {
+            full.push(command.trim().to_string());
+        }
+        if !args.trim().is_empty() {
+            full.extend(split_args(&args));
+        }
+        run_cli(&full)
+    })
+    .await
+    .map_err(|e| format!("CLI command task failed: {e}"))?
 }
 
 /// Wrapper for frontend calls using `run_cli` with args array
 #[tauri::command]
-pub fn run_cli_args(args: Vec<String>) -> Result<String, String> {
-    ensure_config()?;
-    run_cli(&args)
+pub async fn run_cli_args(args: Vec<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_config()?;
+        run_cli(&args)
+    })
+    .await
+    .map_err(|e| format!("CLI args task failed: {e}"))?
 }
 
 /// Simple getinfo wrapper for node status checks
@@ -1393,7 +1401,13 @@ pub fn set_advanced_shell_enabled(enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn run_shell_command(command: String) -> Result<String, String> {
+pub async fn run_shell_command(command: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_shell_command_blocking(&command))
+        .await
+        .map_err(|e| format!("Shell command task failed: {e}"))?
+}
+
+fn run_shell_command_blocking(command: &str) -> Result<String, String> {
     let settings = load_app_settings_impl()?;
     if !settings.advanced_shell_enabled {
         return Err(
@@ -1468,18 +1482,40 @@ pub fn run_shell_command(command: String) -> Result<String, String> {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     };
     state.cwd = cwd.clone();
-    let output = if cfg!(windows) {
+    drop(state);
+
+    let mut child = if cfg!(windows) {
         Command::new("cmd")
             .current_dir(&cwd)
             .args(&["/C", &line])
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     } else {
         Command::new("bash")
             .current_dir(&cwd)
             .args(&["-lc", &line])
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     }
     .map_err(|e| e.to_string())?;
+
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(60);
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Shell command timed out after 60 seconds and was stopped.".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
 
     let mut text = String::new();
     if !output.stdout.is_empty() {

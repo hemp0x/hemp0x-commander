@@ -17,7 +17,7 @@
     const DANGER_COMMANDS = new Set([
         "dumpprivkey", "dumpwallet", "importprivkey", "importwallet",
         "walletpassphrase", "encryptwallet", "sendtoaddress", "sendmany",
-        "transfer", "issue", "reissue", "stop",
+        "transfer", "issue", "reissue", "stop", "rescanblockchain",
     ]);
 
     const commandGroups = {
@@ -31,6 +31,8 @@
             "sendtoaddress", "sendfrom", "sendmany", "settxfee", "validateaddress",
             "signmessage", "verifymessage", "backupwallet", "encryptwallet",
             "walletpassphrase", "walletlock", "dumpwallet", "importwallet",
+            "rescanblockchain", "abandontransaction", "gettransaction",
+            "listsinceblock",
         ],
         Assets: [
             "listassets", "listmyassets", "getassetdata", "issue", "issueunique",
@@ -50,11 +52,14 @@
             "getblockheader", "getchaintips", "getblockchaininfo", "getmempoolinfo",
             "getrawmempool", "gettxoutsetinfo", "generate", "generatetoaddress",
             "getgenerate", "setgenerate", "submitblock",
+            "getchaintxstats", "getblockstats", "gettxout", "getmempoolentry",
+            "getdeploymentinfo",
         ],
         Network: [
             "getinfo", "getpeerinfo", "getconnectioncount", "getnettotals",
             "getnetworkinfo", "ping", "addnode", "disconnectnode", "setban",
             "listbanned", "clearbanned", "setnetworkactive",
+            "getnodeaddresses",
         ],
         "Advanced / Raw": [
             "createrawtransaction", "decoderawtransaction", "signrawtransaction",
@@ -66,7 +71,7 @@
         "System & Debug": [
             "help", "stop", "uptime", "getmemoryinfo", "getrpcinfo",
             "getcacheinfo", "checkaddresstag", "isvalidverifierstring",
-            "getverifierstring",
+            "getverifierstring", "getindexinfo",
         ],
     };
 

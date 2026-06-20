@@ -56,11 +56,11 @@
 // Reports are written to <out-dir>/runs/<LABEL>/.
 
 use app_lib::modules::short_message_tables::{
-    table_identity, ALPHABET_5BIT, ALPHABET_6BIT, DICTIONARIES, DICT_A, DICT_B, DICT_C, DICT_D,
-    DICT_E, DICT_F, DICT_G, DICT_H, HOXSHT_VERSION_MARKER, SUFFIXES,
+    table_identity, ALPHABET_5BIT, ALPHABET_6BIT, DICTIONARIES,
+    HOXSHT_VERSION_MARKER,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -1277,19 +1277,4 @@ fn write_scenario_table(f: &mut fs::File, s: &ScenarioResult) -> std::io::Result
     writeln!(f, "| p95 cost | {} |", s.p95_cost)?;
     writeln!(f, "| Near limit (cost >= 24) | {} |", s.near_limit)?;
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _unused() {
-    let _ = DICT_A;
-    let _ = DICT_B;
-    let _ = DICT_C;
-    let _ = DICT_D;
-    let _ = DICT_E;
-    let _ = DICT_F;
-    let _ = DICT_G;
-    let _ = DICT_H;
-    let _ = SUFFIXES;
-    let _ = BTreeSet::<String>::new();
-    let _ = HashMap::<String, String>::new();
 }

@@ -130,17 +130,14 @@ fn detect_auth_sources() -> (bool, bool) {
 pub(crate) struct RpcContext {
     url: String,
     auth: String,
-    #[allow(dead_code)]
-    pub auth_mode: RpcAuthMode,
 }
 
 pub(crate) fn rpc_context() -> Result<RpcContext, String> {
     let url = rpc_url()?;
-    let (auth, auth_mode) = rpc_auth()?;
+    let (auth, _auth_mode) = rpc_auth()?;
     Ok(RpcContext {
         url,
         auth,
-        auth_mode,
     })
 }
 

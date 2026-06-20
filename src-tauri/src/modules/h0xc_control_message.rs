@@ -25,9 +25,6 @@ const HEX_FRAME_LEN: usize = FRAME_SIZE * 2;
 const HC_MAGIC_0: u8 = 0x48; // 'H'
 const HC_MAGIC_1: u8 = 0x43; // 'C'
 const HC_FORMAT_VERSION: u8 = 0x01;
-#[allow(dead_code)]
-const HC_FLAGS_RESERVED: u8 = 0x00;
-#[allow(dead_code)]
 const HC_PAYLOAD_MAX: usize = 25;
 
 const CMD_DELETE: u8 = 0x01;

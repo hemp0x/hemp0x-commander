@@ -1767,34 +1767,6 @@ pub fn vault_setup(passphrase: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub fn vault_update_tokens(
-    passphrase: String,
-    pinata_api_token: String,
-    filebase_token: String,
-    pinata_endpoint: Option<String>,
-    filebase_endpoint: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let bundle = update_vault_tokens(
-        &passphrase,
-        &pinata_api_token,
-        &filebase_token,
-        pinata_endpoint.as_deref().unwrap_or(""),
-        filebase_endpoint.as_deref().unwrap_or(""),
-    )?;
-    Ok(serde_json::json!({
-        "updated": true,
-        "bundle_version": bundle.bundleVersion,
-        "version": bundle.vault.version,
-        "modified": bundle.vault.modified,
-    }))
-}
-
-#[tauri::command]
-pub fn vault_verify_passphrase(passphrase: String) -> Result<bool, String> {
-    verify_vault_passphrase(&passphrase)
-}
-
-#[tauri::command]
 pub fn vault_export_bundle_to_path(path: String) -> Result<String, String> {
     export_bundle_to_path(&path)
 }
@@ -1802,46 +1774,6 @@ pub fn vault_export_bundle_to_path(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn vault_validate_import_bundle(path: String) -> Result<serde_json::Value, String> {
     validate_import_bundle_from_path(&path)
-}
-
-#[tauri::command]
-pub fn vault_import_bundle_replace(
-    path: String,
-    passphrase: Option<String>,
-) -> Result<serde_json::Value, String> {
-    import_bundle_replace_from_path(&path, passphrase.as_deref())
-}
-
-#[tauri::command]
-pub fn vault_remove_provider_token(
-    provider_id: String,
-    passphrase: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let record_id = match provider_id.as_str() {
-        "pinata" => RECORD_ID_PINATA,
-        "filebase" => RECORD_ID_FILEBASE,
-        other => {
-            return Err(format!(
-                "Unknown provider id: {other}. Supported: pinata, filebase"
-            ))
-        }
-    };
-    let effective_passphrase = if let Some(ref pp) = passphrase {
-        pp.clone()
-    } else {
-        return Err("Passphrase is required to remove a provider token".to_string());
-    };
-    remove_provider_token_from_vault(&effective_passphrase, record_id)?;
-    Ok(serde_json::json!({
-        "removed": true,
-        "provider_id": provider_id,
-        "record_id": record_id,
-    }))
-}
-
-#[tauri::command]
-pub fn vault_get_provider_records_status(passphrase: String) -> Result<serde_json::Value, String> {
-    check_provider_token_records(&passphrase)
 }
 
 // ─── Wallet Migration Record Helpers ─────────────────────────────────────

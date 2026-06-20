@@ -521,8 +521,6 @@ fn build_summary(
 
 pub(crate) struct PackState {
     pub(crate) active: ValidatedTablePack,
-    #[allow(dead_code)]
-    pub(crate) selection: TablePackSelection,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -553,15 +551,11 @@ fn initial_state() -> PackState {
     } = &selection
     {
         if let Ok(Some(pack)) = find_custom_pack(name, version, fingerprint_sha256) {
-            return PackState {
-                active: pack,
-                selection,
-            };
+            return PackState { active: pack };
         }
     }
     PackState {
         active: builtin,
-        selection: TablePackSelection::Builtin,
     }
 }
 
@@ -586,10 +580,9 @@ fn write_selection_to_disk(selection: &TablePackSelection) -> Result<(), String>
     Ok(())
 }
 
-fn set_active_state(pack: ValidatedTablePack, selection: TablePackSelection) {
+fn set_active_state(pack: ValidatedTablePack, _selection: TablePackSelection) {
     let new_state = Arc::new(PackState {
         active: pack,
-        selection,
     });
     let mut guard = pack_state().lock().expect("pack state poisoned");
     *guard = new_state;

@@ -49,14 +49,6 @@ export const walletInfo = writable({
 });
 
 /**
- * Global UI State
- * Shared UI concerns like Toast notifications.
- */
-export const uiState = writable({
-    toast: null
-});
-
-/**
  * Daemon Runtime
  * Tracks daemon lifecycle: ownership, runtime status, launch decisions.
  */

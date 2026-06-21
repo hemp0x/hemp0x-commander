@@ -11,6 +11,9 @@
     export let address = "";
 
     const dispatch = createEventDispatcher();
+    const PAGE_SIZE = 50;
+    let currentPage = 0;
+    let lastResolvedAddress = "";
 
     $: resolvedAddress = String(firstDefined(addressData, ["address"], address));
     $: balanceCapability =
@@ -42,6 +45,10 @@
         transactionCapability?.txids ??
             firstDefined(addressData, ["transactions", "txs", "history"], []),
     );
+    $: if (resolvedAddress !== lastResolvedAddress) {
+        lastResolvedAddress = resolvedAddress;
+        currentPage = 0;
+    }
     $: transactionIndexUnsupported =
         transactionCapability?.state === "unsupported" ||
         addressData?.addressTxidsSupported === false;
@@ -50,7 +57,14 @@
         addressData?.addressBalanceSupported === false;
     $: balanceIndexError = balanceCapability?.state === "error";
     $: transactionIndexError = transactionCapability?.state === "error";
-    $: transactionCount = transactions.length;
+    $: transactionCount =
+        Number(transactionCapability?.totalCount) || transactions.length;
+    $: pageCount = Math.max(1, Math.ceil(transactions.length / PAGE_SIZE));
+    $: if (currentPage >= pageCount) currentPage = pageCount - 1;
+    $: pageStart = currentPage * PAGE_SIZE;
+    $: pageEnd = Math.min(pageStart + PAGE_SIZE, transactions.length);
+    $: visibleTransactions = transactions.slice(pageStart, pageEnd);
+    $: historyTruncated = Boolean(transactionCapability?.truncated);
     $: labels = Array.isArray(addressData?.labels) ? addressData.labels : [];
 
     function normalizeAtomicAmount(value, atomicUnits) {
@@ -195,8 +209,18 @@
     <section class="history-section">
         <header class="section-heading">
             <h3>TRANSACTION HISTORY</h3>
-            <span>{transactions.length} LOADED</span>
+            <span>
+                {transactions.length === 0
+                    ? "0 LOADED"
+                    : `${pageStart + 1}-${pageEnd} OF ${formatInteger(transactionCount)}`}
+            </span>
         </header>
+
+        {#if historyTruncated}
+            <div class="history-limit-notice">
+                Showing the 500 most recent indexed transactions.
+            </div>
+        {/if}
 
         {#if transactionIndexUnsupported || transactionIndexError}
             <div class="index-state">
@@ -230,7 +254,7 @@
                     <span>CONF</span>
                     <span class="right">NET AMOUNT</span>
                 </div>
-                {#each transactions as tx}
+                {#each visibleTransactions as tx}
                     {@const txid = txidOf(tx)}
                     <div class="transaction-row">
                         <div class="tx-cell">
@@ -268,6 +292,26 @@
                     </div>
                 {/each}
             </div>
+            {#if pageCount > 1}
+                <div class="pagination">
+                    <button
+                        type="button"
+                        on:click={() => (currentPage = Math.max(0, currentPage - 1))}
+                        disabled={currentPage === 0}
+                    >
+                        PREVIOUS
+                    </button>
+                    <span class="mono">PAGE {currentPage + 1} / {pageCount}</span>
+                    <button
+                        type="button"
+                        on:click={() =>
+                            (currentPage = Math.min(pageCount - 1, currentPage + 1))}
+                        disabled={currentPage >= pageCount - 1}
+                    >
+                        NEXT
+                    </button>
+                </div>
+            {/if}
         {/if}
     </section>
 </article>
@@ -514,6 +558,13 @@
         min-width: 0;
         overflow-x: auto;
     }
+    .history-limit-notice {
+        padding: 0.5rem 1rem;
+        border-bottom: 1px solid rgba(0, 204, 255, 0.1);
+        background: rgba(0, 204, 255, 0.025);
+        color: rgba(255, 255, 255, 0.45);
+        font-size: 0.62rem;
+    }
 
     .table-header,
     .transaction-row {
@@ -607,6 +658,39 @@
 
     .right {
         text-align: right;
+    }
+    .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.65rem;
+        padding: 0.65rem 1rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(0, 0, 0, 0.24);
+    }
+    .pagination button {
+        min-width: 5.5rem;
+        padding: 0.38rem 0.65rem;
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.035);
+        color: var(--color-primary, #00ff41);
+        font-size: 0.58rem;
+        letter-spacing: 0.7px;
+    }
+    .pagination button:hover:not(:disabled) {
+        border-color: rgba(0, 255, 65, 0.48);
+        background: rgba(0, 255, 65, 0.08);
+        box-shadow: none;
+        transform: none;
+    }
+    .pagination button:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
+    .pagination span {
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 0.58rem;
     }
 
     .empty-state {

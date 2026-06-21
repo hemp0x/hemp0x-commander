@@ -1,6 +1,7 @@
 <script>
-    import { onMount, createEventDispatcher } from "svelte";
+    import { onMount, createEventDispatcher, tick } from "svelte";
     import { core } from "@tauri-apps/api";
+    import CommanderLoader from "../ui/CommanderLoader.svelte";
     import AddressView from "./AddressView.svelte";
     import TransactionView from "./TransactionView.svelte";
     import {
@@ -75,6 +76,7 @@
         result = null;
         resultType = null;
         activeTarget = normalized;
+        await tick();
 
         try {
             const command =
@@ -209,11 +211,10 @@
     <main class="explorer-content" aria-live="polite">
         {#if loading}
             <div class="state-panel loading-state">
-                <span class="loader-ring" aria-hidden="true"></span>
-                <div>
-                    <strong>QUERYING LOCAL INDEX</strong>
-                    <p class="mono">{activeTarget}</p>
-                </div>
+                <CommanderLoader
+                    label="Querying local index"
+                    detail={activeTarget}
+                />
             </div>
         {:else if unsupportedIndex}
             <div class="state-panel unsupported-state">
@@ -511,25 +512,6 @@
         line-height: 1.55;
     }
 
-    .state-panel p.mono {
-        max-width: min(64vw, 520px);
-        overflow: hidden;
-        color: rgba(0, 255, 65, 0.42);
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .loader-ring {
-        width: 2.35rem;
-        height: 2.35rem;
-        flex: 0 0 auto;
-        border: 2px solid rgba(0, 255, 65, 0.12);
-        border-top-color: var(--color-primary, #00ff41);
-        border-radius: 50%;
-        box-shadow: 0 0 14px rgba(0, 255, 65, 0.12);
-        animation: spin 0.9s linear infinite;
-    }
-
     .state-code {
         display: grid;
         width: 2.6rem;
@@ -675,18 +657,6 @@
     .copy-notice.error {
         border-color: rgba(255, 70, 70, 0.25);
         color: #ff7070;
-    }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .loader-ring {
-            animation-duration: 1.8s;
-        }
     }
 
     @media (max-width: 720px) {

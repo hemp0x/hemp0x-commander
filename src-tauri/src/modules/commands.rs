@@ -5054,6 +5054,8 @@ pub struct AddressTxidsCapability {
     pub supported: bool,
     pub state: AddressIndexState,
     pub txids: Vec<String>,
+    pub total_count: usize,
+    pub truncated: bool,
     pub error: Option<String>,
 }
 
@@ -5391,24 +5393,34 @@ fn address_balance_capability(address: &str) -> AddressBalanceCapability {
 }
 
 fn address_txids_capability(address: &str) -> AddressTxidsCapability {
+    const MAX_EXPLORER_ADDRESS_TXIDS: usize = 500;
     let query = serde_json::json!({ "addresses": [address] }).to_string();
     match run_cli(&["getaddresstxids".to_string(), query]) {
         Ok(raw) => match parse_cli_json(&raw, "getaddresstxids") {
             Ok(value) => match value.as_array() {
-                Some(items) => AddressTxidsCapability {
-                    supported: true,
-                    state: AddressIndexState::Supported,
-                    txids: items
+                Some(items) => {
+                    let all_txids: Vec<String> = items
                         .iter()
                         .filter_map(serde_json::Value::as_str)
                         .map(str::to_string)
-                        .collect(),
-                    error: None,
-                },
+                        .collect();
+                    let (txids, total_count, truncated) =
+                        limit_explorer_txids(all_txids, MAX_EXPLORER_ADDRESS_TXIDS);
+                    AddressTxidsCapability {
+                        supported: true,
+                        state: AddressIndexState::Supported,
+                        txids,
+                        total_count,
+                        truncated,
+                        error: None,
+                    }
+                }
                 None => AddressTxidsCapability {
                     supported: true,
                     state: AddressIndexState::Error,
                     txids: Vec::new(),
+                    total_count: 0,
+                    truncated: false,
                     error: Some(
                         "Malformed getaddresstxids response from Core: expected an array"
                             .to_string(),
@@ -5419,6 +5431,8 @@ fn address_txids_capability(address: &str) -> AddressTxidsCapability {
                 supported: true,
                 state: AddressIndexState::Error,
                 txids: Vec::new(),
+                total_count: 0,
+                truncated: false,
                 error: Some(error),
             },
         },
@@ -5426,9 +5440,20 @@ fn address_txids_capability(address: &str) -> AddressTxidsCapability {
             supported: false,
             state: address_index_state(&error),
             txids: Vec::new(),
+            total_count: 0,
+            truncated: false,
             error: Some(error),
         },
     }
+}
+
+fn limit_explorer_txids(
+    txids: Vec<String>,
+    limit: usize,
+) -> (Vec<String>, usize, bool) {
+    let total_count = txids.len();
+    let limited = txids.into_iter().rev().take(limit).collect();
+    (limited, total_count, total_count > limit)
 }
 
 fn parse_address_labels(validation: &serde_json::Value) -> Vec<String> {
@@ -5629,7 +5654,7 @@ mod tests {
         detect_duplicate_inputs, estimate_consolidation_round_count, estimate_fee_from_bytes,
         estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
         hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
-        max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
+        limit_explorer_txids, max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
         normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
         parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
         parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
@@ -5718,6 +5743,17 @@ mod tests {
         );
         assert!(is_unavailable_method_error("RPC error: Method not found"));
         assert!(!is_unavailable_method_error("Wallet is disabled"));
+    }
+
+    #[test]
+    fn limits_address_explorer_history_to_newest_entries() {
+        let txids = (0..600).map(|index| format!("{index:064x}")).collect();
+        let (limited, total, truncated) = limit_explorer_txids(txids, 500);
+        assert_eq!(total, 600);
+        assert!(truncated);
+        assert_eq!(limited.len(), 500);
+        assert_eq!(limited.first().unwrap(), &format!("{:064x}", 599));
+        assert_eq!(limited.last().unwrap(), &format!("{:064x}", 100));
     }
 
     #[test]

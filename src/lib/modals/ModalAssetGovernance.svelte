@@ -562,12 +562,15 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        padding: 0.75rem;
         z-index: 200000; /* Must be > 99999 (Detail Modal) */
         backdrop-filter: blur(5px);
+        box-sizing: border-box;
     }
     .modal {
-        width: 600px; /* Widened to fit all tabs on one line */
-        max-width: 95vw;
+        width: min(600px, 92vw);
+        max-width: 92vw;
+        max-height: min(44rem, calc(100dvh - 2rem));
         border: 1px solid rgba(0, 255, 65, 0.2);
         box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
         border-radius: 8px;

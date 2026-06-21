@@ -22,6 +22,7 @@
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import VaultUnlockModal from "./lib/ui/VaultUnlockModal.svelte";
+  import CommanderLoader from "./lib/ui/CommanderLoader.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
   import { vaultStatus } from "./stores.js";
@@ -1219,6 +1220,12 @@
                   <span class="daemon-poll-text">{daemonPollProgress}</span>
                 {/if}
               {/if}
+              {#if daemonOperation !== "idle"}
+                <span class="daemon-loader" title={daemonOperation === "starting" ? "Starting daemon" : "Stopping daemon"}>
+                  <CommanderLoader compact={true} label="" detail="" />
+                  <span class="daemon-loader-label">{daemonOperation === "starting" ? "STARTING..." : "STOPPING..."}</span>
+                </span>
+              {/if}
               <button
                 class="btn-xs"
                 on:click={handleStart}
@@ -2262,6 +2269,18 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .daemon-loader {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+  }
+  .daemon-loader-label {
+    font-size: 0.6rem;
+    color: #ffa500;
+    letter-spacing: 0.5px;
+    font-family: var(--font-mono);
   }
 
   /* SMALL ACTION BUTTONS */

@@ -1577,17 +1577,17 @@
         inset: 0;
         background: rgba(0, 0, 0, 0.85);
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         justify-content: center;
-        padding-top: 0.5rem;
-        padding-bottom: 1.5rem;
+        padding: 0.75rem;
         z-index: 200000;
         backdrop-filter: blur(5px);
+        box-sizing: border-box;
     }
     .modal {
-        width: 560px;
+        width: min(560px, 92vw);
         max-width: 92vw;
-        max-height: calc(100vh - 2rem);
+        max-height: min(44rem, calc(100dvh - 2rem));
         border: 1px solid rgba(0, 255, 65, 0.2);
         box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
         border-radius: 8px;

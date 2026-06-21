@@ -1235,17 +1235,18 @@
         aria-modal="true"
         aria-labelledby="confirm-title"
         tabindex="-1"
-        on:click={cancelSend}
-        on:keydown={(e) => e.key === "Escape" && cancelSend()}
+        on:keydown={(e) => e.key === "Escape" && !broadcasting && cancelSend()}
     >
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-        <div class="modal-box" role="document" on:click|stopPropagation>
+        <div class="modal-staged compact" role="document" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header">
-                <span class="warning-icon">⚠️</span>
-                <h2 id="confirm-title">CONFIRM TRANSACTION</h2>
+                <h3 id="confirm-title">
+                    <span class="warning-icon">⚠️</span>
+                    CONFIRM TRANSACTION
+                </h3>
             </div>
 
-            <div class="modal-body">
+            <div class="modal-body confirm-body">
                 <div class="tx-detail">
                     <span class="label">TYPE:</span>
                     <span class="value">{isAdvanced ? "ADVANCED (COIN CONTROL)" : "STANDARD"}</span>
@@ -1276,7 +1277,7 @@
                         {:else}
                             <div class="tx-detail">
                                 <span class="label">CHANGE:</span>
-                                <span class="value" style="color:#ff6644;">Dust / None (goes to fee)</span>
+                                <span class="value dust">Dust / None (goes to fee)</span>
                             </div>
                         {/if}
                     {:else}
@@ -1324,16 +1325,17 @@
                 </div>
             </div>
 
-            <div class="modal-footer">
-                <button class="btn-cancel" on:click={cancelSend} disabled={broadcasting}
-                    >[ CANCEL ]</button
-                >
+            <div class="modal-actions">
+                <button class="cyber-btn ghost" on:click={cancelSend} disabled={broadcasting}>
+                    CANCEL
+                </button>
                 <button
-                    class="btn-confirm"
+                    class="cyber-btn"
                     disabled={broadcasting}
                     on:click={isAdvanced ? executeAdvancedSend : executeSend}
-                    >{broadcasting ? "[ BROADCASTING... ]" : "[ CONFIRM SEND ]"}</button
                 >
+                    {broadcasting ? "BROADCASTING..." : "CONFIRM SEND"}
+                </button>
             </div>
         </div>
     </div>
@@ -1355,86 +1357,89 @@
 {#if showUtxoModal}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="modal-overlay" on:click={() => (showUtxoModal = false)}>
-        <div class="utxo-modal" on:click|stopPropagation>
-            <div class="modal-header">
-                <h2>SELECT COINS</h2>
+    <div class="modal-overlay">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="modal-staged wide" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
+            <div class="modal-header utxo-header">
+                <h3>SELECT COINS</h3>
                 <div class="utxo-stats">
-                <span>SELECTED: {formatAmount(totalSelected)}</span>
-                <span>COUNT: {selectedUtxos.size}</span>
-                <span>EST: {estimatedSelectedTxBytes}B</span>
-            </div>
+                    <span>SELECTED: {formatAmount(totalSelected)}</span>
+                    <span>COUNT: {selectedUtxos.size}</span>
+                    <span>EST: {estimatedSelectedTxBytes}B</span>
+                </div>
             </div>
 
-            <div class="utxo-list">
-                <table class="utxo-table">
-                    <thead>
-                        <tr>
-                            <th></th>
-                            <th>AMOUNT</th>
-                            <th>ADDRESS</th>
-                            <th>CONF</th>
-                            <th>STATUS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each utxos as u}
-                            {@const unsafe = isUnsafe(u)}
-                            <tr
-                                class:selected={selectedUtxos.has(
-                                    `${u.txid}:${u.vout}`,
-                                )}
-                                class:unsafe={unsafe}
-                                on:click={() => toggleUtxo(u)}
-                            >
-                                <td>
-                                    <div
-                                        class="checkbox"
-                                        class:checked={selectedUtxos.has(
-                                            `${u.txid}:${u.vout}`,
-                                        )}
-                                        class:disabled={unsafe}
-                                    ></div>
-                                </td>
-                                <td class="amount-cell"
-                                    >{u.amount.toFixed(8)}</td
-                                >
-                                <td class="addr-cell">
-                                    {#if u.address}
-                                        {u.address}
-                                    {:else}
-                                        <span
-                                            style="color: #666; font-style: italic;"
-                                            >(Change Output)</span
-                                        >
-                                    {/if}
-                                </td>
-                                <td>{u.confirmations}</td>
-                                <td class="status-cell">
-                                    {#if u.spendable === false}
-                                        <span class="badge bad">UNSPENDABLE</span>
-                                    {:else if u.safe === false}
-                                        <span class="badge warn-badge">UNSAFE</span>
-                                    {:else if u.asset && u.asset !== "HEMP"}
-                                        <span class="badge asset-badge">{u.asset}</span>
-                                    {:else}
-                                        <span class="badge ok">OK</span>
-                                    {/if}
-                                </td>
+            <div class="modal-body utxo-body">
+                <div class="utxo-list">
+                    <table class="utxo-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>AMOUNT</th>
+                                <th>ADDRESS</th>
+                                <th>CONF</th>
+                                <th>STATUS</th>
                             </tr>
-                        {/each}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {#each utxos as u}
+                                {@const unsafe = isUnsafe(u)}
+                                <tr
+                                    class:selected={selectedUtxos.has(
+                                        `${u.txid}:${u.vout}`,
+                                    )}
+                                    class:unsafe={unsafe}
+                                    on:click={() => toggleUtxo(u)}
+                                >
+                                    <td>
+                                        <div
+                                            class="checkbox"
+                                            class:checked={selectedUtxos.has(
+                                                `${u.txid}:${u.vout}`,
+                                            )}
+                                            class:disabled={unsafe}
+                                        ></div>
+                                    </td>
+                                    <td class="amount-cell"
+                                        >{u.amount.toFixed(8)}</td
+                                    >
+                                    <td class="addr-cell">
+                                        {#if u.address}
+                                            {u.address}
+                                        {:else}
+                                            <span
+                                                style="color: #666; font-style: italic;"
+                                                >(Change Output)</span
+                                            >
+                                        {/if}
+                                    </td>
+                                    <td>{u.confirmations}</td>
+                                    <td class="status-cell">
+                                        {#if u.spendable === false}
+                                            <span class="badge bad">UNSPENDABLE</span>
+                                        {:else if u.safe === false}
+                                            <span class="badge warn-badge">UNSAFE</span>
+                                        {:else if u.asset && u.asset !== "HEMP"}
+                                            <span class="badge asset-badge">{u.asset}</span>
+                                        {:else}
+                                            <span class="badge ok">OK</span>
+                                        {/if}
+                                    </td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
-            <div class="modal-footer">
+            <div class="modal-actions">
                 <button
-                    class="btn-confirm"
-                    on:click={selectSafeMax}>[ SELECT SAFE MAX ]</button
+                    class="cyber-btn ghost"
+                    on:click={selectSafeMax}>SELECT SAFE MAX</button
                 >
                 <button
-                    class="btn-confirm"
-                    on:click={() => (showUtxoModal = false)}>[ DONE ]</button
+                    class="cyber-btn"
+                    on:click={() => (showUtxoModal = false)}>DONE</button
                 >
             </div>
         </div>
@@ -1444,18 +1449,25 @@
 <!-- ADDRESS BOOK POPUP -->
 {#if showAddressBook}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="ab-overlay" on:click={closeAddressBook}>
+    <div class="modal-overlay" on:click={closeAddressBook}>
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div class="ab-modal" on:click|stopPropagation>
-            <div class="ab-header">
-                <h3>📒 ADDRESS BOOK</h3>
+        <div
+            class="modal-staged ab-modal"
+            role="dialog"
+            aria-modal="true"
+            tabindex="-1"
+            on:click|stopPropagation
+            on:keydown|stopPropagation={() => {}}
+        >
+            <div class="modal-header ab-modal-header">
+                <h3>ADDRESS BOOK</h3>
                 <div class="ab-header-actions">
                     <button
-                        class="ab-add-btn"
+                        class="cyber-btn tiny"
                         on:click={openAddForm}
                         title="Add Address">+</button
                     >
-                    <button class="ab-clear-btn" on:click={clearUnlocked}
+                    <button class="cyber-btn ghost tiny" on:click={clearUnlocked}
                         >CLEAR UNLOCKED</button
                     >
                 </div>
@@ -1487,17 +1499,17 @@
                         />
                     </div>
                     <div class="ab-form-actions">
-                        <button class="ab-btn" on:click={submitNewAddress}
+                        <button class="cyber-btn" on:click={submitNewAddress}
                             >SAVE</button
                         >
-                        <button class="ab-btn ghost" on:click={cancelAddForm}
+                        <button class="cyber-btn ghost" on:click={cancelAddForm}
                             >CANCEL</button
                         >
                     </div>
                 </div>
             {/if}
 
-            <div class="ab-list">
+            <div class="modal-body ab-list-body">
                 {#if favorites.length === 0}
                     <div class="ab-empty">
                         No saved addresses yet. Use the ★ button to save.
@@ -1560,57 +1572,35 @@
                 {/if}
             </div>
 
-            <div class="ab-footer">
+            <div class="modal-actions ab-modal-actions">
                 <div class="ab-footer-left">
-                    <button class="ab-btn ghost" on:click={triggerImport}
-                        >[ IMPORT ]</button
+                    <button class="cyber-btn ghost" on:click={triggerImport}
+                        >IMPORT</button
                     >
-                    <button class="ab-btn ghost" on:click={exportAddressBook}
-                        >[ EXPORT ]</button
+                    <button class="cyber-btn ghost" on:click={exportAddressBook}
+                        >EXPORT</button
                     >
-                    <button class="ab-btn help-btn" on:click={toggleHelp}
+                    <button class="cyber-btn ghost help-btn" on:click={toggleHelp}
                         >?</button
                     >
                 </div>
                 <div class="ab-footer-right">
-                    <button class="ab-btn ghost" on:click={closeAddressBook}
+                    <button class="cyber-btn" on:click={closeAddressBook}
                         >CLOSE</button
                     >
                 </div>
             </div>
 
             {#if showHelp}
-                <div
-                    class="ab-add-form"
-                    style="
-                        position: absolute;
-                        bottom: 70px;
-                        left: 1rem; 
-                        right: 1rem;
-                        max-height: 320px;
-                        overflow-y: auto;
-                        background: rgba(10, 25, 18, 0.98); 
-                        border: 1px solid var(--color-primary); 
-                        border-radius: 8px;
-                        box-shadow: 0 -4px 30px rgba(0,0,0,0.8);
-                        z-index: 50;
-                        padding: 1rem;
-                        margin: 0;
-                    "
-                >
-                    <div
-                        class="field-label"
-                        style="text-align:center; margin-bottom:0.5rem; color:var(--color-primary); font-weight:bold;"
-                    >
+                <div class="ab-help-popup">
+                    <div class="field-label ab-help-title">
                         JSON FORMAT GUIDE
                     </div>
-                    <code
-                        style="display:block; font-size:0.75rem; color:#ddd; white-space:pre-wrap; background:rgba(255,255,255,0.05); padding:0.8rem; border-radius:6px; overflow-x:auto;"
-                    >
+                    <code class="ab-help-code">
                         {helpJson}
                     </code>
                     <button
-                        class="ab-btn ghost"
+                        class="cyber-btn ghost"
                         style="width:100%; margin-top:0.8rem;"
                         on:click={toggleHelp}>CLOSE HELP</button
                     >
@@ -1872,42 +1862,129 @@
     }
 
     /* --- CONFIRMATION MODAL --- */
-    /* .modal-overlay moved to components.css */
-    .utxo-modal {
-        background: #0a0a0a;
-        border: 1px solid var(--color-primary);
-        box-shadow: 0 0 50px rgba(0, 255, 65, 0.1);
-        width: 600px;
-        max-width: 95vw;
-        max-height: 80vh;
+    /* Uses .modal-staged/.modal-header/.modal-body/.modal-actions from components.css */
+    .confirm-body {
         display: flex;
         flex-direction: column;
-        border-radius: 8px;
+        gap: 0.4rem;
+    }
+    .tx-detail {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.65rem 0.75rem;
+        background: rgba(0, 255, 65, 0.05);
+        border-left: 3px solid var(--color-primary);
+        border-radius: 0 4px 4px 0;
+        gap: 0.5rem;
+    }
+    .tx-detail .label {
+        color: #888;
+        font-size: 0.7rem;
+        letter-spacing: 1px;
+        flex-shrink: 0;
+    }
+    .tx-detail .value {
+        color: #fff;
+        font-weight: bold;
+        text-align: right;
+        word-break: break-all;
+    }
+    .tx-detail .value.neon {
+        color: var(--color-primary);
+        text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
+    }
+    .tx-detail .value.dust {
+        color: #ff6644;
+    }
+    .warning-box {
+        background: rgba(255, 68, 68, 0.1);
+        border: 1px solid rgba(255, 68, 68, 0.3);
+        border-radius: 6px;
+        padding: 0.75rem 0.9rem;
+        margin-top: 0.4rem;
+    }
+    .warning-title {
+        display: block;
+        color: #ff4444;
+        font-weight: bold;
+        font-size: 0.75rem;
+        letter-spacing: 1px;
+        margin-bottom: 0.4rem;
+    }
+    .warning-box p {
+        margin: 0.25rem 0;
+        color: #ccc;
+        font-size: 0.75rem;
+        line-height: 1.4;
+    }
+    .warning-box strong {
+        color: #ff6666;
+    }
+    .info-box {
+        background: rgba(0, 255, 200, 0.08);
+        border: 1px solid rgba(0, 255, 200, 0.25);
+        border-radius: 6px;
+        padding: 0.65rem 0.8rem;
+        margin-top: 0.4rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .info-icon {
+        color: #00ffc8;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+    .info-box p {
+        margin: 0;
+        color: #aaa;
+        font-size: 0.72rem;
+        line-height: 1.4;
+    }
+
+    /* --- UTXO MODAL --- */
+    .utxo-header {
+        gap: 0.75rem;
+    }
+    .utxo-header h3 {
+        flex-shrink: 0;
+    }
+    .utxo-body {
+        padding: 0.75rem 1rem;
+        overflow-y: auto;
+        min-height: 0;
+        flex: 1 1 0%;
     }
     .utxo-list {
         flex: 1;
-        overflow-y: auto;
-        padding: 1rem;
+        overflow: visible;
+        padding: 0;
+        min-height: 0;
     }
     .utxo-stats {
         margin-left: auto;
         font-family: var(--font-mono);
         color: #888;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         display: flex;
-        gap: 1rem;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
     .utxo-table {
         width: 100%;
         border-collapse: collapse;
         font-family: var(--font-mono);
-        font-size: 0.8rem;
+        font-size: 0.78rem;
     }
     .utxo-table th {
         text-align: left;
         color: #666;
         padding: 0.5rem;
         border-bottom: 1px solid #333;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
     }
     .utxo-table td {
         padding: 0.5rem;
@@ -1924,9 +2001,23 @@
     .utxo-table tr.selected td {
         color: #fff;
     }
+    .utxo-table tr.unsafe {
+        opacity: 0.6;
+    }
     .amount-cell {
         color: var(--color-primary) !important;
         font-weight: bold;
+    }
+    .addr-cell {
+        font-family: var(--font-mono);
+        color: #ddd;
+        max-width: 280px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .status-cell {
+        text-align: center;
     }
     .checkbox {
         width: 16px;
@@ -1945,15 +2036,9 @@
         background: rgba(255, 68, 68, 0.08);
         border-color: rgba(255, 68, 68, 0.35);
     }
-    .utxo-table tr.unsafe {
-        opacity: 0.6;
-    }
-    .status-cell {
-        text-align: center;
-    }
     .badge {
         font-size: 0.6rem;
-        padding: 0.1rem 0.4rem;
+        padding: 0.1rem 0.35rem;
         border-radius: 3px;
         font-family: var(--font-mono);
         letter-spacing: 0.5px;
@@ -1975,167 +2060,48 @@
         background: rgba(0, 180, 255, 0.15);
         color: #00b4ff;
     }
+    .field-label {
+        color: #888;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
 
-    .modal-box {
-        background: linear-gradient(180deg, #0a0a0a 0%, #121212 100%);
-        border: 1px solid rgba(255, 221, 0, 0.4);
-        border-radius: 8px;
-        padding: 0;
-        width: 450px;
-        max-width: 90vw;
-        box-shadow:
-            0 0 40px rgba(255, 221, 0, 0.2),
-            0 20px 60px rgba(0, 0, 0, 0.8);
+    @media (max-width: 720px) {
+        .utxo-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.4rem;
+        }
+        .utxo-stats {
+            margin-left: 0;
+            justify-content: flex-start;
+            font-size: 0.68rem;
+        }
+        .utxo-table {
+            font-size: 0.7rem;
+        }
+        .utxo-table th,
+        .utxo-table td {
+            padding: 0.35rem 0.25rem;
+        }
+        .addr-cell {
+            max-width: 120px;
+        }
     }
-    .modal-header {
-        background: rgba(255, 221, 0, 0.1);
-        padding: 1rem 1.5rem;
-        border-bottom: 1px solid rgba(255, 221, 0, 0.2);
-        display: flex;
-        align-items: center;
-        gap: 0.8rem;
-    }
-    .modal-header h2 {
-        margin: 0;
-        font-size: 1rem;
-        color: #ffdd00;
-        letter-spacing: 2px;
-    }
-    .warning-icon {
-        font-size: 1.2rem;
-    }
-    .modal-body {
-        padding: 1.5rem;
-    }
-    .tx-detail {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.8rem;
-        background: rgba(0, 255, 65, 0.05);
-        border-left: 3px solid var(--color-primary);
-        margin-bottom: 0.8rem;
-        border-radius: 0 4px 4px 0;
-    }
-    .tx-detail .label {
-        color: #888;
-        font-size: 0.75rem;
-        letter-spacing: 1px;
-    }
-    .tx-detail .value {
-        color: #fff;
-        font-weight: bold;
-    }
-    .tx-detail .value.neon {
-        color: var(--color-primary);
-        text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
-    }
-    .warning-box {
-        background: rgba(255, 68, 68, 0.1);
-        border: 1px solid rgba(255, 68, 68, 0.3);
-        border-radius: 6px;
-        padding: 1rem;
-        margin-top: 1rem;
-    }
-    .warning-title {
-        display: block;
-        color: #ff4444;
-        font-weight: bold;
-        font-size: 0.8rem;
-        letter-spacing: 1px;
-        margin-bottom: 0.5rem;
-    }
-    .warning-box p {
-        margin: 0.3rem 0;
-        color: #ccc;
-        font-size: 0.8rem;
-        line-height: 1.4;
-    }
-    .warning-box strong {
-        color: #ff6666;
-    }
-    .info-box {
-        background: rgba(0, 255, 200, 0.08);
-        border: 1px solid rgba(0, 255, 200, 0.25);
-        border-radius: 6px;
-        padding: 0.8rem 1rem;
-        margin-top: 0.8rem;
-        display: flex;
-        align-items: flex-start;
-        gap: 0.5rem;
-    }
-    .info-icon {
-        color: #00ffc8;
-        font-size: 1rem;
-        flex-shrink: 0;
-    }
-    .info-box p {
-        margin: 0;
-        color: #aaa;
-        font-size: 0.75rem;
-        line-height: 1.4;
-    }
-    .modal-footer {
-        display: flex;
-        gap: 1rem;
-        padding: 1rem 1.5rem;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    .btn-cancel,
-    .btn-confirm {
-        flex: 1;
-        padding: 0.8rem;
-        font-size: 0.8rem;
-        font-weight: bold;
-        letter-spacing: 1px;
-        border-radius: 4px;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-    .btn-cancel {
-        background: transparent;
-        border: 1px solid #666;
-        color: #888;
-    }
-    .btn-cancel:hover {
-        border-color: #ff4444;
-        color: #ff4444;
-    }
-    .btn-confirm {
-        background: rgba(0, 255, 65, 0.15);
-        border: 1px solid var(--color-primary);
-        color: var(--color-primary);
-    }
-    .btn-confirm:hover {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow: 0 0 20px rgba(0, 255, 65, 0.4);
+    @media (max-height: 600px) {
+        .utxo-body {
+            padding: 0.5rem 0.75rem;
+        }
     }
 
     /* === ADDRESS BOOK POPUP (asset-page style) === */
-    .ab-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.85);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 99999;
-        padding: 1rem;
-        animation: abFadeIn 0.2s ease-out;
-    }
-    @keyframes abFadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
     .ab-modal {
         background: rgba(10, 15, 12, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         width: 100%;
         max-width: 520px;
-        max-height: 72vh;
+        max-height: min(72vh, calc(100dvh - 2rem));
         display: flex;
         flex-direction: column;
         box-shadow: 0 0 40px rgba(0, 0, 0, 0.7);
@@ -2145,64 +2111,10 @@
         from { opacity: 0; transform: translateY(20px) scale(0.98); }
         to { opacity: 1; transform: translateY(0) scale(1); }
     }
-    .ab-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.5rem 1rem;
-        background: rgba(0, 0, 0, 0.3);
-        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
-    }
-    .ab-header h3 {
-        margin: 0;
-        color: var(--color-primary);
-        font-size: 0.85rem;
-        letter-spacing: 1px;
-    }
     .ab-header-actions {
         display: flex;
         gap: 0.5rem;
         align-items: center;
-    }
-    .ab-add-btn {
-        background: rgba(0, 255, 65, 0.08);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        color: var(--color-primary);
-        width: 26px;
-        height: 26px;
-        font-size: 1rem;
-        line-height: 1;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.15s;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .ab-add-btn:hover {
-        background: var(--color-primary);
-        color: #000;
-    }
-    .ab-clear-btn {
-        background: transparent;
-        border: 1px solid rgba(255, 68, 68, 0.25);
-        color: #ff6666;
-        padding: 0.25rem 0.6rem;
-        font-size: 0.6rem;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.2s;
-        font-family: var(--font-mono);
-        letter-spacing: 0.5px;
-    }
-    .ab-clear-btn:hover {
-        background: rgba(255, 68, 68, 0.1);
-        border-color: #ff6666;
-    }
-    .ab-list {
-        flex: 1;
-        overflow-y: auto;
-        padding: 0.4rem;
     }
     .ab-empty {
         text-align: center;
@@ -2293,14 +2205,6 @@
         width: 1.4rem;
         display: inline-block;
     }
-    .ab-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.6rem 1rem;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid rgba(0, 255, 65, 0.1);
-    }
     .ab-footer-left,
     .ab-footer-right {
         display: flex;
@@ -2312,33 +2216,6 @@
         padding-right: 0;
         text-align: center;
         border-radius: 50%;
-    }
-    .ab-btn {
-        padding: 0.4rem 0.8rem;
-        background: rgba(0, 255, 65, 0.08);
-        border: 1px solid rgba(0, 255, 65, 0.25);
-        color: var(--color-primary);
-        font-size: 0.7rem;
-        font-weight: 600;
-        font-family: var(--font-mono);
-        border-radius: 6px;
-        cursor: pointer;
-        letter-spacing: 0.5px;
-        transition: all 0.15s;
-    }
-    .ab-btn:hover {
-        background: rgba(0, 255, 65, 0.15);
-        border-color: var(--color-primary);
-    }
-    .ab-btn.ghost {
-        background: transparent;
-        border-color: rgba(255, 255, 255, 0.1);
-        color: #888;
-    }
-    .ab-btn.ghost:hover {
-        border-color: #fff;
-        color: #fff;
-        background: rgba(255, 255, 255, 0.05);
     }
 
     /* ADD ADDRESS FORM */
@@ -2497,107 +2374,6 @@
     .frag-warn {
         color: #ffaa00;
         font-weight: bold;
-    }
-
-    /* UTXO MODAL STYLES */
-    .utxo-modal {
-        background: #0a0a0a;
-        border: 1px solid var(--color-primary);
-        box-shadow: 0 0 50px rgba(0, 255, 65, 0.1);
-        width: 800px;
-        max-width: 95vw;
-        max-height: 80vh;
-        display: flex;
-        flex-direction: column;
-        border-radius: 8px;
-    }
-    .utxo-list {
-        flex: 1;
-        overflow-y: auto;
-        padding: 1rem;
-    }
-    .utxo-stats {
-        margin-left: auto;
-        font-family: var(--font-mono);
-        color: #888;
-        font-size: 0.8rem;
-        display: flex;
-        gap: 1rem;
-    }
-    .utxo-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: var(--font-mono);
-        font-size: 0.8rem;
-    }
-    .utxo-table th {
-        text-align: left;
-        color: #666;
-        padding: 0.5rem;
-        border-bottom: 1px solid #333;
-    }
-    .utxo-table td {
-        padding: 0.5rem;
-        border-bottom: 1px solid #222;
-        color: #ccc;
-        cursor: pointer;
-    }
-    .utxo-table tr:hover {
-        background: rgba(255, 255, 255, 0.05);
-    }
-    .utxo-table tr.selected {
-        background: rgba(0, 255, 65, 0.1);
-    }
-    .utxo-table tr.selected td {
-        color: #fff;
-    }
-    .amount-cell {
-        color: var(--color-primary) !important;
-        font-weight: bold;
-    }
-    .addr-cell {
-        font-family: var(--font-mono);
-        color: #ddd;
-        max-width: 450px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .checkbox {
-        width: 16px;
-        height: 16px;
-        border: 1px solid #666;
-        border-radius: 2px;
-    }
-    .checkbox.checked {
-        background: var(--color-primary);
-        border-color: var(--color-primary);
-        box-shadow: 0 0 5px var(--color-primary);
-    }
-    .field-label {
-        color: #888;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-
-    .ab-icon-btn {
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: #ddd;
-        font-size: 1.2rem;
-        width: 32px;
-        height: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        border-radius: 4px;
-        transition: all 0.2s;
-    }
-    .ab-icon-btn:hover {
-        border-color: var(--color-primary);
-        color: #fff;
-        background: rgba(0, 255, 65, 0.1);
     }
 
     /* === RESPONSIVE DESIGN === */

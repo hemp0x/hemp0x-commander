@@ -6,6 +6,7 @@
     import { systemStatus } from "../../stores.js";
     import { addToolNotification } from "../stores/notifications.js";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
+    import CommanderLoader from "../ui/CommanderLoader.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -29,6 +30,12 @@
     let editMode = false;
     let selectedIds = new Set();
     let bulkDeleteConfirm = false;
+
+    let exportLoading = false;
+    let importLoading = false;
+    let archiveLoading = false;
+    let restoreLoading = false;
+    let restoreLoadingFilename = null;
 
     $: filtersActive = filterStatus !== "ALL" || filterOperation !== "ALL";
     $: allVisibleIds = filteredEntries.map((e) => e.id);
@@ -133,7 +140,9 @@
     }
 
     async function exportJournal() {
-        if (!tauriReady) return;
+        if (!tauriReady || exportLoading) return;
+        exportLoading = true;
+        dismissStatus();
         try {
             const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
             const filePath = await save({
@@ -141,23 +150,32 @@
                 defaultPath: `hemp0x_tx_journal_${ts}.json`,
                 filters: [{ name: "JSON", extensions: ["json"] }],
             });
-            if (!filePath) return;
+            if (!filePath) {
+                exportLoading = false;
+                return;
+            }
             await core.invoke("export_tx_journal", { path: filePath });
             setStatus("Journal exported to: " + filePath, "success");
         } catch (err) {
             setStatus("Export failed: " + err, "error");
         }
+        exportLoading = false;
     }
 
     async function importMergeJournal() {
-        if (!tauriReady) return;
+        if (!tauriReady || importLoading) return;
+        importLoading = true;
+        dismissStatus();
         try {
             const selected = await open({
                 title: "Import Transaction Journal",
                 filters: [{ name: "JSON", extensions: ["json"] }],
                 multiple: false,
             });
-            if (!selected) return;
+            if (!selected) {
+                importLoading = false;
+                return;
+            }
             const filePath = typeof selected === "string" ? selected : selected.path;
             const result = await core.invoke("import_merge_tx_journal", { path: filePath });
             setStatus(result, "success");
@@ -165,11 +183,14 @@
         } catch (err) {
             setStatus("Import failed: " + err, "error");
         }
+        importLoading = false;
     }
 
     async function archiveJournal() {
-        if (!tauriReady) return;
+        if (!tauriReady || archiveLoading) return;
         archiveConfirm = false;
+        archiveLoading = true;
+        dismissStatus();
         try {
             const result = await core.invoke("archive_tx_journal");
             setStatus(result, "success");
@@ -179,6 +200,7 @@
         } catch (err) {
             setStatus("Archive failed: " + err, "error");
         }
+        archiveLoading = false;
     }
 
     async function loadArchives() {
@@ -191,8 +213,11 @@
     }
 
     async function restoreArchive(filename) {
-        if (!tauriReady) return;
+        if (!tauriReady || restoreLoading) return;
         restoreConfirmFilename = null;
+        restoreLoading = true;
+        restoreLoadingFilename = filename;
+        dismissStatus();
         try {
             const result = await core.invoke("restore_tx_journal_archive", { filename });
             setStatus(result, "success");
@@ -202,6 +227,8 @@
         } catch (err) {
             setStatus("Restore failed: " + err, "error");
         }
+        restoreLoading = false;
+        restoreLoadingFilename = null;
     }
 
     async function showJournalPath() {
@@ -306,9 +333,9 @@
         </div>
 
         {#if statusMessage}
-            <div class="status-banner {statusMessageType}">
+            <div class="status-banner-compact {statusMessageType}">
                 <span class="status-text">{statusMessage}</span>
-                <button class="status-dismiss" on:click={dismissStatus}>&times;</button>
+                <button class="dismiss" on:click={dismissStatus} aria-label="Dismiss">&times;</button>
             </div>
         {/if}
 
@@ -336,18 +363,24 @@
                 </select>
             </div>
             <div class="filter-group actions-right">
-                <button class="cyber-btn ghost" on:click={showJournalPath}>PATH</button>
-                <button class="cyber-btn ghost" on:click={exportJournal}>EXPORT</button>
-                <button class="cyber-btn ghost" on:click={importMergeJournal}>IMPORT</button>
+                <button class="cyber-btn ghost" on:click={showJournalPath} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>PATH</button>
+                <button class="cyber-btn ghost" on:click={exportJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
+                    {exportLoading ? "EXPORTING..." : "EXPORT"}
+                </button>
+                <button class="cyber-btn ghost" on:click={importMergeJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
+                    {importLoading ? "IMPORTING..." : "IMPORT"}
+                </button>
                 {#if !archiveConfirm}
-                    <button class="cyber-btn ghost" on:click={() => (archiveConfirm = true)}>ARCHIVE</button>
+                    <button class="cyber-btn ghost" on:click={() => (archiveConfirm = true)} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>ARCHIVE</button>
                 {:else}
                     <span class="confirm-action-row">
-                        <button class="cyber-btn" on:click={archiveJournal}>CONFIRM</button>
-                        <button class="cyber-btn ghost" on:click={() => (archiveConfirm = false)}>CANCEL</button>
+                        <button class="cyber-btn" on:click={archiveJournal} disabled={archiveLoading}>
+                            {archiveLoading ? "ARCHIVING..." : "CONFIRM"}
+                        </button>
+                        <button class="cyber-btn ghost" on:click={() => (archiveConfirm = false)} disabled={archiveLoading}>CANCEL</button>
                     </span>
                 {/if}
-                <button class="cyber-btn" on:click={loadEntries} disabled={loading}>
+                <button class="cyber-btn" on:click={loadEntries} disabled={loading || exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {loading ? "LOADING..." : "REFRESH"}
                 </button>
             </div>
@@ -511,11 +544,13 @@
                         <span class="archive-actions">
                             {#if restoreConfirmFilename === archive.filename}
                                 <span class="confirm-action-row">
-                                    <button class="text-btn danger" on:click={() => restoreArchive(archive.filename)}>RESTORE</button>
-                                    <button class="text-btn" on:click={() => (restoreConfirmFilename = null)}>CANCEL</button>
+                                    <button class="text-btn danger" on:click={() => restoreArchive(archive.filename)} disabled={restoreLoading}>
+                                        {restoreLoading && restoreLoadingFilename === archive.filename ? "RESTORING..." : "RESTORE"}
+                                    </button>
+                                    <button class="text-btn" on:click={() => (restoreConfirmFilename = null)} disabled={restoreLoading}>CANCEL</button>
                                 </span>
                             {:else}
-                                <button class="text-btn" on:click={() => (restoreConfirmFilename = archive.filename)}>RESTORE</button>
+                                <button class="text-btn" on:click={() => (restoreConfirmFilename = archive.filename)} disabled={restoreLoading}>RESTORE</button>
                             {/if}
                             <button class="text-btn danger" on:click={() => deleteArchive(archive.filename)}>DEL</button>
                         </span>
@@ -525,6 +560,22 @@
         </div>
     {/if}
 </div>
+
+{#if exportLoading || importLoading || archiveLoading || restoreLoading}
+    <div class="loader-overlay">
+        <div class="loader-panel">
+            <CommanderLoader compact={true} label="" detail="" />
+            <h3>
+                {#if exportLoading}EXPORTING JOURNAL
+                {:else if importLoading}IMPORTING JOURNAL
+                {:else if archiveLoading}ARCHIVING JOURNAL
+                {:else if restoreLoading}RESTORING JOURNAL
+                {/if}
+            </h3>
+            <p>Please wait while the operation completes.</p>
+        </div>
+    </div>
+{/if}
 
 <style>
     .journal-view {
@@ -542,42 +593,9 @@
         justify-content: flex-end;
         margin-bottom: 0.3rem;
     }
-    .status-banner {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.45rem 0.7rem;
-        margin-bottom: 0.5rem;
-        font-size: 0.72rem;
-        border-radius: 4px;
-    }
-    .status-banner.info, .status-banner.success {
-        background: rgba(0, 255, 65, 0.06);
-        border: 1px solid rgba(0, 255, 65, 0.15);
-        color: #aaffaa;
-    }
-    .status-banner.error {
-        background: rgba(255, 85, 85, 0.06);
-        border: 1px solid rgba(255, 85, 85, 0.15);
-        color: #ff8888;
-    }
     .status-text {
         flex: 1;
         word-break: break-word;
-    }
-    .status-dismiss {
-        background: none;
-        border: none;
-        color: inherit;
-        cursor: pointer;
-        font-size: 1.3rem;
-        padding: 0 0 0 0.5rem;
-        line-height: 1;
-        opacity: 0.5;
-        flex-shrink: 0;
-    }
-    .status-dismiss:hover {
-        opacity: 1;
     }
     .filter-row {
         display: flex;

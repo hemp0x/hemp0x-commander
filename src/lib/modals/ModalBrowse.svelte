@@ -495,11 +495,11 @@
 <style>
     .modal-backdrop {
         position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85);
-        display: flex; align-items: flex-start; justify-content: center;
-        padding-top: 0.5rem; padding-bottom: 1.5rem; z-index: 200000; backdrop-filter: blur(5px);
+        display: flex; align-items: center; justify-content: center;
+        padding: 0.75rem; z-index: 200000; backdrop-filter: blur(5px); box-sizing: border-box;
     }
     .modal {
-        width: 640px; max-width: 92vw; max-height: calc(100vh - 2rem);
+        width: min(640px, 92vw); max-width: 92vw; max-height: min(44rem, calc(100dvh - 2rem));
         border: 1px solid rgba(0, 255, 65, 0.2); box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
         border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;
         background: rgba(10, 15, 12, 0.98);

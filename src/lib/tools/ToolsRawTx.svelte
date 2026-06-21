@@ -4,6 +4,7 @@
     import { fly } from "svelte/transition";
     import { systemStatus } from "../../stores.js";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
+    import CommanderLoader from "../ui/CommanderLoader.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -235,7 +236,7 @@
             </button>
         {/each}
         <div class="section-tab-spacer"></div>
-        <button class="cyber-btn ghost clear-all-btn" on:click={clearAll}>CLEAR ALL</button>
+        <button class="cyber-btn ghost small" on:click={clearAll}>CLEAR ALL</button>
     </div>
 
     {#key activeSection}
@@ -266,21 +267,26 @@
                         <button
                             class="cyber-btn"
                             on:click={handleDecode}
-                            disabled={decodeLoading || !rawHex.trim()}
+                            disabled={decodeLoading || mempoolLoading || !rawHex.trim()}
                         >
-                            {decodeLoading ? "DECODING..." : "[ DECODE ]"}
+                            {decodeLoading ? "DECODING..." : "DECODE"}
                         </button>
                         <button
                             class="cyber-btn ghost"
                             on:click={handleMempoolCheck}
-                            disabled={mempoolLoading || !rawHex.trim()}
+                            disabled={decodeLoading || mempoolLoading || !rawHex.trim()}
                         >
-                            {mempoolLoading ? "CHECKING..." : "[ MEMPOOL CHECK ]"}
+                            {mempoolLoading ? "CHECKING..." : "MEMPOOL CHECK"}
                         </button>
                         {#if rawHex.trim()}
-                            <button class="cyber-btn ghost" on:click={() => copyToClipboard(rawHex.trim())}>
+                            <button class="cyber-btn ghost" on:click={() => copyToClipboard(rawHex.trim())} disabled={decodeLoading || mempoolLoading}>
                                 COPY RAW
                             </button>
+                        {/if}
+                        {#if decodeLoading || mempoolLoading}
+                            <span class="action-loading-hint">
+                                <CommanderLoader compact={true} label="" detail="" />
+                            </span>
                         {/if}
                     </div>
 
@@ -447,11 +453,11 @@
 
                     <div class="builder-action-row">
                         <button
-                            class="cyber-btn primary"
+                            class="cyber-btn"
                             on:click={handleBuild}
                             disabled={buildLoading}
                         >
-                            {buildLoading ? "BUILDING..." : "[ BUILD UNSIGNED RAW TX ]"}
+                            {buildLoading ? "BUILDING..." : "BUILD UNSIGNED RAW TX"}
                         </button>
                         <button class="cyber-btn ghost" on:click={clearBuilder}>CLEAR BUILDER</button>
                     </div>
@@ -510,6 +516,16 @@
         </div>
     {/key}
 </div>
+
+{#if buildLoading}
+    <div class="loader-overlay">
+        <div class="loader-panel">
+            <CommanderLoader compact={true} label="" detail="" />
+            <h3>BUILDING UNSIGNED TRANSACTION</h3>
+            <p>Please wait while the transaction is constructed.</p>
+        </div>
+    </div>
+{/if}
 
 <style>
     .rawtx-view {
@@ -577,11 +593,6 @@
         flex: 1;
     }
 
-    .clear-all-btn {
-        padding: 0.3rem 0.8rem;
-        font-size: 0.65rem;
-    }
-
     .section-body {
         flex: 1;
         overflow-y: auto;
@@ -643,6 +654,12 @@
         display: flex;
         gap: 0.5rem;
         flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .action-loading-hint {
+        display: inline-flex;
+        align-items: center;
     }
 
     .cyber-btn {
@@ -683,20 +700,6 @@
         color: #fff;
         box-shadow: none;
         background: rgba(255, 255, 255, 0.05);
-    }
-
-    .cyber-btn.primary {
-        background: rgba(255, 170, 0, 0.1);
-        border-color: #ffaa00;
-        color: #ffaa00;
-        padding: 0.5rem 1.2rem;
-        font-size: 0.75rem;
-    }
-
-    .cyber-btn.primary:hover:not(:disabled) {
-        background: #ffaa00;
-        color: #000;
-        box-shadow: 0 0 15px rgba(255, 170, 0, 0.4);
     }
 
     .cyber-btn.small {

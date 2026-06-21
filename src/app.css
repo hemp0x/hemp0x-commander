@@ -391,6 +391,66 @@ button:active {
   opacity: 1;
 }
 
+/* --- SMALL WINDOW HELPERS --- */
+@media (max-height: 700px), (max-width: 720px) {
+  .slab-body {
+    padding: 1rem;
+    gap: 0.9rem;
+  }
+
+  .slab-footer {
+    padding: 1rem;
+  }
+}
+
+/* --- GLOBAL LOADER OVERLAY --- */
+.loader-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+  backdrop-filter: blur(3px);
+}
+
+.loader-panel {
+  background: rgba(8, 10, 8, 0.98);
+  border: 1px solid rgba(0, 255, 65, 0.25);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  text-align: center;
+  max-width: 22rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85), 0 0 36px rgba(0, 255, 65, 0.12);
+}
+
+.loader-panel h3 {
+  color: var(--color-primary);
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+}
+
+.loader-panel p {
+  color: #aaa;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+/* --- UTILITY ROWS --- */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.action-row button,
+.action-row .cyber-btn {
+  min-height: 2rem;
+}
+
 /* --- PRIVACY TOGGLES (EYE ICONS) --- */
 .btn-eye {
   background: transparent !important;

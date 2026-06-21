@@ -1391,11 +1391,10 @@
         aria-modal="true"
         aria-labelledby="cons-preview-title"
         tabindex="0"
-        on:click={cancelConsolidation}
-        on:keydown={(e) => e.key === "Escape" && cancelConsolidation()}
+        on:keydown={(e) => e.key === "Escape" && !broadcasting && cancelConsolidation()}
     >
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-        <div class="modal-box" role="document" on:click|stopPropagation>
+        <div class="modal-staged" role="document" on:click|stopPropagation>
             <div class="modal-header">
                 <h2 id="cons-preview-title">CONSOLIDATION REVIEW</h2>
             </div>
@@ -1456,11 +1455,11 @@
                 {/if}
             </div>
 
-            <div class="modal-footer">
-                <button class="btn-cancel" on:click={cancelConsolidation} disabled={broadcasting}>
+            <div class="modal-actions">
+                <button class="cyber-btn ghost" on:click={cancelConsolidation} disabled={broadcasting}>
                     CANCEL
                 </button>
-                <button class="btn-confirm" on:click={executeConsolidation} disabled={broadcasting}>
+                <button class="cyber-btn" on:click={executeConsolidation} disabled={broadcasting}>
                     {broadcasting ? "BROADCASTING..." : "CONFIRM CONSOLIDATION"}
                 </button>
             </div>
@@ -1489,11 +1488,10 @@
         aria-modal="true"
         aria-labelledby="cons-plan-title"
         tabindex="0"
-        on:click={() => (showPlanModal = false)}
-        on:keydown={(e) => e.key === "Escape" && (showPlanModal = false)}
+        on:keydown={(e) => e.key === "Escape" && !multiRoundRunning && (showPlanModal = false)}
     >
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-        <div class="modal-box plan-modal" role="document" on:click|stopPropagation>
+        <div class="modal-staged wide" role="document" on:click|stopPropagation>
             <div class="modal-header">
                 <h2 id="cons-plan-title">CONSOLIDATION PLAN</h2>
             </div>
@@ -1582,11 +1580,11 @@
                 {/if}
             </div>
 
-            <div class="modal-footer">
-                <button class="btn-cancel" on:click={() => (showPlanModal = false)}>
+            <div class="modal-actions">
+                <button class="cyber-btn ghost" on:click={() => (showPlanModal = false)} disabled={multiRoundRunning}>
                     CLOSE
                 </button>
-                <button class="btn-confirm" on:click={startMultiRound}>
+                <button class="cyber-btn" on:click={startMultiRound} disabled={multiRoundRunning}>
                     CONFIRM START
                 </button>
             </div>
@@ -1965,19 +1963,6 @@
         padding: 1rem;
     }
 
-    .modal-box {
-        background: linear-gradient(180deg, #0a0a0a 0%, #121212 100%);
-        border: 1px solid rgba(0, 255, 65, 0.3);
-        border-radius: 8px;
-        width: 500px;
-        max-width: 90vw;
-        max-height: 80vh;
-        overflow-y: auto;
-        box-shadow:
-            0 0 40px rgba(0, 255, 65, 0.15),
-            0 20px 60px rgba(0, 0, 0, 0.8);
-    }
-
     .modal-header {
         background: rgba(0, 255, 65, 0.08);
         padding: 0.8rem 1.2rem;
@@ -1985,14 +1970,6 @@
         display: flex;
         align-items: center;
         gap: 0.6rem;
-    }
-
-    .modal-header h2 {
-        margin: 0;
-        font-size: 0.9rem;
-        color: var(--color-primary);
-        letter-spacing: 2px;
-        font-family: var(--font-mono);
     }
 
     .modal-body {
@@ -2103,63 +2080,6 @@
         color: #ffdd00;
     }
 
-    .modal-footer {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.8rem;
-        padding: 0.8rem 1.2rem;
-        background: rgba(0, 0, 0, 0.3);
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .btn-cancel,
-    .btn-confirm {
-        flex: 1;
-        padding: 0.55rem 0.6rem;
-        font-size: 0.72rem;
-        font-weight: bold;
-        letter-spacing: 0.8px;
-        border-radius: 4px;
-        cursor: pointer;
-        transition: all 0.2s;
-        font-family: var(--font-mono);
-        white-space: nowrap;
-        min-width: 0;
-    }
-
-    .btn-cancel {
-        background: transparent;
-        border: 1px solid #666;
-        color: #888;
-    }
-
-    .btn-cancel:hover:not(:disabled) {
-        border-color: #ff4444;
-        color: #ff4444;
-    }
-
-    .btn-cancel:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-    }
-
-    .btn-confirm {
-        background: rgba(0, 255, 65, 0.1);
-        border: 1px solid var(--color-primary);
-        color: var(--color-primary);
-    }
-
-    .btn-confirm:hover:not(:disabled) {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
-    }
-
-    .btn-confirm:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-    }
-
     .warning-banner {
         background: rgba(255, 170, 0, 0.12);
         border: 1px solid rgba(255, 170, 0, 0.3);
@@ -2170,11 +2090,6 @@
         flex-shrink: 0;
         font-family: var(--font-mono);
         letter-spacing: 0.3px;
-    }
-
-    .plan-modal {
-        width: 620px;
-        max-width: 90vw;
     }
 
     .plan-rounds-section {

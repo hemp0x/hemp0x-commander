@@ -17,6 +17,7 @@
   import ContentLibraryPanel from "./content/ContentLibraryPanel.svelte";
   import IpfsHub from "./content/IpfsHub.svelte";
   import SystemHub from "./content/SystemHub.svelte";
+  import CommanderLoader from "./ui/CommanderLoader.svelte";
   import { nodeStatus, daemonRuntime } from "../stores.js";
   import { addToastNotification } from "./stores/notifications.js";
   import { cidViewerTarget, ipfsHubSection } from "./stores/contentLibrary.js";
@@ -185,21 +186,25 @@
     class="modal-overlay"
     role="button"
     tabindex="0"
-    on:click|self={closeModal}
     on:keydown={(e) => e.key === "Escape" && closeModal()}
   >
-    <div class="modal modal-frame">
-      <h3 class="modal-title neon-text">{modalTitle}</h3>
-      <p
-        class="modal-text"
-        style="font-size: 1rem; line-height: 1.6; color: #ddd; margin-bottom: 2rem;"
-      >
-        {modalMessage}
-      </p>
-      <div
-        class="modal-actions"
-        style="justify-content: space-between; gap: 1rem; width: 100%;"
-      >
+    <div
+      class="modal-staged compact"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      on:click|stopPropagation
+      on:keydown|stopPropagation={() => {}}
+    >
+      <div class="modal-header">
+        <h3>{modalTitle}</h3>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0; color:#ccc; font-size:0.8rem; line-height:1.5;">
+          {modalMessage}
+        </p>
+      </div>
+      <div class="modal-actions">
         {#each modalButtons as btn}
           <button
             class="cyber-btn {btn.style === 'ghost'
@@ -207,7 +212,6 @@
               : ''} {btn.style === 'danger'
               ? 'danger ghost'
               : ''} {btn.style === 'primary' ? 'primary-glow' : ''}"
-            style="flex: 1;"
             on:click={btn.onClick}
           >
             {btn.label}
@@ -218,22 +222,16 @@
   </div>
 {/if}
 
-<!-- ENCRYPTION INPUT MODAL -->
-
 <!-- PROCESSING OVERLAY -->
 {#if isProcessing}
-  <div class="modal-overlay" style="z-index: 999999;">
-    <div class="modal-frame" style="text-align:center; max-width: 400px;">
-      <h3
-        class="neon-text"
-        style="color:var(--color-primary); margin:0 0 1rem 0;"
-      >
-        PLEASE WAIT
-      </h3>
-      <p style="color:#aaa; margin:0;">{processingMessage}</p>
-      <p
-        style="color:#666; font-size:0.75rem; margin-top:1.5rem; line-height:1.4;"
-      >
+  <div class="loader-overlay">
+    <div class="loader-panel">
+      <div style="display:flex; justify-content:center; margin-bottom:0.75rem;">
+        <CommanderLoader compact={true} label="" detail="" />
+      </div>
+      <h3>PLEASE WAIT</h3>
+      <p>{processingMessage}</p>
+      <p style="color:#666; font-size:0.7rem; margin-top:0.75rem; line-height:1.4;">
         App will respond once the command is done.
       </p>
     </div>

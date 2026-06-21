@@ -1,5 +1,6 @@
 <script>
     import { fly, fade } from "svelte/transition";
+    import "../../components.css";
 
     export let isOpen = false;
     export let type = "";
@@ -131,12 +132,12 @@
             </div>
 
             <div class="confirm-footer">
-                <button class="ghost-btn" on:click={close} disabled={isBroadcasting}>
+                <button class="cyber-btn ghost" on:click={close} disabled={isBroadcasting}>
                     CANCEL
                 </button>
                 <button
-                    class="neon-btn sm"
-                    class:danger={isPreview && previewDetails.is_irreversible}
+                    class="cyber-btn"
+                    class:btn-danger={isPreview && previewDetails.is_irreversible}
                     on:click={confirm}
                     disabled={isBroadcasting}
                 >
@@ -154,7 +155,10 @@
 <style>
     .confirm-modal {
         width: 100%;
-        max-width: 420px;
+        max-width: min(420px, 92vw);
+        max-height: min(44rem, calc(100dvh - 2rem));
+        display: flex;
+        flex-direction: column;
     }
     .glass-modal {
         background: rgba(10, 15, 12, 0.95);
@@ -175,8 +179,8 @@
         background: rgba(0, 255, 65, 0.05);
     }
     .confirm-body {
-        padding: 1.5rem;
-        max-height: 60vh;
+        padding: 1rem 1.25rem;
+        max-height: min(44rem, calc(100dvh - 10rem));
         overflow-y: auto;
     }
     .confirm-row {
@@ -238,72 +242,31 @@
     }
     .confirm-footer {
         display: flex;
-        gap: 1rem;
-        padding: 1.5rem;
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
         background: rgba(0, 0, 0, 0.3);
     }
     .confirm-footer button {
         flex: 1;
     }
-    .neon-btn {
-        position: relative;
-        background: linear-gradient(
-            180deg,
-            rgba(0, 255, 65, 0.15) 0%,
-            rgba(0, 255, 65, 0.05) 100%
-        );
-        border: 1px solid var(--color-primary);
-        color: var(--color-primary);
-        padding: 0.8rem 2rem;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 2px;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.2s;
-        overflow: hidden;
-    }
-    .neon-btn:hover:not(:disabled) {
-        background: var(--color-primary);
-        color: #000;
-        box-shadow:
-            0 0 20px var(--color-primary),
-            0 0 30px rgba(0, 255, 65, 0.3);
-        transform: translateY(-1px);
-    }
-    .neon-btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-    }
-    .neon-btn.sm {
-        padding: 0.6rem 1.5rem;
-    }
-    .neon-btn.danger {
-        border-color: #ff6666;
-        color: #ff6666;
-        background: linear-gradient(
-            180deg,
-            rgba(255, 68, 68, 0.15) 0%,
-            rgba(255, 68, 68, 0.05) 100%
-        );
-    }
-    .ghost-btn {
-        background: transparent;
-        border: 1px solid #444;
-        color: #888;
-        padding: 0.6rem 1.5rem;
-        font-size: 0.7rem;
-        letter-spacing: 1px;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.15s;
-    }
-    .ghost-btn:hover:not(:disabled) {
-        border-color: #888;
-        color: #fff;
-    }
-    .ghost-btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
+    @media (max-width: 520px) {
+        .confirm-header {
+            padding: 0.8rem 1rem;
+            font-size: 0.8rem;
+        }
+        .confirm-body {
+            padding: 0.8rem 1rem;
+        }
+        .confirm-footer {
+            padding: 0.8rem 1rem;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .confirm-row {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.2rem;
+            padding: 0.5rem 0;
+        }
     }
 </style>

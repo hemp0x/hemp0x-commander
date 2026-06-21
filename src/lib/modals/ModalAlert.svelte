@@ -61,8 +61,9 @@
         backdrop-filter: blur(2px);
     }
     .modal-frame {
-        width: 350px;
+        width: min(350px, 90vw);
         max-width: 90vw;
+        max-height: min(40rem, calc(100dvh - 2rem));
         display: flex;
         flex-direction: column;
     }
@@ -80,15 +81,27 @@
         gap: 0.5rem;
     }
     .modal-body {
-        padding: 1.5rem;
+        padding: 1.25rem;
         text-align: center;
         color: #ddd;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         line-height: 1.5;
+        overflow-y: auto;
+        max-height: min(36rem, calc(100dvh - 10rem));
     }
     .modal-actions {
-        padding: 1rem;
+        padding: 0.85rem 1rem;
         display: flex;
         justify-content: center;
+    }
+
+    @media (max-width: 520px) {
+        .modal-header h3 {
+            font-size: 1rem;
+        }
+        .modal-body {
+            padding: 1rem;
+            font-size: 0.85rem;
+        }
     }
 </style>

@@ -512,7 +512,8 @@
 <style>
     .detail-modal {
         width: 100%;
-        max-width: 550px;
+        max-width: min(550px, 92vw);
+        max-height: min(44rem, calc(100dvh - 2rem));
         position: relative;
         background: rgba(10, 15, 12, 0.95);
         border: 1px solid rgba(0, 255, 65, 0.25);
@@ -520,7 +521,9 @@
         box-shadow:
             0 0 80px rgba(0, 0, 0, 0.8),
             0 0 40px rgba(0, 255, 65, 0.1);
-        overflow: visible;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
     }
     .modal-container {
         display: flex;
@@ -528,6 +531,8 @@
         gap: 1rem;
         max-width: 100vw;
         justify-content: center;
+        padding: 0.75rem;
+        box-sizing: border-box;
     }
     .nav-arrow {
         flex-shrink: 0;
@@ -765,4 +770,20 @@
         padding: 0.05rem 0.3rem; margin-left: 0.3rem; vertical-align: middle; letter-spacing: 0.5px;
     }
 
+    @media (max-width: 600px) {
+        .modal-container {
+            gap: 0.25rem;
+            padding: 0.5rem;
+        }
+        .nav-arrow {
+            font-size: 1.4rem;
+            padding: 0.25rem;
+        }
+        .detail-header-bar .detail-title {
+            font-size: 0.8rem;
+        }
+        .detail-body-scroll {
+            padding: 0.4rem 0.6rem 0.6rem;
+        }
+    }
 </style>

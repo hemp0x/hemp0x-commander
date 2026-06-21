@@ -1945,7 +1945,8 @@
 
     /* --- UTXO MODAL --- */
     .utxo-overlay {
-        padding: 0.5rem;
+        display: block;
+        padding: 0;
         overflow: hidden;
     }
     .utxo-header {
@@ -1956,9 +1957,14 @@
         flex-shrink: 0;
     }
     .utxo-modal {
-        width: min(56rem, calc(100vw - 1rem));
-        height: min(42rem, calc(100dvh - 1rem));
-        max-height: calc(100dvh - 1rem);
+        position: fixed;
+        left: 50%;
+        top: clamp(5rem, 12vh, 8rem);
+        bottom: 2.75rem;
+        transform: translateX(-50%);
+        width: min(56rem, calc(100vw - 1.25rem));
+        height: auto;
+        max-height: none;
         min-height: 0;
     }
     .utxo-body {
@@ -1969,6 +1975,7 @@
     }
     .utxo-list {
         flex: 1;
+        height: 100%;
         overflow: auto;
         padding: 0;
         min-height: 0;
@@ -1993,6 +2000,10 @@
         font-size: 0.78rem;
     }
     .utxo-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: rgba(5, 8, 5, 0.96);
         text-align: left;
         color: #666;
         padding: 0.5rem;
@@ -2081,13 +2092,10 @@
     }
 
     @media (max-width: 720px) {
-        .utxo-overlay {
-            padding: 0.35rem;
-        }
         .utxo-modal {
             width: calc(100vw - 0.7rem);
-            height: calc(100dvh - 0.7rem);
-            max-height: calc(100dvh - 0.7rem);
+            top: 5rem;
+            bottom: 2.25rem;
         }
         .utxo-header {
             flex-direction: column;
@@ -2112,6 +2120,10 @@
         }
     }
     @media (max-height: 600px) {
+        .utxo-modal {
+            top: 4.25rem;
+            bottom: 1.5rem;
+        }
         .utxo-header {
             padding: 0.55rem 0.75rem;
         }

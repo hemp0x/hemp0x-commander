@@ -262,7 +262,7 @@
                 <div class="vault-rings" aria-hidden="true">
                     <span></span>
                     <span></span>
-                    <i>R</i>
+                    <i>H</i>
                 </div>
                 <strong>LOCAL CHAIN INTELLIGENCE</strong>
                 <p>

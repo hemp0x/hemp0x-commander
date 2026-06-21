@@ -618,6 +618,7 @@
     .addr-grid-header {
         display: grid;
         grid-template-columns: minmax(110px, 180px) minmax(240px, 1fr) 140px 112px;
+        column-gap: 1rem;
         padding: 0.6rem 1.2rem;
         border-bottom: 1px solid rgba(0, 255, 65, 0.15);
         background: rgba(0, 255, 65, 0.02);
@@ -647,6 +648,7 @@
     .data-row {
         display: grid;
         grid-template-columns: minmax(110px, 180px) minmax(240px, 1fr) 140px 112px;
+        column-gap: 1rem;
         padding: 0.8rem 1.2rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         align-items: center;

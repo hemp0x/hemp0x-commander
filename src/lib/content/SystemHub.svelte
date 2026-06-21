@@ -555,16 +555,17 @@
 <div class="system-hub" in:fade={{ duration: 200 }}>
   <header class="hub-header">
     <div class="hub-tabs">
-      {#each ["overview", "data", "config", "network", "logs", "repair"] as tab}
-        <button
-          class="hub-tab"
-          class:active={activeSection === tab}
-          on:click={() => (activeSection = tab)}
-        >
-          {tab.toUpperCase()}
-        </button>
-      {/each}
-      <div class="hub-tab-spacer"></div>
+      <nav class="hub-tab-list" aria-label="System sections">
+        {#each ["overview", "data", "config", "network", "logs", "repair"] as tab}
+          <button
+            class="hub-tab"
+            class:active={activeSection === tab}
+            on:click={() => (activeSection = tab)}
+          >
+            {tab.toUpperCase()}
+          </button>
+        {/each}
+      </nav>
       <HelpHitbox title="System Hub">
         <p><strong>Overview</strong> — App version, binary status, daemon settings, and Core software management.</p>
         <p><strong>Data</strong> — Manage the Core data directory. Commander settings live inside the active data folder. Use "Choose Data Folder" to change location. If data exists, you can copy it to the new location or start fresh.</p>
@@ -1129,37 +1130,52 @@ rpcallowip=127.0.0.1
     grid-template-rows: auto 1fr;
   }
   .hub-header {
-    padding: 0.25rem 0;
-    margin-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(0, 255, 65, 0.08);
+    padding: 0;
+    margin-bottom: 0.35rem;
   }
   .hub-tabs {
     display: flex;
-    gap: 1px;
     align-items: center;
+    gap: 0.35rem;
+    padding: 0.22rem;
+    border: 1px solid rgba(0, 255, 65, 0.1);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.34);
   }
-  .hub-tab-spacer {
-    flex: 1;
+  .hub-tab-list {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 0.25rem;
   }
   .hub-tab {
+    min-width: 0;
+    padding: 0.38rem 0.65rem;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 4px;
     background: transparent;
-    border: none;
-    color: #555;
-    padding: 0.5rem 1.2rem;
-    font-size: 0.7rem;
-    letter-spacing: 1.5px;
-    border-bottom: 2px solid transparent;
+    color: rgba(255, 255, 255, 0.48);
+    font-size: 0.68rem;
+    letter-spacing: 0.75px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     cursor: pointer;
     transition: all 0.2s;
     font-weight: 600;
   }
   .hub-tab:hover {
-    color: #aaa;
-    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(0, 255, 65, 0.16);
+    background: rgba(0, 255, 65, 0.025);
+    color: rgba(255, 255, 255, 0.78);
+    box-shadow: none;
+    transform: none;
   }
   .hub-tab.active {
+    border-color: rgba(0, 255, 65, 0.32);
+    background: rgba(0, 255, 65, 0.07);
     color: var(--color-primary);
-    border-bottom-color: var(--color-primary);
   }
   .hub-body {
     min-height: 0;
@@ -1179,6 +1195,12 @@ rpcallowip=127.0.0.1
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  @media (max-width: 620px) {
+    .hub-tab-list {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 
   /* === GRID / CARDS === */

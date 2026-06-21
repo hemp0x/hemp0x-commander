@@ -143,6 +143,7 @@
           {:else if activeSubTab === "HISTORY"}
             <ToolsHistory
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
+              on:switch={(e) => (activeSubTab = e.detail)}
             />
           {:else if activeSubTab === "JOURNAL"}
             <ToolsJournal

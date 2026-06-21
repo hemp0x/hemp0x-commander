@@ -695,21 +695,23 @@
       daemonStatusClearTimer = null;
     }
     daemonOperation = "starting";
-    daemonStatusMessage = "Starting daemon...";
+    daemonStatusMessage = "Starting";
     daemonPollProgress = "";
     addRuntimeNotification("Daemon start requested", "", "info");
     try {
       await core.invoke("start_node");
-      daemonStatusMessage = "Waiting for daemon to become ready...";
-      const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 25000 });
+      daemonStatusMessage = "Starting";
+      const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 90000 });
       daemonRuntime.update((d) => ({ ...d, readiness }));
       daemonPollProgress = readiness.ready
         ? `Ready in ${(readiness.elapsed_ms / 1000).toFixed(1)}s (${readiness.retries} polls)`
-        : `Not ready after ${(readiness.elapsed_ms / 1000).toFixed(1)}s`;
+        : "Core is still starting. Commander will keep checking status.";
       if (!readiness.ready) {
-        lastError = "Daemon did not become ready after start: " + (readiness.rpc_error || "timeout");
-        addRuntimeNotification("Daemon readiness failed", lastError, "error");
+        daemonStatusMessage = "Still starting";
+        lastError = readiness.rpc_error || "Core has not answered RPC yet.";
+        addRuntimeNotification("Daemon still starting", lastError, "warning");
       } else {
+        daemonStatusMessage = "Ready";
         lastDaemonStartSuccessAt = Date.now();
         await refreshRpcAuthStatus();
         addRuntimeNotification("Daemon started", "", "success");
@@ -737,14 +739,14 @@
       daemonStatusClearTimer = null;
     }
     daemonOperation = "stopping";
-    daemonStatusMessage = "Stopping daemon...";
+    daemonStatusMessage = "Stopping";
     daemonPollProgress = "";
     addRuntimeNotification("Daemon stop requested", "", "info");
     try {
       await core.invoke("stop_node");
       await refreshRpcAuthStatus();
       addRuntimeNotification("Daemon stopped", "", "info");
-      daemonStatusMessage = "Daemon stopped";
+      daemonStatusMessage = "Stopped";
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to stop node");
@@ -1214,28 +1216,27 @@
             </div>
 
             <div class="panel-actions">
-              {#if daemonStatusMessage}
-                <span class="daemon-status-text">{daemonStatusMessage}</span>
-                {#if daemonPollProgress}
-                  <span class="daemon-poll-text">{daemonPollProgress}</span>
-                {/if}
-              {/if}
-              {#if daemonOperation !== "idle"}
-                <span class="daemon-loader" title={daemonOperation === "starting" ? "Starting daemon" : "Stopping daemon"}>
-                  <CommanderLoader compact={true} label="" detail="" />
-                  <span class="daemon-loader-label">{daemonOperation === "starting" ? "STARTING..." : "STOPPING..."}</span>
-                </span>
-              {/if}
               <button
                 class="btn-xs"
                 on:click={handleStart}
                 disabled={daemonOperation !== "idle"}
-              >{daemonOperation === "starting" ? "STARTING..." : "START"}</button>
+              >START</button>
               <button
                 class="btn-xs ghost"
                 on:click={handleStop}
                 disabled={daemonOperation !== "idle"}
-              >{daemonOperation === "stopping" ? "STOPPING..." : "STOP"}</button>
+              >STOP</button>
+              {#if daemonOperation !== "idle"}
+                <span
+                  class="daemon-loader"
+                  title={daemonPollProgress || (daemonOperation === "starting" ? "Waiting for daemon to become ready" : "Stopping daemon")}
+                >
+                  <CommanderLoader compact={true} label="" detail="" />
+                  <span class="daemon-loader-label">{daemonOperation === "starting" ? "STARTING" : "STOPPING"}</span>
+                </span>
+              {:else if daemonStatusMessage}
+                <span class="daemon-status-text" title={daemonPollProgress || daemonStatusMessage}>{daemonStatusMessage}</span>
+              {/if}
             </div>
           </div>
 
@@ -2247,6 +2248,8 @@
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     gap: 0.8rem;
+    align-items: center;
+    min-height: 3.1rem;
   }
   .panel-actions.right {
     justify-content: flex-end;
@@ -2256,7 +2259,9 @@
     font-size: 0.65rem;
     color: #ffa500;
     letter-spacing: 0.5px;
-    flex: 1;
+    margin-left: auto;
+    flex: 1 1 auto;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2274,7 +2279,9 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    flex-shrink: 0;
+    margin-left: auto;
+    min-width: 0;
+    flex-shrink: 1;
   }
   .daemon-loader-label {
     font-size: 0.6rem;
@@ -2296,6 +2303,7 @@
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s ease;
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.16);
   }
   .btn-xs:hover {
     background: rgba(0, 255, 65, 0.25);
@@ -2305,6 +2313,7 @@
     background: transparent;
     border-color: rgba(255, 255, 255, 0.2);
     color: var(--color-muted);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   }
   .btn-xs.ghost:hover {
     border-color: #ff4444;
@@ -3119,7 +3128,11 @@
       padding: 0 1rem;
     }
     .trust-strip {
-      display: none;
+      min-height: 22px;
+    }
+    .ts-item {
+      padding: 0.18rem 0.55rem;
+      font-size: 0.6rem;
     }
     .row-top {
       min-height: 100px;

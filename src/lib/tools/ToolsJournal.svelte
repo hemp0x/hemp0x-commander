@@ -315,7 +315,6 @@
 
     onMount(() => {
         loadEntries();
-        loadArchives();
     });
 </script>
 
@@ -326,9 +325,9 @@
                 <p>The journal is a local activity log of previews, broadcasts, asset operations, and operator actions.</p>
                 <p>Deleting entries only removes local records in Commander. It does not cancel or alter on-chain transactions.</p>
                 <p>Use IMPORT to merge entries from an exported journal file (duplicates by ID are skipped).</p>
-                <p>Use ARCHIVE to save the current journal to a timestamped backup and start fresh.</p>
                 <p>Journal entries can include non-secret context: network, wallet name, vault display name.</p>
-                <p>Toggle EDIT MODE to select and delete multiple entries at once.</p>
+                <p>Toggle EDIT to select and delete multiple entries at once.</p>
+                <p>The journal is stored locally in the Commander app data folder as tx_journal.json.</p>
             </HelpHitbox>
         </div>
 
@@ -363,22 +362,16 @@
                 </select>
             </div>
             <div class="filter-group actions-right">
-                <button class="cyber-btn ghost" on:click={showJournalPath} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>PATH</button>
                 <button class="cyber-btn ghost" on:click={exportJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {exportLoading ? "EXPORTING..." : "EXPORT"}
                 </button>
                 <button class="cyber-btn ghost" on:click={importMergeJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {importLoading ? "IMPORTING..." : "IMPORT"}
                 </button>
-                {#if !archiveConfirm}
-                    <button class="cyber-btn ghost" on:click={() => (archiveConfirm = true)} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>ARCHIVE</button>
-                {:else}
-                    <span class="confirm-action-row">
-                        <button class="cyber-btn" on:click={archiveJournal} disabled={archiveLoading}>
-                            {archiveLoading ? "ARCHIVING..." : "CONFIRM"}
-                        </button>
-                        <button class="cyber-btn ghost" on:click={() => (archiveConfirm = false)} disabled={archiveLoading}>CANCEL</button>
-                    </span>
+                {#if entries.length > 0 && !loading}
+                    <button class="cyber-btn ghost" on:click={toggleEditMode} class:active={editMode}>
+                        {editMode ? "DONE" : "EDIT"}
+                    </button>
                 {/if}
                 <button class="cyber-btn" on:click={loadEntries} disabled={loading || exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {loading ? "LOADING..." : "REFRESH"}
@@ -386,27 +379,22 @@
             </div>
         </div>
 
-        {#if entries.length > 0 && !loading}
+        {#if editMode && entries.length > 0 && !loading}
             <div class="edit-toolbar">
-                <button class="cyber-btn ghost" on:click={toggleEditMode} class:active={editMode}>
-                    {editMode ? "EXIT EDIT" : "EDIT"}
-                </button>
-                {#if editMode}
-                    <span class="selection-info">
-                        {selectionCount} of {allVisibleIds.length} selected
+                <span class="selection-info">
+                    {selectionCount} of {allVisibleIds.length} selected
+                </span>
+                <button class="text-btn" on:click={selectAll}>SELECT ALL</button>
+                <button class="text-btn" on:click={deselectAll}>DESELECT ALL</button>
+                {#if !bulkDeleteConfirm}
+                    <button class="text-btn danger" on:click={() => (bulkDeleteConfirm = true)} disabled={selectionCount === 0}>
+                        DELETE SELECTED
+                    </button>
+                {:else}
+                    <span class="confirm-action-row">
+                        <button class="text-btn danger" on:click={bulkDelete}>CONFIRM DELETE</button>
+                        <button class="text-btn" on:click={() => (bulkDeleteConfirm = false)}>CANCEL</button>
                     </span>
-                    <button class="text-btn" on:click={selectAll}>SELECT ALL</button>
-                    <button class="text-btn" on:click={deselectAll}>DESELECT ALL</button>
-                    {#if !bulkDeleteConfirm}
-                        <button class="text-btn danger" on:click={() => (bulkDeleteConfirm = true)} disabled={selectionCount === 0}>
-                            DELETE SELECTED
-                        </button>
-                    {:else}
-                        <span class="confirm-action-row">
-                            <button class="text-btn danger" on:click={bulkDelete}>CONFIRM DELETE</button>
-                            <button class="text-btn" on:click={() => (bulkDeleteConfirm = false)}>CANCEL</button>
-                        </span>
-                    {/if}
                 {/if}
             </div>
         {/if}
@@ -426,9 +414,13 @@
                         <tr>
                             {#if editMode}
                                 <th class="check-col">
-                                    <button type="button" class="check-btn" on:click={toggleSelectAll}>
-                                        {allVisibleSelected ? "&#x2612;" : "&#x2610;"}
-                                    </button>
+                                    <input
+                                        type="checkbox"
+                                        class="journal-check"
+                                        checked={allVisibleSelected}
+                                        on:change={toggleSelectAll}
+                                        aria-label="Select all visible journal entries"
+                                    />
                                 </th>
                             {/if}
                             <th>STATUS</th>
@@ -437,7 +429,6 @@
                             <th>TXID</th>
                             <th>CTX</th>
                             <th>UPDATED</th>
-                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -445,9 +436,13 @@
                             <tr class="journal-row" class:expanded={expandedEntry === entry.id} class:selected={selectedIds.has(entry.id)}>
                                 {#if editMode}
                                     <td class="check-col">
-                                        <button type="button" class="check-btn" on:click={() => toggleSelectEntry(entry.id)}>
-                                            {selectedIds.has(entry.id) ? "&#x2612;" : "&#x2610;"}
-                                        </button>
+                                        <input
+                                            type="checkbox"
+                                            class="journal-check"
+                                            checked={selectedIds.has(entry.id)}
+                                            on:change={() => toggleSelectEntry(entry.id)}
+                                            aria-label={`Select journal entry ${entry.id}`}
+                                        />
                                     </td>
                                 {/if}
                                 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -466,22 +461,10 @@
                                     {/if}
                                 </td>
                                 <td class="time-cell" on:click={() => toggleDetails(entry.id)}>{formatTime(entry.updated_at)}</td>
-                                <td class="action-cell">
-                                    {#if !editMode}
-                                        {#if deleteConfirmId === entry.id}
-                                            <span class="confirm-delete-row">
-                                                <button class="text-btn danger" on:click={() => deleteEntry(entry.id)}>YES</button>
-                                                <button class="text-btn" on:click={() => (deleteConfirmId = null)}>NO</button>
-                                            </span>
-                                        {:else}
-                                            <button class="text-btn danger" on:click={() => (deleteConfirmId = entry.id)} title="Delete entry">DEL</button>
-                                        {/if}
-                                    {/if}
-                                </td>
                             </tr>
                             {#if expandedEntry === entry.id}
                                 <tr class="details-row">
-                                    <td colspan={editMode ? 8 : 7}>
+                                    <td colspan={editMode ? 7 : 6}>
                                         <div class="details-panel">
                                             <div class="detail-line"><span class="detail-key">ID:</span><span class="detail-value mono">{entry.id}</span></div>
                                             <div class="detail-line"><span class="detail-key">Created:</span><span class="detail-value">{formatTime(entry.created_at)}</span></div>
@@ -531,34 +514,6 @@
         </div>
     {/if}
 
-    {#if archives.length > 0}
-        <div class="archives-section">
-            <div class="archives-header">
-                <span class="filter-group-label">Archives ({archives.length})</span>
-            </div>
-            <div class="archives-list">
-                {#each archives as archive}
-                    <div class="archive-row">
-                        <span class="archive-name mono">{archive.filename}</span>
-                        <span class="archive-meta">{archive.entry_count} entries &middot; {formatSize(archive.size_bytes)} &middot; {archive.created_at}</span>
-                        <span class="archive-actions">
-                            {#if restoreConfirmFilename === archive.filename}
-                                <span class="confirm-action-row">
-                                    <button class="text-btn danger" on:click={() => restoreArchive(archive.filename)} disabled={restoreLoading}>
-                                        {restoreLoading && restoreLoadingFilename === archive.filename ? "RESTORING..." : "RESTORE"}
-                                    </button>
-                                    <button class="text-btn" on:click={() => (restoreConfirmFilename = null)} disabled={restoreLoading}>CANCEL</button>
-                                </span>
-                            {:else}
-                                <button class="text-btn" on:click={() => (restoreConfirmFilename = archive.filename)} disabled={restoreLoading}>RESTORE</button>
-                            {/if}
-                            <button class="text-btn danger" on:click={() => deleteArchive(archive.filename)}>DEL</button>
-                        </span>
-                    </div>
-                {/each}
-            </div>
-        </div>
-    {/if}
 </div>
 
 {#if exportLoading || importLoading || archiveLoading || restoreLoading}
@@ -745,21 +700,12 @@
     .ctx-none {
         color: #444;
     }
-    .check-btn {
-        background: none;
-        border: none;
+    .journal-check {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--color-primary);
         cursor: pointer;
-        font-size: 1.1rem;
-        color: var(--color-primary);
-        padding: 0;
-        line-height: 1;
-    }
-    .check-btn:hover {
-        color: #fff;
-    }
-    .action-cell {
-        text-align: center;
-        width: 50px;
+        vertical-align: middle;
     }
     .details-row td {
         padding: 0;

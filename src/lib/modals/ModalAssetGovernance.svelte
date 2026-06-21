@@ -19,6 +19,10 @@
         dispatch("back");
     }
 
+    function openRewards() {
+        dispatch("openRewards");
+    }
+
     let activeTab = "transfer"; // transfer, dividends, lock
     let newOwnerAddress = "";
 
@@ -429,11 +433,12 @@
                 </p>
 
                 <div class="coming-soon">
-                    <p>Feature Coming Soon</p>
-                    <small
-                        >Snapshot and Payout logic requires backend
-                        update.</small
-                    >
+                    <p>Feature coming soon.</p>
+                    <small>
+                        For now use
+                        <button type="button" class="inline-link" on:click={openRewards}>Advanced / Rewards</button>
+                        or the dividends function in WebCom.
+                    </small>
                 </div>
             </div>
         {:else if activeTab === "lock"}
@@ -771,6 +776,16 @@
     .coming-soon small {
         font-size: 0.62rem;
         color: #666;
+    }
+    .inline-link {
+        border: 0;
+        background: transparent;
+        color: var(--color-primary);
+        font: inherit;
+        padding: 0;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
     }
 
     .gov-panel {

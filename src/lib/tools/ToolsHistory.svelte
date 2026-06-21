@@ -11,6 +11,10 @@
         dispatch("toast", { msg, type });
     }
 
+    function openJournal() {
+        dispatch("switch", "JOURNAL");
+    }
+
     const PAGE_SIZE = 50;
     let items = [];
     let total = 0;
@@ -20,7 +24,6 @@
     let filterCategory = "ALL";
     let searchQuery = "";
     let expandedTxid = null;
-    let showJournalNote = false;
 
     $: visibleItems = (() => {
         if (!searchQuery) return items;
@@ -128,7 +131,7 @@
                 />
             </div>
             <div class="filter-group actions-right">
-                <button class="cyber-btn ghost" on:click={() => (showJournalNote = !showJournalNote)} title="About journal entries">
+                <button class="cyber-btn ghost" on:click={openJournal} title="Open transaction journal">
                     JOURNAL
                 </button>
                 <button class="cyber-btn ghost" on:click={refresh} disabled={loading}>
@@ -136,13 +139,6 @@
                 </button>
             </div>
         </div>
-        {#if showJournalNote}
-            <div class="journal-note">
-                <span>&#9432; Transaction journal (preview/broadcast/failed entries) is available in the</span>
-                <strong> JOURNAL </strong>
-                <span>tab for local tracking of pending operations.</span>
-            </div>
-        {/if}
     </div>
 
     <div class="history-list">
@@ -308,19 +304,6 @@
     input.input-glass {
         width: 100%;
         box-sizing: border-box;
-    }
-    .journal-note {
-        margin-top: 0.6rem;
-        padding: 0.5rem 0.8rem;
-        background: rgba(0, 255, 200, 0.06);
-        border: 1px solid rgba(0, 255, 200, 0.15);
-        border-radius: 4px;
-        font-size: 0.7rem;
-        color: #999;
-        line-height: 1.5;
-    }
-    .journal-note strong {
-        color: var(--color-primary);
     }
     .history-list {
         flex: 1;

@@ -136,11 +136,11 @@
     <div class="glass-panel panel-strong gen-area cyber-panel">
         <header class="panel-header">
             <span class="hud-title mono">[ GENERATE ADDRESS ]</span>
+            <span class="header-spacer"></span>
             <HelpHitbox title="Receive Addresses">
                 <p>Receiving addresses are wallet-controlled destinations for incoming funds. Generating a new address improves privacy by reducing address reuse.</p>
                 <p>Change addresses are usually created automatically by the wallet for transaction change, not for direct sharing.</p>
             </HelpHitbox>
-            <span class="hint mono">CREATE NEW RECEIVING IDENTIFIER</span>
         </header>
 
         <div class="gen-body">
@@ -341,6 +341,9 @@
         font-size: 0.75rem;
         letter-spacing: 2px;
         text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+    }
+    .header-spacer {
+        flex: 1;
     }
     .hint {
         color: #555;

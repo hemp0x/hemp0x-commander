@@ -635,6 +635,16 @@
         }
     }
 
+    function openRewardsFromGovernance() {
+        govModalOpen = false;
+        selectedGovAsset = null;
+        lastDetailAsset = null;
+        lastDetailTab = "DETAILS";
+        advancedInitialTab = "rewards";
+        advancedInitialTagName = "";
+        advancedModalOpen = true;
+    }
+
     function returnToDetail() {
         const asset = lastDetailAsset;
         const tab = lastDetailTab;
@@ -1236,6 +1246,7 @@
                         showBack={lastDetailAsset !== null}
                         on:close={() => { govModalOpen = false; if (lastDetailAsset) returnToDetail(); }}
                         on:back={() => { govModalOpen = false; returnToDetail(); }}
+                        on:openRewards={openRewardsFromGovernance}
                     />
                 {:else}
                     <!-- ═══════════════ MY ASSETS ═══════════════ -->

@@ -1359,7 +1359,7 @@
     <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div class="modal-overlay">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="modal-staged wide" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
+        <div class="modal-staged wide utxo-modal" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header utxo-header">
                 <h3>SELECT COINS</h3>
                 <div class="utxo-stats">
@@ -1949,6 +1949,9 @@
     }
     .utxo-header h3 {
         flex-shrink: 0;
+    }
+    .utxo-modal {
+        max-height: calc(100dvh - 1.5rem);
     }
     .utxo-body {
         padding: 0.75rem 1rem;

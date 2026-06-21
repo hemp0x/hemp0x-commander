@@ -1,5 +1,5 @@
 use crate::modules::rpc::call_rpc;
-use crate::modules::stratum::job::{bits_to_target, extract_template_tx_hashes, get_seed_hash};
+use crate::modules::stratum::job::{bits_to_target, get_seed_hash};
 use crate::modules::stratum::protocol::{
     build_and_send_job, handle_message, send_json, ConnectionState,
 };
@@ -104,8 +104,6 @@ async fn update_template() -> Result<(), String> {
                 .as_str()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| bits_to_target(&bits));
-            let tx_hashes = extract_template_tx_hashes(&template);
-
             let mut state = global_state()
                 .lock()
                 .map_err(|e| format!("Lock error: {}", e))?;
@@ -116,12 +114,8 @@ async fn update_template() -> Result<(), String> {
                 .and_then(|t| t["previousblockhash"].as_str())
                 .map(|s| s.to_string());
 
-            let changed = should_broadcast_template_change(
-                state.current_template.as_ref(),
-                &prev_hash,
-                template["bits"].as_str(),
-                template["transactions"].as_array().map(|a| a.len()),
-            );
+            let changed =
+                should_broadcast_template_change(state.current_template.as_ref(), &template);
 
             if changed {
                 let new_prev =
@@ -154,10 +148,6 @@ async fn update_template() -> Result<(), String> {
                 state.template_error = None;
                 state.last_error = None;
                 state.node_rpc_ok = true;
-
-                if let Ok(_current) = serde_json::to_string(&template) {
-                    let _ = tx_hashes;
-                }
             }
 
             Ok(())
@@ -177,20 +167,58 @@ async fn update_template() -> Result<(), String> {
 
 fn should_broadcast_template_change(
     current_template: Option<&serde_json::Value>,
-    next_prev_hash: &str,
-    next_bits: Option<&str>,
-    next_tx_count: Option<usize>,
+    next_template: &serde_json::Value,
 ) -> bool {
     let Some(current) = current_template else {
         return true;
     };
 
-    current.get("previousblockhash").and_then(|v| v.as_str()) != Some(next_prev_hash)
-        || current.get("bits").and_then(|v| v.as_str()) != next_bits
-        || current
-            .get("transactions")
-            .and_then(|v| v.as_array().map(|a| a.len()))
-            != next_tx_count
+    if current.get("previousblockhash").and_then(|v| v.as_str())
+        != next_template
+            .get("previousblockhash")
+            .and_then(|v| v.as_str())
+        || current.get("bits").and_then(|v| v.as_str())
+            != next_template.get("bits").and_then(|v| v.as_str())
+        || template_target(current) != template_target(next_template)
+    {
+        return true;
+    }
+
+    template_transaction_ids(current) != template_transaction_ids(next_template)
+}
+
+fn template_target(template: &serde_json::Value) -> String {
+    template
+        .get("target")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            template
+                .get("bits")
+                .and_then(|value| value.as_str())
+                .map(bits_to_target)
+                .unwrap_or_default()
+        })
+}
+
+fn template_transaction_ids(template: &serde_json::Value) -> Vec<String> {
+    template
+        .get("transactions")
+        .and_then(|value| value.as_array())
+        .map(|transactions| {
+            transactions
+                .iter()
+                .map(|transaction| {
+                    transaction
+                        .get("txid")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| transaction.get("hash").and_then(|value| value.as_str()))
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn handle_connection(stream: tokio::net::TcpStream) {
@@ -309,9 +337,7 @@ mod tests {
     fn template_change_broadcasts_first_template() {
         assert!(should_broadcast_template_change(
             None,
-            "prev1",
-            Some("1d00ffff"),
-            Some(0),
+            &template("prev1", 100, "1d00ffff", 0),
         ));
     }
 
@@ -320,9 +346,7 @@ mod tests {
         let current = template("prev1", 100, "1d00ffff", 0);
         assert!(!should_broadcast_template_change(
             Some(&current),
-            "prev1",
-            Some("1d00ffff"),
-            Some(0),
+            &template("prev1", 200, "1d00ffff", 0),
         ));
     }
 
@@ -331,9 +355,7 @@ mod tests {
         let current = template("prev1", 100, "1d00ffff", 0);
         assert!(should_broadcast_template_change(
             Some(&current),
-            "prev2",
-            Some("1d00ffff"),
-            Some(0),
+            &template("prev2", 100, "1d00ffff", 0),
         ));
     }
 
@@ -342,9 +364,7 @@ mod tests {
         let current = template("prev1", 100, "1d00ffff", 0);
         assert!(should_broadcast_template_change(
             Some(&current),
-            "prev1",
-            Some("1d00fffe"),
-            Some(0),
+            &template("prev1", 100, "1d00fffe", 0),
         ));
     }
 
@@ -353,9 +373,24 @@ mod tests {
         let current = template("prev1", 100, "1d00ffff", 0);
         assert!(should_broadcast_template_change(
             Some(&current),
-            "prev1",
-            Some("1d00ffff"),
-            Some(1),
+            &template("prev1", 100, "1d00ffff", 1),
         ));
+    }
+
+    #[test]
+    fn template_change_broadcasts_transaction_identity_change() {
+        let current = template("prev1", 100, "1d00ffff", 1);
+        let mut next = template("prev1", 100, "1d00ffff", 1);
+        next["transactions"][0]["hash"] = serde_json::json!("different");
+        assert!(should_broadcast_template_change(Some(&current), &next));
+    }
+
+    #[test]
+    fn template_change_broadcasts_target_only_change() {
+        let mut current = template("prev1", 100, "1d00ffff", 0);
+        let mut next = current.clone();
+        current["target"] = serde_json::json!("01");
+        next["target"] = serde_json::json!("02");
+        assert!(should_broadcast_template_change(Some(&current), &next));
     }
 }

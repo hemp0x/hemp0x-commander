@@ -8,6 +8,7 @@ pub const VARDIFF_VARIANCE: f64 = 0.4;
 pub const HASHRATE_WINDOW_SECS: u64 = 300;
 pub const MIN_HASHRATE_SAMPLE_SECS: f64 = 15.0;
 pub const DIFF1_BASE: f64 = 4_294_967_296.0; // 2^32 = expected hashes per diff-1 share
+pub const NETWORK_DIFFICULTY_SAFETY_FACTOR: f64 = 0.95;
 
 const VARDIFF_PRECISION: u64 = 100_000_000;
 
@@ -114,16 +115,28 @@ pub fn compute_vardiff_adjustment(
         };
     };
 
-    let effective_max = match network_difficulty {
-        Some(nd) if nd > VARDIFF_MIN_DIFF => VARDIFF_MAX_DIFF.min(nd * 0.99),
-        _ => VARDIFF_MAX_DIFF,
+    let effective_max = effective_share_difficulty(VARDIFF_MAX_DIFF, network_difficulty);
+    new_diff = if effective_max < VARDIFF_MIN_DIFF {
+        effective_max.max(f64::MIN_POSITIVE)
+    } else {
+        new_diff.clamp(VARDIFF_MIN_DIFF, effective_max)
     };
-
-    new_diff = new_diff.clamp(VARDIFF_MIN_DIFF, effective_max);
 
     VardiffResult {
         changed: (new_diff - current_diff).abs() > f64::EPSILON,
         new_diff,
+    }
+}
+
+pub fn effective_share_difficulty(
+    requested_difficulty: f64,
+    network_difficulty: Option<f64>,
+) -> f64 {
+    match network_difficulty {
+        Some(network) if network.is_finite() && network > 0.0 => {
+            requested_difficulty.min(network * NETWORK_DIFFICULTY_SAFETY_FACTOR)
+        }
+        _ => requested_difficulty,
     }
 }
 
@@ -325,6 +338,31 @@ mod tests {
     }
 
     #[test]
+    fn effective_difficulty_caps_at_ninety_five_percent_of_network() {
+        assert_eq!(effective_share_difficulty(100.0, Some(10.0)), 9.5);
+        assert_eq!(effective_share_difficulty(5.0, Some(10.0)), 5.0);
+    }
+
+    #[test]
+    fn vardiff_handles_network_difficulty_below_configured_minimum() {
+        let now = crate::modules::stratum::state::current_timestamp();
+        let h = make_history(&[
+            (now - 40, 1.0),
+            (now - 39, 1.0),
+            (now - 38, 1.0),
+            (now - 37, 1.0),
+            (now - 36, 1.0),
+            (now - 35, 1.0),
+            (now - 34, 1.0),
+            (now - 33, 1.0),
+            (now - 32, 1.0),
+            (now - 31, 1.0),
+        ]);
+        let result = compute_vardiff_adjustment(1.0, &h, 0, Some(0.1));
+        assert_eq!(result.new_diff, 0.095);
+    }
+
+    #[test]
     fn hashrate_empty() {
         let h = VecDeque::new();
         assert_eq!(compute_worker_hashrate_hs(&h, 0), 0.0);
@@ -376,11 +414,11 @@ mod tests {
         ]);
         let r = compute_vardiff_adjustment(800.0, &h, 0, Some(50.0));
         assert!(r.changed);
-        assert!((r.new_diff - 50.0 * 0.99).abs() < 0.01);
+        assert!((r.new_diff - 50.0 * NETWORK_DIFFICULTY_SAFETY_FACTOR).abs() < 0.01);
     }
 
     #[test]
-    fn vardiff_network_difficulty_below_min_uses_max_diff() {
+    fn vardiff_network_difficulty_below_min_still_respects_network_cap() {
         let now = crate::modules::stratum::state::current_timestamp();
         let h = make_history(&[
             (now - 40, 0.1),
@@ -396,7 +434,7 @@ mod tests {
         ]);
         let r = compute_vardiff_adjustment(0.1, &h, 0, Some(0.1));
         assert!(r.changed);
-        assert!(r.new_diff >= VARDIFF_MIN_DIFF);
+        assert_eq!(r.new_diff, 0.095);
     }
 
     #[test]

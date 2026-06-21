@@ -1,4 +1,4 @@
-use crate::modules::rpc::call_rpc;
+use crate::modules::rpc::{call_rpc, call_rpc_with_timeouts};
 use crate::modules::stratum::address::is_routable_address;
 use crate::modules::stratum::job::{
     build_block_hex, build_coinbase_tx, build_header_hash, build_merkle_root,
@@ -10,14 +10,28 @@ use crate::modules::stratum::state::{
     record_share_event, request_template_refresh, update_submission_result, Worker,
 };
 use crate::modules::stratum::vardiff::{
-    compute_vardiff_adjustment, difficulty_to_target, VARDIFF_MIN_DIFF, VARDIFF_RETARGET_TIME_SECS,
+    compute_vardiff_adjustment, difficulty_to_target, effective_share_difficulty, VARDIFF_MIN_DIFF,
+    VARDIFF_RETARGET_TIME_SECS,
 };
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+const KAWPOW_RPC_RETRIES: usize = 2;
+const SUBMIT_BLOCK_RPC_RETRIES: usize = 2;
+const RPC_RETRY_DELAY: Duration = Duration::from_millis(500);
+const SUBMIT_BLOCK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const SUBMIT_BLOCK_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug)]
+struct RpcRetryError {
+    error: String,
+    attempts: usize,
+    transient: bool,
+}
 
 pub struct ConnectionState {
     pub session_id: u64,
@@ -307,7 +321,9 @@ pub fn build_and_send_job(conn: &mut ConnectionState) -> Result<Option<serde_jso
 
     let header_hash = build_header_hash(version, &prev_hash, &merkle_root, time, &bits, height);
 
-    let share_target = difficulty_to_target(conn.difficulty)?;
+    let network_difficulty = crate::modules::stratum::job::bits_to_difficulty(&bits).ok();
+    let effective_difficulty = effective_share_difficulty(conn.difficulty, network_difficulty);
+    let share_target = difficulty_to_target(effective_difficulty)?;
 
     let job = JobData {
         job_id,
@@ -317,6 +333,7 @@ pub fn build_and_send_job(conn: &mut ConnectionState) -> Result<Option<serde_jso
         time,
         height,
         bits: bits.clone(),
+        share_difficulty: effective_difficulty,
         share_target: share_target.clone(),
         network_target: network_target.clone(),
         payout_address: payout_address.clone(),
@@ -416,6 +433,7 @@ async fn handle_submit(
             return Ok(());
         }
     };
+    let share_difficulty = submitted_job.share_difficulty;
 
     let nonce_hex = match normalize_nonce_64(nonce_raw) {
         Ok(n) => n,
@@ -441,7 +459,7 @@ async fn handle_submit(
             nonce_hex,
             mix_hash
         );
-        increment_worker_rejected_by_key(&conn.session_key(), conn.difficulty);
+        increment_worker_rejected_by_key(&conn.session_key(), share_difficulty);
         send_json(
             writer,
             &serde_json::json!({
@@ -462,25 +480,34 @@ async fn handle_submit(
     let mix_hash_for_rpc = mix_hash.clone();
 
     let kawpow_result = tokio::task::spawn_blocking(move || {
-        call_rpc(
-            "getkawpowhash",
-            &[
-                serde_json::json!(header_hash),
-                serde_json::json!(mix_hash_for_rpc),
-                serde_json::json!(rpc_nonce),
-                serde_json::json!(height),
-                serde_json::json!(share_target),
-            ],
-        )
+        call_rpc_with_transient_retry(KAWPOW_RPC_RETRIES, RPC_RETRY_DELAY, || {
+            call_rpc(
+                "getkawpowhash",
+                &[
+                    serde_json::json!(header_hash),
+                    serde_json::json!(mix_hash_for_rpc),
+                    serde_json::json!(rpc_nonce),
+                    serde_json::json!(height),
+                    serde_json::json!(share_target),
+                ],
+            )
+        })
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {}", e))?;
 
     let sk = conn.session_key();
-    let diff = conn.difficulty;
+    let diff = share_difficulty;
 
     match kawpow_result {
-        Ok(result) => {
+        Ok((result, attempts, _had_transient_error)) => {
+            if attempts > 1 {
+                log::debug!(
+                    "getkawpowhash succeeded after {} attempts for job {}",
+                    attempts,
+                    job_id_str
+                );
+            }
             let (is_valid, meets_target) = parse_kawpow_validity(&result);
             if !is_valid || !meets_target {
                 if result.get("meets_target").is_none() {
@@ -569,10 +596,10 @@ async fn handle_submit(
 
             Ok(())
         }
-        Err(e) => {
+        Err(retry_error) => {
             conn.seen_shares
                 .remove(&make_share_key(job_id_str, &nonce_hex, &mix_hash));
-            let node_unavailable = is_rpc_unavailable_error(&e)
+            let node_unavailable = retry_error.transient
                 || global_state()
                     .lock()
                     .map(|state| !state.node_rpc_ok)
@@ -580,7 +607,11 @@ async fn handle_submit(
             if !node_unavailable {
                 increment_worker_rejected_by_key(&sk, diff);
             }
-            log::warn!("getkawpowhash RPC error: {}", e);
+            log::warn!(
+                "getkawpowhash RPC failed after {} attempt(s): {}",
+                retry_error.attempts,
+                retry_error.error
+            );
             send_json(
                 writer,
                 &serde_json::json!({
@@ -609,12 +640,19 @@ async fn submit_block_candidate(
         Ok(block_hex) => {
             let now = crate::modules::stratum::state::current_timestamp();
             let submit_result = tokio::task::spawn_blocking(move || {
-                call_rpc("submitblock", &[serde_json::json!(block_hex)])
+                call_rpc_with_transient_retry(SUBMIT_BLOCK_RPC_RETRIES, RPC_RETRY_DELAY, || {
+                    call_rpc_with_timeouts(
+                        "submitblock",
+                        &[serde_json::json!(block_hex.clone())],
+                        SUBMIT_BLOCK_CONNECT_TIMEOUT,
+                        SUBMIT_BLOCK_READ_TIMEOUT,
+                    )
+                })
             })
             .await;
 
             match submit_result {
-                Ok(Ok(resp)) => {
+                Ok(Ok((resp, attempts, had_transient_error))) => {
                     let is_null = resp.is_null();
                     {
                         let mut state = global_state().lock().unwrap();
@@ -644,7 +682,10 @@ async fn submit_block_candidate(
                             );
                             request_template_refresh(&mut *state);
                         } else {
-                            let (status, result_str) = classify_submitblock_response(&resp);
+                            let (status, result_str) = classify_submitblock_response_after_retry(
+                                &resp,
+                                had_transient_error,
+                            );
                             let result_value = result_str.as_deref();
                             let needs_reconciliation = status == "pending";
                             let log_fn = if needs_reconciliation {
@@ -660,6 +701,13 @@ async fn submit_block_candidate(
                                 status,
                                 resp,
                             );
+                            if attempts > 1 {
+                                log::info!(
+                                    "submitblock completed after {} attempts for height {}",
+                                    attempts,
+                                    submitted_job.height
+                                );
+                            }
                             update_submission_result(
                                 &mut state,
                                 submission_id,
@@ -670,7 +718,8 @@ async fn submit_block_candidate(
                         }
                     }
 
-                    let (status, _) = classify_submitblock_response(&resp);
+                    let (status, _) =
+                        classify_submitblock_response_after_retry(&resp, had_transient_error);
                     if status == "pending" {
                         let height = submitted_job.height;
                         tokio::spawn(async move {
@@ -678,28 +727,45 @@ async fn submit_block_candidate(
                         });
                     }
                 }
-                Ok(Err(e)) => {
+                Ok(Err(retry_error)) => {
                     let now = crate::modules::stratum::state::current_timestamp();
                     let mut state = global_state().lock().unwrap();
-                    state.last_submit_result = Some(format!("RPC error: {}", e));
+                    state.last_submit_result = Some(format!("RPC error: {}", retry_error.error));
                     state.last_block_candidate_height = Some(submitted_job.height);
                     state.last_block_candidate_digest = Some(digest.clone());
                     state.last_submitted_block_height = Some(submitted_job.height);
                     state.last_submitted_block_digest = Some(digest.clone());
                     state.last_submitted_block_at = Some(now);
+                    let status = if retry_error.transient {
+                        "pending"
+                    } else {
+                        "rpc_error"
+                    };
                     update_submission_result(
                         &mut state,
                         submission_id,
-                        "rpc_error",
+                        status,
                         None,
-                        Some(&format!("RPC error: {}", e)),
+                        Some(&format!(
+                            "RPC error after {} attempt(s): {}",
+                            retry_error.attempts, retry_error.error
+                        )),
                     );
                     log::error!(
-                        "Block submit RPC error: height={}, digest={}, error={}",
+                        "Block submit RPC error: height={}, digest={}, attempts={}, pending_reconciliation={}, error={}",
                         submitted_job.height,
                         digest,
-                        e,
+                        retry_error.attempts,
+                        retry_error.transient,
+                        retry_error.error,
                     );
+                    drop(state);
+                    if retry_error.transient {
+                        let height = submitted_job.height;
+                        tokio::spawn(async move {
+                            reconcile_submission(submission_id, height, digest).await;
+                        });
+                    }
                 }
                 Err(join_err) => {
                     let mut state = global_state().lock().unwrap();
@@ -894,6 +960,24 @@ fn classify_submitblock_response(resp: &serde_json::Value) -> (&'static str, Opt
     }
 }
 
+fn classify_submitblock_response_after_retry(
+    resp: &serde_json::Value,
+    had_transient_error: bool,
+) -> (&'static str, Option<String>) {
+    if had_transient_error
+        && resp
+            .as_str()
+            .map(|result| result.eq_ignore_ascii_case("duplicate"))
+            .unwrap_or(false)
+    {
+        return (
+            "pending",
+            Some("duplicate after transient retry".to_string()),
+        );
+    }
+    classify_submitblock_response(resp)
+}
+
 pub fn resolve_chain_comparison(
     digest: &str,
     chain_hash: &str,
@@ -1062,6 +1146,37 @@ fn is_rpc_unavailable_error(err: &str) -> bool {
         || lower.contains("rpc unavailable")
 }
 
+fn call_rpc_with_transient_retry<F>(
+    retries: usize,
+    retry_delay: Duration,
+    mut call: F,
+) -> Result<(Value, usize, bool), RpcRetryError>
+where
+    F: FnMut() -> Result<Value, String>,
+{
+    let mut had_transient_error = false;
+    for attempt in 0..=retries {
+        match call() {
+            Ok(value) => return Ok((value, attempt + 1, had_transient_error)),
+            Err(error) => {
+                let transient = is_rpc_unavailable_error(&error);
+                if !transient || attempt == retries {
+                    return Err(RpcRetryError {
+                        error,
+                        attempts: attempt + 1,
+                        transient,
+                    });
+                }
+                had_transient_error = true;
+                if !retry_delay.is_zero() {
+                    std::thread::sleep(retry_delay);
+                }
+            }
+        }
+    }
+    unreachable!("retry loop always returns")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1130,6 +1245,16 @@ mod tests {
             classify_submitblock_response(&serde_json::Value::String("duplicate".to_string()));
         assert_eq!(status, "rejected");
         assert_eq!(result.as_deref(), Some("duplicate"));
+    }
+
+    #[test]
+    fn duplicate_after_transient_submit_retry_is_pending() {
+        let (status, result) = classify_submitblock_response_after_retry(
+            &serde_json::Value::String("duplicate".to_string()),
+            true,
+        );
+        assert_eq!(status, "pending");
+        assert_eq!(result.as_deref(), Some("duplicate after transient retry"));
     }
 
     #[test]
@@ -1280,5 +1405,48 @@ mod tests {
         ));
         assert!(is_rpc_unavailable_error("request timed out"));
         assert!(!is_rpc_unavailable_error("invalid params"));
+    }
+
+    #[test]
+    fn transient_rpc_errors_are_retried() {
+        let mut calls = 0;
+        let result = call_rpc_with_transient_retry(2, Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                Err("RPC transport error: timed out".to_string())
+            } else {
+                Ok(serde_json::json!({"ok": true}))
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+        assert_eq!(result.1, 3);
+        assert!(result.2);
+    }
+
+    #[test]
+    fn non_transient_rpc_error_is_not_retried() {
+        let mut calls = 0;
+        let error = call_rpc_with_transient_retry(2, Duration::ZERO, || {
+            calls += 1;
+            Err("RPC error: invalid params".to_string())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(error.attempts, 1);
+        assert!(!error.transient);
+    }
+
+    #[test]
+    fn exhausted_transient_rpc_error_remains_transient() {
+        let mut calls = 0;
+        let error = call_rpc_with_transient_retry(1, Duration::ZERO, || {
+            calls += 1;
+            Err("RPC transport error: connection reset".to_string())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 2);
+        assert_eq!(error.attempts, 2);
+        assert!(error.transient);
     }
 }

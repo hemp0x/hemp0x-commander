@@ -3,6 +3,7 @@
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import { systemStatus } from "../../stores.js";
+    import CopyIcon from "../ui/CopyIcon.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -73,10 +74,10 @@
         loadPage(true);
     }
 
-    async function copyTxid(txid) {
+    async function copyValue(value, label) {
         try {
-            await navigator.clipboard.writeText(txid);
-            showToast("TXID copied", "success");
+            await navigator.clipboard.writeText(value);
+            showToast(`${label} copied`, "success");
         } catch {
             showToast("Copy failed - use Ctrl+C", "error");
         }
@@ -204,6 +205,14 @@
                                         >
                                             &#x2315;
                                         </button>
+                                        <button
+                                            class="copy-btn"
+                                            on:click={() => copyValue(tx.address, "Address")}
+                                            title="Copy address"
+                                            aria-label="Copy address"
+                                        >
+                                            <CopyIcon size={11} />
+                                        </button>
                                     {/if}
                                 </td>
                                 <td class="txid-cell">
@@ -216,8 +225,13 @@
                                     >
                                         &#x2315;
                                     </button>
-                                    <button class="copy-btn" on:click={() => copyTxid(tx.txid)} title="Copy TXID">
-                                        &#x2398;
+                                    <button
+                                        class="copy-btn"
+                                        on:click={() => copyValue(tx.txid, "TXID")}
+                                        title="Copy TXID"
+                                        aria-label="Copy transaction ID"
+                                    >
+                                        <CopyIcon size={11} />
                                     </button>
                                 </td>
                             </tr>

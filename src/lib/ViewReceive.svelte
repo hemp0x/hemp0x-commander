@@ -5,6 +5,7 @@
     import { formatBalance } from "./utils.js";
     import { nodeStatus } from "../stores.js"; // Import Store
     import HelpHitbox from "./ui/HelpHitbox.svelte";
+    import CopyIcon from "./ui/CopyIcon.svelte";
 
     let label = "";
     let addresses = [];
@@ -322,7 +323,7 @@
                             title="Copy address"
                             aria-label="Copy address"
                         >
-                            &#x2398;
+                            <CopyIcon />
                         </button>
                     </span>
                 </div>

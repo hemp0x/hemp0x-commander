@@ -7,6 +7,7 @@
     import { addToolNotification } from "../stores/notifications.js";
     import HelpHitbox from "../ui/HelpHitbox.svelte";
     import CommanderLoader from "../ui/CommanderLoader.svelte";
+    import CopyIcon from "../ui/CopyIcon.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
     const dispatch = createEventDispatcher();
@@ -292,6 +293,49 @@
         return value.length > max ? value.substring(0, max) + "..." : value;
     }
 
+    function isExplorerAddress(value) {
+        return typeof value === "string"
+            && /^R[1-9A-HJ-NP-Za-km-z]{25,50}$/.test(value);
+    }
+
+    function collectAddresses(value, found = new Set(), depth = 0) {
+        if (depth > 6 || found.size >= 20 || value == null) return found;
+        if (isExplorerAddress(value)) {
+            found.add(value);
+            return found;
+        }
+        if (Array.isArray(value)) {
+            for (const item of value) collectAddresses(item, found, depth + 1);
+        } else if (typeof value === "object") {
+            for (const item of Object.values(value)) {
+                collectAddresses(item, found, depth + 1);
+            }
+        }
+        return found;
+    }
+
+    function addressesForEntry(entry) {
+        return [...collectAddresses(entry?.details)];
+    }
+
+    function openExplorer(target) {
+        if (!target) return;
+        window.dispatchEvent(
+            new CustomEvent("commander-open-explorer", {
+                detail: { target },
+            }),
+        );
+    }
+
+    async function copyValue(value, label) {
+        try {
+            await navigator.clipboard.writeText(String(value));
+            setStatus(`${label} copied.`, "success");
+        } catch {
+            setStatus(`Could not copy ${label.toLowerCase()}.`, "error");
+        }
+    }
+
     function hasContextData(entry) {
         return entry.network || entry.core_wallet_name || entry.vault_display_name
             || entry.vault_fingerprint || entry.wallet_record_id || entry.alignment_id;
@@ -452,7 +496,25 @@
                                 </td>
                                 <td on:click={() => toggleDetails(entry.id)}>{entry.operation_type}</td>
                                 <td class="summary-cell" on:click={() => toggleDetails(entry.id)}>{truncate(entry.summary, 40)}</td>
-                                <td class="txid-cell mono" on:click={() => toggleDetails(entry.id)}>{truncate(entry.txid, 16)}</td>
+                                <td class="txid-cell mono" on:click={() => toggleDetails(entry.id)}>
+                                    <span>{truncate(entry.txid, 16)}</span>
+                                    {#if entry.txid}
+                                        <span class="journal-inline-actions">
+                                            <button
+                                                class="entry-icon-btn"
+                                                on:click|stopPropagation={() => openExplorer(entry.txid)}
+                                                title="Explore transaction"
+                                                aria-label="Explore transaction"
+                                            >&#x2315;</button>
+                                            <button
+                                                class="entry-icon-btn"
+                                                on:click|stopPropagation={() => copyValue(entry.txid, "TXID")}
+                                                title="Copy transaction ID"
+                                                aria-label="Copy transaction ID"
+                                            ><CopyIcon size={11} /></button>
+                                        </span>
+                                    {/if}
+                                </td>
                                 <td class="ctx-cell" on:click={() => toggleDetails(entry.id)}>
                                     {#if hasContextData(entry)}
                                         <span class="ctx-badge" title="Journal context data available">&bull;</span>
@@ -463,6 +525,7 @@
                                 <td class="time-cell" on:click={() => toggleDetails(entry.id)}>{formatTime(entry.updated_at)}</td>
                             </tr>
                             {#if expandedEntry === entry.id}
+                                {@const detailAddresses = addressesForEntry(entry)}
                                 <tr class="details-row">
                                     <td colspan={editMode ? 7 : 6}>
                                         <div class="details-panel">
@@ -470,7 +533,27 @@
                                             <div class="detail-line"><span class="detail-key">Created:</span><span class="detail-value">{formatTime(entry.created_at)}</span></div>
                                             <div class="detail-line"><span class="detail-key">Summary:</span><span class="detail-value">{entry.summary}</span></div>
                                             {#if entry.txid}
-                                                <div class="detail-line"><span class="detail-key">TXID:</span><span class="detail-value mono">{entry.txid}</span></div>
+                                                <div class="detail-line">
+                                                    <span class="detail-key">TXID:</span>
+                                                    <span class="detail-value mono">{entry.txid}</span>
+                                                    <span class="detail-actions">
+                                                        <button class="entry-icon-btn" on:click={() => openExplorer(entry.txid)} title="Explore transaction" aria-label="Explore transaction">&#x2315;</button>
+                                                        <button class="entry-icon-btn" on:click={() => copyValue(entry.txid, "TXID")} title="Copy transaction ID" aria-label="Copy transaction ID"><CopyIcon size={11} /></button>
+                                                    </span>
+                                                </div>
+                                            {/if}
+                                            {#if detailAddresses.length > 0}
+                                                <div class="detail-section-title">Addresses</div>
+                                                {#each detailAddresses as address}
+                                                    <div class="detail-line">
+                                                        <span class="detail-key">Address:</span>
+                                                        <span class="detail-value mono">{address}</span>
+                                                        <span class="detail-actions">
+                                                            <button class="entry-icon-btn" on:click={() => openExplorer(address)} title="Explore address" aria-label="Explore address">&#x2315;</button>
+                                                            <button class="entry-icon-btn" on:click={() => copyValue(address, "Address")} title="Copy address" aria-label="Copy address"><CopyIcon size={11} /></button>
+                                                        </span>
+                                                    </div>
+                                                {/each}
                                             {/if}
                                             {#if hasContextData(entry)}
                                                 <div class="detail-section-title">Context</div>
@@ -688,6 +771,39 @@
         font-size: 0.7rem;
         color: #888;
     }
+    .txid-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+    }
+    .journal-inline-actions,
+    .detail-actions {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    .entry-icon-btn {
+        display: inline-grid;
+        width: 1.65rem;
+        height: 1.65rem;
+        place-items: center;
+        padding: 0;
+        border: 1px solid rgba(0, 255, 65, 0.13);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.025);
+        color: #777;
+        font-size: 0.68rem;
+        line-height: 1;
+        letter-spacing: 0;
+    }
+    .entry-icon-btn:hover {
+        border-color: rgba(0, 255, 65, 0.4);
+        background: rgba(0, 255, 65, 0.06);
+        color: var(--color-primary);
+        box-shadow: none;
+        transform: none;
+    }
     .ctx-cell {
         text-align: center;
         width: 30px;
@@ -729,6 +845,8 @@
         min-width: 60px;
     }
     .detail-value {
+        min-width: 0;
+        flex: 1 1 auto;
         word-break: break-all;
     }
     .detail-section-title {

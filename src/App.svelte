@@ -24,6 +24,7 @@
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import VaultUnlockModal from "./lib/ui/VaultUnlockModal.svelte";
   import CommanderLoader from "./lib/ui/CommanderLoader.svelte";
+  import CopyIcon from "./lib/ui/CopyIcon.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
   import { vaultStatus } from "./stores.js";
@@ -1453,7 +1454,7 @@
                       aria-label="Copy transaction ID"
                       on:click={() => copyRecentTxid(tx.txid)}
                     >
-                      &#x2398;
+                      <CopyIcon />
                     </button>
                   </span>
                 </div>

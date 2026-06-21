@@ -9,6 +9,7 @@
     import AssetMessageCompose from "../ui/asset-messages/AssetMessageCompose.svelte";
     import AssetMessageInbox from "../ui/asset-messages/AssetMessageInbox.svelte";
     import H0xCChatPanel from "../ui/h0xc/H0xCChatPanel.svelte";
+    import CopyIcon from "../ui/CopyIcon.svelte";
 
     /**
      * @typedef {{
@@ -440,7 +441,7 @@
                                                     on:click={() => copyAddress(h.address)}
                                                     title={copiedAddress === h.address ? "Copied!" : "Copy address"}
                                                     aria-label="Copy holder address"
-                                                >{copiedAddress === h.address ? "✓" : "⧉"}</button>
+                                                >{#if copiedAddress === h.address}✓{:else}<CopyIcon size={11} />{/if}</button>
                                             </span>
                                         </div>
                                     {/each}

@@ -2,6 +2,7 @@
     import { createEventDispatcher } from "svelte";
     import { core } from "@tauri-apps/api";
     import CommanderLoader from "../ui/CommanderLoader.svelte";
+    import CopyIcon from "../ui/CopyIcon.svelte";
     import {
         firstDefined,
         formatAmount,
@@ -185,7 +186,7 @@
                     title="Copy address"
                     aria-label="Copy address"
                 >
-                    &#x2398;
+                    <CopyIcon />
                 </button>
             </div>
         </div>
@@ -215,7 +216,7 @@
                 title="Copy script pubkey"
                 aria-label="Copy script pubkey"
             >
-                &#x2398;
+                <CopyIcon size={11} />
             </button>
         </div>
     {/if}
@@ -341,7 +342,7 @@
                                     title="Copy transaction ID"
                                     aria-label="Copy transaction ID"
                                 >
-                                    &#x2398;
+                                    <CopyIcon size={11} />
                                 </button>
                             {/if}
                         </div>

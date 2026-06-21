@@ -1,5 +1,6 @@
 <script>
     import { createEventDispatcher } from "svelte";
+    import CopyIcon from "../ui/CopyIcon.svelte";
     import {
         firstDefined,
         formatAmount,
@@ -77,7 +78,7 @@
                     title="Copy transaction ID"
                     aria-label="Copy transaction ID"
                 >
-                    &#x2398;
+                    <CopyIcon />
                 </button>
             </div>
         </div>
@@ -122,7 +123,7 @@
                         title="Copy block hash"
                         aria-label="Copy block hash"
                     >
-                        &#x2398;
+                        <CopyIcon size={11} />
                     </button>
                 {/if}
             </span>

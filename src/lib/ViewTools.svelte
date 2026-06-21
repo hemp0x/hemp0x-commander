@@ -24,7 +24,10 @@
   import { cidViewerTarget, ipfsHubSection } from "./stores/contentLibrary.js";
   import { systemHubSection } from "./stores/systemHub.js";
 
+  const primaryTabs = ["WALLET", "SYSTEM", "HISTORY", "EXPLORER", "CONSOLE", "ADVANCED"];
+  const advancedTabs = ["CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"];
   let activeSubTab = "CONSOLE";
+  let lastAdvancedTab = "CONSOLIDATE";
   let explorerTarget = "";
   let tauriReady = false;
   let ipfsOpenCid = null;
@@ -34,6 +37,19 @@
       activeSubTab = "IPFS";
       ipfsHubSection.set("cid-viewer");
       ipfsOpenCid = $cidViewerTarget;
+  }
+  $: if (advancedTabs.includes(activeSubTab)) {
+    lastAdvancedTab = activeSubTab;
+  }
+  $: activePrimaryTab =
+    activeSubTab === "JOURNAL"
+      ? "HISTORY"
+      : advancedTabs.includes(activeSubTab)
+        ? "ADVANCED"
+        : activeSubTab;
+
+  function selectPrimaryTab(tab) {
+    activeSubTab = tab === "ADVANCED" ? lastAdvancedTab : tab;
   }
 
   function openLibraryFromPicker() {
@@ -114,11 +130,11 @@
     <!-- HEADER / TABS -->
     <header class="panel-header no-border">
       <div class="sub-tabs">
-        {#each ["CONSOLE", "WALLET", "SYSTEM", "HISTORY", "JOURNAL", "EXPLORER", "CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"] as tab}
+        {#each primaryTabs as tab}
           <button
             class="sub-tab-btn"
-            class:active={activeSubTab === tab}
-            on:click={() => (activeSubTab = tab)}
+            class:active={activePrimaryTab === tab}
+            on:click={() => selectPrimaryTab(tab)}
           >
             {tab}
           </button>
@@ -135,6 +151,19 @@
       class="tools-body"
       class:no-scroll={activeSubTab === "CONSOLE"}
     >
+      {#if activePrimaryTab === "ADVANCED"}
+        <nav class="advanced-tabs" aria-label="Advanced tools">
+          {#each advancedTabs as tab}
+            <button
+              class="advanced-tab-btn"
+              class:active={activeSubTab === tab}
+              on:click={() => (activeSubTab = tab)}
+            >
+              {tab}
+            </button>
+          {/each}
+        </nav>
+      {/if}
       {#key activeSubTab}
         <div class="transition-wrapper" in:fly={{ y: 20, duration: 300 }}>
           {#if activeSubTab === "CONSOLE"}
@@ -318,14 +347,23 @@
   }
   .sub-tabs {
     display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: 2px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sub-tabs::-webkit-scrollbar {
+    display: none;
   }
   .sub-tab-btn {
+    flex: 1 1 0;
+    min-width: max-content;
     background: transparent;
     border: none;
     color: var(--color-muted);
-    padding: 0.85rem 1.25rem;
+    padding: 0.85rem clamp(0.7rem, 1.6vw, 1.25rem);
     font-size: 0.78rem;
     letter-spacing: 1px;
     border-bottom: 2px solid transparent;
@@ -346,7 +384,8 @@
     );
   }
   .header-status {
-    padding-right: 1.5rem;
+    flex: 0 0 auto;
+    padding: 0 1rem;
     font-size: 0.7rem;
     color: #555;
     display: flex;
@@ -374,6 +413,42 @@
     display: flex;
     flex-direction: column;
   }
+  .advanced-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    flex: 0 0 auto;
+    gap: 0.35rem;
+    margin-bottom: 0.5rem;
+    padding: 0.35rem;
+    border: 1px solid rgba(0, 255, 65, 0.1);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.34);
+  }
+  .advanced-tab-btn {
+    min-width: 0;
+    padding: 0.55rem 0.7rem;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.48);
+    font-size: 0.68rem;
+    letter-spacing: 0.75px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .advanced-tab-btn:hover {
+    border-color: rgba(0, 255, 65, 0.16);
+    background: rgba(0, 255, 65, 0.025);
+    color: rgba(255, 255, 255, 0.78);
+    box-shadow: none;
+    transform: none;
+  }
+  .advanced-tab-btn.active {
+    border-color: rgba(0, 255, 65, 0.32);
+    background: rgba(0, 255, 65, 0.07);
+    color: var(--color-primary);
+  }
   .tools-body.no-scroll {
     overflow-y: hidden;
     padding-bottom: 0;
@@ -384,6 +459,26 @@
     width: 100%;
     display: flex;
     flex-direction: column;
+  }
+
+  @media (max-width: 800px) {
+    .header-status {
+      padding-inline: 0.6rem;
+      font-size: 0;
+    }
+    .header-status .dot {
+      margin: 0;
+    }
+    .sub-tab-btn {
+      padding-inline: 0.7rem;
+      font-size: 0.7rem;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .advanced-tabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   /* --- BUTTONS --- */

@@ -1464,7 +1464,7 @@
         border: 1px solid rgba(255, 255, 255, 0.08);
         color: #666;
         padding: 0.12rem 0.25rem;
-        border-radius: 3px;
+        border-radius: 4px;
         cursor: pointer;
         display: flex;
         align-items: center;

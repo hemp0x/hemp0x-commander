@@ -345,8 +345,8 @@
         min-width: 110px;
     }
     select.input-glass option {
-        background: #0a0a0a;
-        color: #fff;
+        background: #050706;
+        color: var(--color-highlight);
     }
     input.input-glass {
         width: 100%;

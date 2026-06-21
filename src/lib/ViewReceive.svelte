@@ -755,7 +755,7 @@
         padding: 1.1rem;
         border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
-        background: #030604;
+        background: #050706;
         box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8);
     }
     .label-modal h3 {

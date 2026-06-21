@@ -2014,6 +2014,8 @@
   }
   button.ts-item.wallet-status-action:hover {
     background: rgba(0, 255, 65, 0.05);
+    transform: none;
+    box-shadow: none;
   }
   button.ts-item:disabled {
     opacity: 1;
@@ -2449,7 +2451,7 @@
   }
   .btn-xs:hover {
     background: rgba(0, 255, 65, 0.25);
-    box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
   }
   .btn-xs.ghost {
     background: transparent;
@@ -3002,7 +3004,7 @@
   .about-logo {
     width: 80px;
     height: 80px;
-    border-radius: 10px;
+    border-radius: 8px;
     box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
     object-fit: contain;
   }

@@ -336,6 +336,7 @@
         place-items: center;
         padding: 0;
         border-color: rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
         color: var(--color-primary, #00ff41);
         font-size: 0.9rem;
         letter-spacing: 0;

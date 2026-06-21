@@ -78,7 +78,7 @@
         overflow: hidden;
         border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
-        background: linear-gradient(180deg, #020403 0%, #070b09 100%);
+        background: linear-gradient(180deg, #020403 0%, #060807 100%);
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     }
     .wallet-unlock-header {

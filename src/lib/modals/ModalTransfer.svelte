@@ -252,8 +252,8 @@
         padding-right: 28px;
     }
     select.cyber-input option {
-        background: #0a0a0a;
-        color: #ccc;
+        background: #050706;
+        color: var(--color-highlight);
     }
 
     .panel-actions {

@@ -1724,7 +1724,7 @@
         color: #666;
         font-size: 0.5rem;
         padding: 2px 6px;
-        border-radius: 3px;
+        border-radius: 4px;
         cursor: pointer;
     }
     .copy-btn:hover {
@@ -2012,8 +2012,8 @@
         border-color: rgba(0, 255, 65, 0.28);
     }
     select.form-input option {
-        background: #101010;
-        color: #d8d8d8;
+        background: #050706;
+        color: var(--color-highlight);
     }
     .clear-preview-btn {
         background: transparent;

@@ -470,6 +470,7 @@
         width: 1.8rem;
         height: 1.8rem;
         border-color: rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
         font-size: 0.9rem;
     }
 

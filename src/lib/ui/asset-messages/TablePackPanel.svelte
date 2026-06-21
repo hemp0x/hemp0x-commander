@@ -52,7 +52,7 @@
     <div class="table-pack-controls">
         <select
             class="table-pack-select"
-            style="background-color: #020604; color: #9cffad;"
+            style="background-color: #050706; color: #9cffad;"
             on:change={(e) => {
                 const target = e.target;
                 if (target instanceof HTMLSelectElement && target.value) {
@@ -140,15 +140,15 @@
     .table-pack-select {
         appearance: none;
         -webkit-appearance: none;
-        background: #020604 !important;
-        background-color: #020604 !important;
+        background: #050706 !important;
+        background-color: #050706 !important;
         color: #9cffad !important;
         color-scheme: dark;
         max-width: 23rem;
         padding-right: 1.6rem;
     }
     .table-pack-controls select option,
-    .table-pack-select option { background: #020604; color: #d8f7dd; }
+    .table-pack-select option { background: #050706; color: var(--color-highlight); }
     .table-pack-controls button {
         color: var(--color-primary);
         cursor: pointer;

@@ -701,8 +701,8 @@
         padding-right: 1.6rem;
     }
     select.input-glass option {
-        background: #0a0a0a;
-        color: #fff;
+        background: #050706;
+        color: var(--color-highlight);
     }
     .journal-list {
         flex: 1;

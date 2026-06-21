@@ -1814,8 +1814,8 @@
         padding-right: 2rem;
     }
     select.cyber-input option {
-        background: #050705;
-        color: #f0fff4;
+        background: #050706;
+        color: var(--color-highlight);
     }
 
     .read-only-field {

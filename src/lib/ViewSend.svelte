@@ -1814,8 +1814,8 @@
         background-position: right 0.8rem center;
     }
     select.input-glass option {
-        background: #0a0a0a;
-        color: #fff;
+        background: #050706;
+        color: var(--color-highlight);
         padding: 0.5rem;
     }
 
@@ -2002,17 +2002,17 @@
         position: sticky;
         top: 0;
         z-index: 1;
-        background: rgba(5, 8, 5, 0.96);
+        background: rgba(5, 7, 6, 0.96);
         text-align: left;
         color: #666;
         padding: 0.5rem;
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         font-size: 0.65rem;
         letter-spacing: 0.5px;
     }
     .utxo-table td {
         padding: 0.5rem;
-        border-bottom: 1px solid #222;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
         color: #ccc;
         cursor: pointer;
     }
@@ -2360,6 +2360,7 @@
         font-family: var(--font-mono);
         font-size: 0.65rem;
         padding: 0.5rem 0.8rem;
+        min-width: 7.5rem;
         cursor: pointer;
         transition: all 0.2s;
         white-space: nowrap;
@@ -2367,7 +2368,7 @@
     .btn-estimate:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 12px rgba(0, 255, 65, 0.3);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .btn-estimate:disabled {
         opacity: 0.4;

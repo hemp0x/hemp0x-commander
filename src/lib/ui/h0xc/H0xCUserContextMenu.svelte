@@ -188,7 +188,7 @@
     .h0xc-ctx-menu {
         position: fixed;
         z-index: 99999;
-        background: linear-gradient(180deg, #0a0e0b, #101510);
+        background: linear-gradient(180deg, #050706, #0a0c0b);
         border: 1px solid rgba(0, 255, 65, 0.25);
         border-radius: 6px;
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);

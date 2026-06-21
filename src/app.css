@@ -150,6 +150,24 @@ button:active {
   font-family: var(--font-mono);
 }
 
+/* NATIVE SELECT/DROPDOWN THEMING
+   Keeps the closed control and the OS-rendered option list near-black so
+   native dropdowns never flash white/mismatched backgrounds on dark panels. */
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: #050706;
+  color: var(--color-highlight);
+}
+
+select option:checked,
+select option:hover {
+  background: rgba(0, 255, 65, 0.16);
+  color: var(--color-primary);
+}
+
 .input-glass:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 15px rgba(0, 255, 65, 0.15);

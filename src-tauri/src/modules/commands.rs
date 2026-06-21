@@ -5083,6 +5083,31 @@ pub struct AddressLabelUpdate {
     pub method: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressTransactionSummary {
+    pub txid: String,
+    pub height: i64,
+    pub confirmations: i64,
+    pub time: Option<i64>,
+    pub net_amount: f64,
+    pub asset: String,
+    pub detail_available: bool,
+    pub detail_status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressTransactionPage {
+    pub address: String,
+    pub items: Vec<AddressTransactionSummary>,
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    pub has_more: bool,
+    pub pruned: bool,
+}
+
 fn validate_explorer_txid(txid: &str) -> Result<String, String> {
     let txid = txid.trim();
     if txid.len() != 64 || !txid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -5393,7 +5418,6 @@ fn address_balance_capability(address: &str) -> AddressBalanceCapability {
 }
 
 fn address_txids_capability(address: &str) -> AddressTxidsCapability {
-    const MAX_EXPLORER_ADDRESS_TXIDS: usize = 500;
     let query = serde_json::json!({ "addresses": [address] }).to_string();
     match run_cli(&["getaddresstxids".to_string(), query]) {
         Ok(raw) => match parse_cli_json(&raw, "getaddresstxids") {
@@ -5404,14 +5428,12 @@ fn address_txids_capability(address: &str) -> AddressTxidsCapability {
                         .filter_map(serde_json::Value::as_str)
                         .map(str::to_string)
                         .collect();
-                    let (txids, total_count, truncated) =
-                        limit_explorer_txids(all_txids, MAX_EXPLORER_ADDRESS_TXIDS);
                     AddressTxidsCapability {
                         supported: true,
                         state: AddressIndexState::Supported,
-                        txids,
-                        total_count,
-                        truncated,
+                        txids: Vec::new(),
+                        total_count: all_txids.len(),
+                        truncated: false,
                         error: None,
                     }
                 }
@@ -5445,15 +5467,6 @@ fn address_txids_capability(address: &str) -> AddressTxidsCapability {
             error: Some(error),
         },
     }
-}
-
-fn limit_explorer_txids(
-    txids: Vec<String>,
-    limit: usize,
-) -> (Vec<String>, usize, bool) {
-    let total_count = txids.len();
-    let limited = txids.into_iter().rev().take(limit).collect();
-    (limited, total_count, total_count > limit)
 }
 
 fn parse_address_labels(validation: &serde_json::Value) -> Vec<String> {
@@ -5528,6 +5541,155 @@ pub async fn get_address_detail(address: String) -> Result<AddressDetail, String
     tauri::async_runtime::spawn_blocking(move || get_address_detail_blocking(&address))
         .await
         .map_err(|error| format!("Address detail task failed: {error}"))?
+}
+
+fn get_address_transactions_page_blocking(
+    address: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<AddressTransactionPage, String> {
+    let validation = validate_address_with_core(address)?;
+    let canonical_address =
+        string_field(&validation, "address").unwrap_or_else(|| address.to_string());
+    let query = serde_json::json!({ "addresses": [&canonical_address] }).to_string();
+    let raw = run_cli(&["getaddressdeltas".to_string(), query])?;
+    let deltas = parse_cli_json(&raw, "getaddressdeltas")?;
+    let delta_items = deltas
+        .as_array()
+        .ok_or("Malformed getaddressdeltas response from Core: expected an array")?;
+
+    let mut by_txid: HashMap<String, (i64, i64, String)> = HashMap::new();
+    for delta in delta_items {
+        let Some(txid) = delta.get("txid").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let height = delta
+            .get("height")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let satoshis = delta
+            .get("satoshis")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let asset = delta
+            .get("assetName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("HEMP")
+            .to_string();
+        let entry = by_txid
+            .entry(txid.to_string())
+            .or_insert((height, 0, asset));
+        entry.0 = entry.0.max(height);
+        entry.1 = entry.1.saturating_add(satoshis);
+    }
+
+    let chain_raw = run_cli(&["getblockchaininfo".to_string()])?;
+    let chain = parse_cli_json(&chain_raw, "getblockchaininfo")?;
+    let chain_height = chain
+        .get("blocks")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let pruned = chain
+        .get("pruned")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let mut rows: Vec<(String, i64, i64, String)> = by_txid
+        .into_iter()
+        .map(|(txid, (height, satoshis, asset))| (txid, height, satoshis, asset))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+
+    let total = rows.len();
+    let page_rows = rows.into_iter().skip(offset).take(limit);
+    let mut items = Vec::new();
+    let mut block_times: HashMap<i64, Option<i64>> = HashMap::new();
+    for (txid, height, satoshis, asset) in page_rows {
+        let confirmations = if height > 0 && chain_height >= height {
+            chain_height - height + 1
+        } else {
+            0
+        };
+        let verbose = run_cli(&[
+            "getrawtransaction".to_string(),
+            txid.clone(),
+            "true".to_string(),
+        ])
+        .ok()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
+        let raw_time = verbose.as_ref().and_then(|value| {
+            value
+                .get("blocktime")
+                .or_else(|| value.get("time"))
+                .and_then(serde_json::Value::as_i64)
+        });
+        let time = if raw_time.is_some() || height <= 0 {
+            raw_time
+        } else if let Some(cached) = block_times.get(&height) {
+            *cached
+        } else {
+            let header_time = run_cli(&["getblockhash".to_string(), height.to_string()])
+                .ok()
+                .map(|hash| hash.trim().to_string())
+                .filter(|hash| !hash.is_empty())
+                .and_then(|hash| {
+                    run_cli(&["getblockheader".to_string(), hash])
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                        .and_then(|header| header.get("time").and_then(serde_json::Value::as_i64))
+                });
+            block_times.insert(height, header_time);
+            header_time
+        };
+        let detail_available = verbose.is_some();
+        let detail_status = if detail_available {
+            "available"
+        } else if pruned {
+            "pruned"
+        } else {
+            "unavailable"
+        };
+        items.push(AddressTransactionSummary {
+            txid,
+            height,
+            confirmations: verbose
+                .as_ref()
+                .and_then(|value| value.get("confirmations"))
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(confirmations),
+            time,
+            net_amount: satoshis as f64 / 100_000_000.0,
+            asset,
+            detail_available,
+            detail_status: detail_status.to_string(),
+        });
+    }
+
+    Ok(AddressTransactionPage {
+        address: canonical_address,
+        items,
+        offset,
+        limit,
+        total,
+        has_more: offset.saturating_add(limit) < total,
+        pruned,
+    })
+}
+
+#[tauri::command]
+pub async fn get_address_transactions_page(
+    address: String,
+    offset: usize,
+    limit: usize,
+) -> Result<AddressTransactionPage, String> {
+    let address = validate_explorer_address_input(&address)?;
+    let offset = offset.min(1_000_000);
+    let limit = limit.clamp(1, 50);
+    tauri::async_runtime::spawn_blocking(move || {
+        get_address_transactions_page_blocking(&address, offset, limit)
+    })
+    .await
+    .map_err(|error| format!("Address transaction page task failed: {error}"))?
 }
 
 fn set_wallet_address_label_blocking(
@@ -5654,7 +5816,7 @@ mod tests {
         detect_duplicate_inputs, estimate_consolidation_round_count, estimate_fee_from_bytes,
         estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
         hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
-        limit_explorer_txids, max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
+        max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
         normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
         parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
         parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
@@ -5743,17 +5905,6 @@ mod tests {
         );
         assert!(is_unavailable_method_error("RPC error: Method not found"));
         assert!(!is_unavailable_method_error("Wallet is disabled"));
-    }
-
-    #[test]
-    fn limits_address_explorer_history_to_newest_entries() {
-        let txids = (0..600).map(|index| format!("{index:064x}")).collect();
-        let (limited, total, truncated) = limit_explorer_txids(txids, 500);
-        assert_eq!(total, 600);
-        assert!(truncated);
-        assert_eq!(limited.len(), 500);
-        assert_eq!(limited.first().unwrap(), &format!("{:064x}", 599));
-        assert_eq!(limited.last().unwrap(), &format!("{:064x}", 100));
     }
 
     #[test]

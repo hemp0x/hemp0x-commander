@@ -147,15 +147,15 @@
     }
 
     // --- SORTING ---
-    let sortColumn = "label"; // 'label', 'address', 'balance'
-    let sortDirection = "asc"; // 'asc', 'desc'
+    let sortColumn = "balance"; // 'label', 'address', 'balance'
+    let sortDirection = "desc"; // 'asc', 'desc'
 
     function toggleSort(col) {
         if (sortColumn === col) {
             sortDirection = sortDirection === "asc" ? "desc" : "asc";
         } else {
             sortColumn = col;
-            sortDirection = "asc";
+            sortDirection = col === "balance" ? "desc" : "asc";
         }
     }
 

@@ -135,6 +135,13 @@
                 <h3>INPUTS</h3>
                 <span>{inputs.length}</span>
             </header>
+            {#if inputs.some((input) => !input.coinbase && amountOf(input) == null)}
+                <p class="input-value-note">
+                    Input values belong to previous outputs and are not included
+                    in the decoded transaction. Older source transactions may
+                    also be unavailable on pruned nodes.
+                </p>
+            {/if}
             <div class="flow-list">
                 {#if inputs.length === 0}
                     <div class="empty-row">No input records returned.</div>
@@ -446,6 +453,16 @@
 
     .flow-list {
         min-width: 0;
+    }
+
+    .input-value-note {
+        margin: 0;
+        padding: 0.55rem 1rem;
+        border-bottom: 1px solid rgba(0, 204, 255, 0.1);
+        background: rgba(0, 204, 255, 0.025);
+        color: rgba(255, 255, 255, 0.46);
+        font-size: 0.6rem;
+        line-height: 1.45;
     }
 
     .flow-row {

@@ -75,6 +75,7 @@
     let holdersError = "";
     /** @type {{ address: string, balance: number }[]} */
     let holders = [];
+    let holderSearch = "";
     let ownerAddress = "";
     /** @type {string|null} */
     let copiedAddress = null;
@@ -121,6 +122,19 @@
             setTimeout(() => { if (copiedAddress === addr) copiedAddress = null; }, 1500);
         } catch {}
     }
+
+    function openHolderExplorer(/** @type {string} */ address) {
+        window.dispatchEvent(
+            new CustomEvent("commander-open-explorer", {
+                detail: { target: address },
+            }),
+        );
+    }
+
+    $: filteredHolders = holderSearch.trim()
+        ? holders.filter((holder) =>
+            holder.address.toLowerCase().includes(holderSearch.trim().toLowerCase()))
+        : holders;
 
     const dispatch = createEventDispatcher();
 
@@ -313,6 +327,7 @@
         activeTab = "DETAILS";
         holdersShown = false;
         holders = [];
+        holderSearch = "";
         ownerAddress = "";
         messages = [];
         channels = [];
@@ -377,6 +392,15 @@
                                 <button class="holders-close-btn" on:click={() => (holdersShown = false)}>&times;</button>
                             </div>
                         </div>
+                        <label class="holders-search">
+                            <span>SEARCH HOLDERS</span>
+                            <input
+                                type="search"
+                                bind:value={holderSearch}
+                                placeholder="Address"
+                                aria-label="Search holder addresses"
+                            />
+                        </label>
                         <div class="holders-panel-body">
                             {#if holdersLoading}
                                 <div class="holders-panel-status">Loading holders...</div>
@@ -384,15 +408,17 @@
                                 <div class="holders-panel-status error">{holdersError}</div>
                             {:else if holders.length === 0}
                                 <div class="holders-panel-status">No holder data available. Node may need assetindex=1.</div>
+                            {:else if filteredHolders.length === 0}
+                                <div class="holders-panel-status">No holder addresses match this search.</div>
                             {:else}
                                 <div class="holders-table">
                                     <div class="holders-table-header">
                                         <span class="h-col-rank">#</span>
                                         <span class="h-col-addr">ADDRESS</span>
                                         <span class="h-col-bal">BALANCE</span>
-                                        <span class="h-col-copy"></span>
+                                        <span class="h-col-actions">ACTIONS</span>
                                     </div>
-                                    {#each holders as h, i}
+                                    {#each filteredHolders as h, i}
                                         <div class="holders-table-row" class:owner-row={ownerAddress && h.address === ownerAddress}>
                                             <span class="h-col-rank">{i + 1}</span>
                                             <span class="h-col-addr" title={h.address}>
@@ -402,10 +428,20 @@
                                                 {/if}
                                             </span>
                                             <span class="h-col-bal mono">{h.balance.toLocaleString()}</span>
-                                            <button class="h-col-copy" on:click={() => copyAddress(h.address)}
-                                                title={copiedAddress === h.address ? "Copied!" : "Copy address"}>
-                                                {copiedAddress === h.address ? "✓" : "⧉"}
-                                            </button>
+                                            <span class="h-col-actions">
+                                                <button
+                                                    class="holder-icon-btn"
+                                                    on:click={() => openHolderExplorer(h.address)}
+                                                    title="Open in Explorer"
+                                                    aria-label="Open holder address in Explorer"
+                                                >⌕</button>
+                                                <button
+                                                    class="holder-icon-btn"
+                                                    on:click={() => copyAddress(h.address)}
+                                                    title={copiedAddress === h.address ? "Copied!" : "Copy address"}
+                                                    aria-label="Copy holder address"
+                                                >{copiedAddress === h.address ? "✓" : "⧉"}</button>
+                                            </span>
                                         </div>
                                     {/each}
                                 </div>
@@ -708,6 +744,35 @@
         font-size: 0.65rem; font-weight: 700; color: var(--color-primary);
         letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .holders-search {
+        display: grid;
+        grid-template-columns: auto minmax(8rem, 1fr);
+        align-items: center;
+        gap: 0.65rem;
+        margin-bottom: 0.45rem;
+        flex-shrink: 0;
+    }
+    .holders-search span {
+        color: #666;
+        font-size: 0.5rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+    }
+    .holders-search input {
+        min-width: 0;
+        height: 2rem;
+        padding: 0 0.65rem;
+        border: 1px solid rgba(0, 255, 65, 0.16);
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.35);
+        color: #ccc;
+        font: 0.65rem var(--font-mono);
+        letter-spacing: 0;
+    }
+    .holders-search input:focus {
+        border-color: rgba(0, 255, 65, 0.45);
+        outline: none;
+    }
     .holders-panel-actions { display: flex; align-items: center; gap: 0.3rem; flex-shrink: 0; }
     .holders-refresh-btn {
         background: none; border: 1px solid rgba(255, 255, 255, 0.08); color: #888;
@@ -732,13 +797,13 @@
         border-radius: 4px; overflow: hidden;
     }
     .holders-table-header {
-        display: grid; grid-template-columns: 32px 1fr 100px 28px;
+        display: grid; grid-template-columns: 32px minmax(0, 1fr) 100px 70px;
         gap: 0.5rem; padding: 0.35rem 0.6rem; background: rgba(0, 0, 0, 0.3);
         border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         font-size: 0.5rem; font-weight: 600; color: #555; letter-spacing: 1px; text-transform: uppercase;
     }
     .holders-table-row {
-        display: grid; grid-template-columns: 32px 1fr 100px 28px;
+        display: grid; grid-template-columns: 32px minmax(0, 1fr) 100px 70px;
         gap: 0.5rem; padding: 0.3rem 0.6rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         font-size: 0.65rem; transition: background 0.1s;
@@ -751,11 +816,35 @@
     .h-col-addr { color: #aaa; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .holders-table-row.owner-row .h-col-addr { color: #00ccff; font-weight: 600; }
     .h-col-bal { color: #999; text-align: right; font-family: var(--font-mono); }
-    .h-col-copy {
-        background: none; border: none; color: #555; cursor: pointer; font-size: 0.7rem;
-        padding: 0; line-height: 1; transition: color 0.15s; display: flex; align-items: center; justify-content: center;
+    .h-col-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.25rem;
     }
-    .h-col-copy:hover { color: var(--color-primary); }
+    .holder-icon-btn {
+        display: grid;
+        width: 1.65rem;
+        height: 1.65rem;
+        place-items: center;
+        padding: 0;
+        border: 1px solid rgba(0, 255, 65, 0.12);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.025);
+        color: #666;
+        cursor: pointer;
+        font-size: 0.68rem;
+        line-height: 1;
+        letter-spacing: 0;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .holder-icon-btn:hover {
+        border-color: rgba(0, 255, 65, 0.35);
+        background: rgba(0, 255, 65, 0.06);
+        color: var(--color-primary);
+        transform: none;
+        box-shadow: none;
+    }
     .owner-tag {
         font-size: 0.45rem; font-weight: 700; color: #00ccff; background: rgba(0, 204, 255, 0.1);
         border: 1px solid rgba(0, 204, 255, 0.25); border-radius: 3px;
@@ -776,6 +865,16 @@
         }
         .detail-body-scroll {
             padding: 0.4rem 0.6rem 0.6rem;
+        }
+        .holders-search {
+            grid-template-columns: 1fr;
+            gap: 0.25rem;
+        }
+        .holders-table-header,
+        .holders-table-row {
+            grid-template-columns: 24px minmax(0, 1fr) 76px 64px;
+            gap: 0.3rem;
+            padding-inline: 0.4rem;
         }
     }
 </style>

@@ -1,5 +1,7 @@
 <script>
     import { createEventDispatcher } from "svelte";
+    import { core } from "@tauri-apps/api";
+    import CommanderLoader from "../ui/CommanderLoader.svelte";
     import {
         firstDefined,
         formatAmount,
@@ -11,9 +13,15 @@
     export let address = "";
 
     const dispatch = createEventDispatcher();
-    const PAGE_SIZE = 50;
+    const PAGE_SIZE = 25;
     let currentPage = 0;
-    let lastResolvedAddress = "";
+    let lastHistorySource = "";
+    let pageItems = [];
+    let pageTotal = 0;
+    let pageLoading = false;
+    let pageError = "";
+    let pagePruned = false;
+    let pageRequestId = 0;
 
     $: resolvedAddress = String(firstDefined(addressData, ["address"], address));
     $: balanceCapability =
@@ -41,13 +49,21 @@
     $: sent =
         firstDefined(addressData, ["sent", "total_sent"], null) ??
         (received != null && balance != null ? received - balance : null);
-    $: transactions = normalizeTransactions(
-        transactionCapability?.txids ??
-            firstDefined(addressData, ["transactions", "txs", "history"], []),
-    );
-    $: if (resolvedAddress !== lastResolvedAddress) {
-        lastResolvedAddress = resolvedAddress;
+    $: historySource = `${resolvedAddress}:${transactionCapability?.state || ""}:${transactionCapability?.totalCount || 0}`;
+    $: if (historySource !== lastHistorySource) {
+        lastHistorySource = historySource;
         currentPage = 0;
+        pageItems = [];
+        pageTotal = Number(transactionCapability?.totalCount) || 0;
+        pageError = "";
+        pagePruned = false;
+        if (
+            resolvedAddress &&
+            transactionCapability?.state === "supported" &&
+            Number(transactionCapability?.totalCount) > 0
+        ) {
+            loadTransactionPage(0);
+        }
     }
     $: transactionIndexUnsupported =
         transactionCapability?.state === "unsupported" ||
@@ -58,13 +74,10 @@
     $: balanceIndexError = balanceCapability?.state === "error";
     $: transactionIndexError = transactionCapability?.state === "error";
     $: transactionCount =
-        Number(transactionCapability?.totalCount) || transactions.length;
-    $: pageCount = Math.max(1, Math.ceil(transactions.length / PAGE_SIZE));
-    $: if (currentPage >= pageCount) currentPage = pageCount - 1;
+        pageTotal || Number(transactionCapability?.totalCount) || 0;
+    $: pageCount = Math.max(1, Math.ceil(transactionCount / PAGE_SIZE));
     $: pageStart = currentPage * PAGE_SIZE;
-    $: pageEnd = Math.min(pageStart + PAGE_SIZE, transactions.length);
-    $: visibleTransactions = transactions.slice(pageStart, pageEnd);
-    $: historyTruncated = Boolean(transactionCapability?.truncated);
+    $: pageEnd = Math.min(pageStart + pageItems.length, transactionCount);
     $: labels = Array.isArray(addressData?.labels) ? addressData.labels : [];
 
     function normalizeAtomicAmount(value, atomicUnits) {
@@ -72,13 +85,6 @@
         const number = Number(value);
         if (!Number.isFinite(number)) return value;
         return atomicUnits ? number / 100_000_000 : number;
-    }
-
-    function normalizeTransactions(value) {
-        if (!Array.isArray(value)) return [];
-        return value.map((item) =>
-            typeof item === "string" ? { txid: item } : item,
-        );
     }
 
     function navigate(type, target) {
@@ -91,7 +97,11 @@
     }
 
     function amountOf(tx) {
-        return firstDefined(tx, ["amount", "value", "balance_delta", "net"], null);
+        return firstDefined(
+            tx,
+            ["netAmount", "amount", "value", "balance_delta", "net"],
+            null,
+        );
     }
 
     function confirmationsOf(tx) {
@@ -100,6 +110,36 @@
 
     function timeOf(tx) {
         return firstDefined(tx, ["time", "timestamp", "blocktime", "block_time"]);
+    }
+
+    async function loadTransactionPage(page) {
+        if (!resolvedAddress) return;
+        const requestedAddress = resolvedAddress;
+        const requestId = ++pageRequestId;
+        currentPage = page;
+        pageLoading = true;
+        pageError = "";
+        try {
+            const result = await core.invoke("get_address_transactions_page", {
+                address: requestedAddress,
+                offset: page * PAGE_SIZE,
+                limit: PAGE_SIZE,
+            });
+            if (
+                requestId !== pageRequestId ||
+                requestedAddress !== resolvedAddress
+            ) return;
+            currentPage = page;
+            pageItems = Array.isArray(result?.items) ? result.items : [];
+            pageTotal = Number(result?.total) || 0;
+            pagePruned = Boolean(result?.pruned);
+        } catch (err) {
+            if (requestId !== pageRequestId) return;
+            pageError = String(err || "Address history page failed to load.");
+            pageItems = [];
+        } finally {
+            if (requestId === pageRequestId) pageLoading = false;
+        }
     }
 
     function directionOf(tx) {
@@ -210,15 +250,17 @@
         <header class="section-heading">
             <h3>TRANSACTION HISTORY</h3>
             <span>
-                {transactions.length === 0
+                {transactionCount === 0
                     ? "0 LOADED"
                     : `${pageStart + 1}-${pageEnd} OF ${formatInteger(transactionCount)}`}
             </span>
         </header>
 
-        {#if historyTruncated}
+        {#if pagePruned}
             <div class="history-limit-notice">
-                Showing the 500 most recent indexed transactions.
+                Pruned node mode: indexed amounts and confirmations remain
+                available. Raw transaction details may be unavailable for older
+                entries.
             </div>
         {/if}
 
@@ -240,7 +282,29 @@
                     </p>
                 </div>
             </div>
-        {:else if transactions.length === 0}
+        {:else if pageLoading}
+            <div class="history-loader">
+                <CommanderLoader
+                    label="Loading address history"
+                    detail={`Transactions ${pageStart + 1}-${pageStart + PAGE_SIZE}`}
+                />
+            </div>
+        {:else if pageError}
+            <div class="index-state">
+                <span class="state-code error mono">ERR</span>
+                <div>
+                    <strong>ADDRESS HISTORY PAGE FAILED</strong>
+                    <p>{pageError}</p>
+                    <button
+                        type="button"
+                        class="retry-page"
+                        on:click={() => loadTransactionPage(currentPage)}
+                    >
+                        RETRY
+                    </button>
+                </div>
+            </div>
+        {:else if transactionCount === 0}
             <div class="empty-state">
                 <span class="empty-mark mono">[ -- ]</span>
                 <strong>No indexed transactions</strong>
@@ -254,7 +318,7 @@
                     <span>CONF</span>
                     <span class="right">NET AMOUNT</span>
                 </div>
-                {#each visibleTransactions as tx}
+                {#each pageItems as tx}
                     {@const txid = txidOf(tx)}
                     <div class="transaction-row">
                         <div class="tx-cell">
@@ -281,7 +345,13 @@
                                 </button>
                             {/if}
                         </div>
-                        <span class="time-cell">{formatDate(timeOf(tx))}</span>
+                        <span class="time-cell">
+                            {timeOf(tx) == null
+                                ? tx.detailStatus === "pruned"
+                                    ? "PRUNED"
+                                    : "UNAVAILABLE"
+                                : formatDate(timeOf(tx))}
+                        </span>
                         <span class:pending={Number(confirmationsOf(tx)) === 0} class="confirm-cell mono">
                             {formatInteger(confirmationsOf(tx))}
                         </span>
@@ -296,8 +366,8 @@
                 <div class="pagination">
                     <button
                         type="button"
-                        on:click={() => (currentPage = Math.max(0, currentPage - 1))}
-                        disabled={currentPage === 0}
+                        on:click={() => loadTransactionPage(Math.max(0, currentPage - 1))}
+                        disabled={pageLoading || currentPage === 0}
                     >
                         PREVIOUS
                     </button>
@@ -305,8 +375,8 @@
                     <button
                         type="button"
                         on:click={() =>
-                            (currentPage = Math.min(pageCount - 1, currentPage + 1))}
-                        disabled={currentPage >= pageCount - 1}
+                            loadTransactionPage(Math.min(pageCount - 1, currentPage + 1))}
+                        disabled={pageLoading || currentPage >= pageCount - 1}
                     >
                         NEXT
                     </button>
@@ -565,6 +635,11 @@
         color: rgba(255, 255, 255, 0.45);
         font-size: 0.62rem;
     }
+    .history-loader {
+        display: grid;
+        min-height: 12rem;
+        place-items: center;
+    }
 
     .table-header,
     .transaction-row {
@@ -690,6 +765,15 @@
     }
     .pagination span {
         color: rgba(255, 255, 255, 0.4);
+        font-size: 0.58rem;
+    }
+    .retry-page {
+        margin-top: 0.65rem;
+        padding: 0.35rem 0.7rem;
+        border: 1px solid rgba(255, 90, 90, 0.25);
+        border-radius: 4px;
+        background: rgba(255, 90, 90, 0.04);
+        color: #ff8888;
         font-size: 0.58rem;
     }
 

@@ -80,6 +80,7 @@ pub fn run() {
             commands::list_address_groupings,
             commands::get_transaction_detail,
             commands::get_address_detail,
+            commands::get_address_transactions_page,
             commands::set_wallet_address_label,
             commands::get_asset_data,
             commands::list_network_assets,

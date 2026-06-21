@@ -362,17 +362,17 @@
                 </select>
             </div>
             <div class="filter-group actions-right">
+                {#if entries.length > 0 && !loading}
+                    <button class="cyber-btn ghost" on:click={toggleEditMode} class:active={editMode}>
+                        {editMode ? "DONE" : "EDIT"}
+                    </button>
+                {/if}
                 <button class="cyber-btn ghost" on:click={exportJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {exportLoading ? "EXPORTING..." : "EXPORT"}
                 </button>
                 <button class="cyber-btn ghost" on:click={importMergeJournal} disabled={exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {importLoading ? "IMPORTING..." : "IMPORT"}
                 </button>
-                {#if entries.length > 0 && !loading}
-                    <button class="cyber-btn ghost" on:click={toggleEditMode} class:active={editMode}>
-                        {editMode ? "DONE" : "EDIT"}
-                    </button>
-                {/if}
                 <button class="cyber-btn" on:click={loadEntries} disabled={loading || exportLoading || importLoading || archiveLoading || restoreLoading}>
                     {loading ? "LOADING..." : "REFRESH"}
                 </button>

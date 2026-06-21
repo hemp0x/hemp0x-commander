@@ -1357,7 +1357,7 @@
 {#if showUtxoModal}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="modal-overlay">
+    <div class="modal-overlay utxo-overlay">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div class="modal-staged wide utxo-modal" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header utxo-header">
@@ -1944,26 +1944,36 @@
     }
 
     /* --- UTXO MODAL --- */
+    .utxo-overlay {
+        padding: 0.5rem;
+        overflow: hidden;
+    }
     .utxo-header {
         gap: 0.75rem;
+        flex-shrink: 0;
     }
     .utxo-header h3 {
         flex-shrink: 0;
     }
     .utxo-modal {
-        max-height: calc(100dvh - 1.5rem);
+        width: min(56rem, calc(100vw - 1rem));
+        height: min(42rem, calc(100dvh - 1rem));
+        max-height: calc(100dvh - 1rem);
+        min-height: 0;
     }
     .utxo-body {
         padding: 0.75rem 1rem;
-        overflow-y: auto;
+        overflow: hidden;
         min-height: 0;
         flex: 1 1 0%;
     }
     .utxo-list {
         flex: 1;
-        overflow: visible;
+        overflow: auto;
         padding: 0;
         min-height: 0;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
     }
     .utxo-stats {
         margin-left: auto;
@@ -1977,6 +1987,7 @@
     }
     .utxo-table {
         width: 100%;
+        min-width: 620px;
         border-collapse: collapse;
         font-family: var(--font-mono);
         font-size: 0.78rem;
@@ -2070,6 +2081,14 @@
     }
 
     @media (max-width: 720px) {
+        .utxo-overlay {
+            padding: 0.35rem;
+        }
+        .utxo-modal {
+            width: calc(100vw - 0.7rem);
+            height: calc(100dvh - 0.7rem);
+            max-height: calc(100dvh - 0.7rem);
+        }
         .utxo-header {
             flex-direction: column;
             align-items: flex-start;
@@ -2082,6 +2101,7 @@
         }
         .utxo-table {
             font-size: 0.7rem;
+            min-width: 540px;
         }
         .utxo-table th,
         .utxo-table td {
@@ -2092,8 +2112,15 @@
         }
     }
     @media (max-height: 600px) {
+        .utxo-header {
+            padding: 0.55rem 0.75rem;
+        }
         .utxo-body {
             padding: 0.5rem 0.75rem;
+        }
+        .utxo-modal :global(.modal-actions),
+        .utxo-modal .modal-actions {
+            padding: 0.55rem 0.75rem;
         }
     }
 

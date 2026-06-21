@@ -1803,6 +1803,21 @@
     .cyber-input::placeholder {
         color: #555;
     }
+    select.cyber-input {
+        appearance: none;
+        -webkit-appearance: none;
+        background-color: rgba(0, 0, 0, 0.65);
+        background-image: linear-gradient(45deg, transparent 50%, var(--color-primary) 50%),
+            linear-gradient(135deg, var(--color-primary) 50%, transparent 50%);
+        background-position: calc(100% - 16px) 50%, calc(100% - 10px) 50%;
+        background-size: 6px 6px, 6px 6px;
+        background-repeat: no-repeat;
+        padding-right: 2rem;
+    }
+    select.cyber-input option {
+        background: #050705;
+        color: #f0fff4;
+    }
 
     .read-only-field {
         padding: 0.45rem 0.6rem;

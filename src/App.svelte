@@ -354,6 +354,11 @@
     isActivityExpanded = !isActivityExpanded;
   }
 
+  function openHistoryPage() {
+    activeTab = "TOOLS";
+    window.dispatchEvent(new CustomEvent("commander-open-tools-history"));
+  }
+
   /**
    * @param {string} tab
    */
@@ -1365,6 +1370,15 @@
                     >{isActivityExpanded ? "▼" : "▲"}</span
                   >
                 </button>
+                <button
+                  class="activity-history-btn"
+                  type="button"
+                  title="Open full History page"
+                  on:click={openHistoryPage}
+                >
+                  <span class="activity-history-icon" aria-hidden="true">&#8635;</span>
+                  <span class="activity-history-label">HISTORY</span>
+                </button>
               </div>
               <span class="hint mono">LAST 50 TRANSACTIONS</span>
             </header>
@@ -2125,6 +2139,48 @@
   .expand-icon {
     font-family: Arial, sans-serif; /* simpler font for arrow */
     font-size: 0.7rem;
+  }
+
+  /* History quick-link badge in the RECENT ACTIVITY header */
+  .activity-history-btn {
+    margin-left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    background: rgba(0, 255, 65, 0.06);
+    border: 1px solid rgba(0, 255, 65, 0.2);
+    border-bottom: 1px solid rgba(0, 255, 65, 0.2);
+    border-radius: 4px;
+    color: var(--color-primary);
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.06);
+    text-transform: uppercase;
+  }
+  .activity-history-btn:hover {
+    background: rgba(0, 255, 65, 0.14);
+    border-color: rgba(0, 255, 65, 0.4);
+  }
+  .activity-history-icon {
+    font-size: 0.7rem;
+    line-height: 1;
+    opacity: 0.85;
+  }
+  .activity-history-label {
+    line-height: 1;
+  }
+  @media (max-width: 600px) {
+    .activity-history-label {
+      display: none;
+    }
+    .activity-history-btn {
+      padding: 0.25rem 0.4rem;
+    }
   }
 
   /* --- CYBER PANELS (The Hybrid) --- */

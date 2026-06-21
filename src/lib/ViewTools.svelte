@@ -43,6 +43,10 @@
     activeSubTab = "WALLET";
   }
 
+  function openHistoryFromAnywhere() {
+    activeSubTab = "HISTORY";
+  }
+
   let toastMsg = "";
   let toastType = "info"; // info, error, success
   let toastTimer;
@@ -84,12 +88,14 @@
   onMount(() => {
     window.addEventListener("commander-open-content-library", openLibraryFromPicker);
     window.addEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
+    window.addEventListener("commander-open-tools-history", openHistoryFromAnywhere);
     tauriReady = typeof core?.isTauri === "function" ? core.isTauri() : false;
   });
 
   onDestroy(() => {
     window.removeEventListener("commander-open-content-library", openLibraryFromPicker);
     window.removeEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
+    window.removeEventListener("commander-open-tools-history", openHistoryFromAnywhere);
     clearTimeout(toastTimer);
   });
 </script>

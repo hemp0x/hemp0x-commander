@@ -228,6 +228,7 @@
         padding: 0.45rem 0.6rem;
         background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 255, 255, 0.1);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 6px;
         color: #fff;
         font-family: var(--font-mono);
@@ -236,6 +237,7 @@
         transition: all 0.2s;
         box-sizing: border-box;
         min-width: 0;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
     }
     .cyber-input:focus {
         border-color: var(--color-primary);
@@ -250,6 +252,7 @@
         height: 32px;
         background: rgba(0, 255, 65, 0.08);
         border: 1px solid rgba(0, 255, 65, 0.25);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.25);
         border-radius: 6px;
         color: var(--color-primary);
         font-size: 0.55rem;
@@ -259,6 +262,7 @@
         justify-content: center;
         transition: all 0.15s;
         box-sizing: border-box;
+        box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.08);
     }
     .picker-trigger:hover {
         background: rgba(0, 255, 65, 0.15);
@@ -281,20 +285,21 @@
         background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
-        box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
-        max-height: 200px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+        max-height: 220px;
         overflow-y: auto;
-        padding: 0.3rem;
+        padding: 0.4rem 0.55rem 0.55rem;
+        scrollbar-gutter: stable;
     }
     .picker-dropdown::-webkit-scrollbar {
-        width: 6px;
+        width: 8px;
     }
     .picker-dropdown::-webkit-scrollbar-track {
         background: transparent;
     }
     .picker-dropdown::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
     }
     .picker-dropdown::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 255, 65, 0.3);
@@ -488,7 +493,7 @@
             padding: 0.3rem 0.35rem;
         }
         .picker-dropdown {
-            max-height: 180px;
+            max-height: 200px;
         }
     }
 </style>

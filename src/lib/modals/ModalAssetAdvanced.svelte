@@ -1673,7 +1673,7 @@
     .panel-body {
         display: flex;
         flex-direction: column;
-        gap: 0.4rem;
+        gap: 0.55rem;
         padding-bottom: 1.2rem;
     }
     .panel-title-row {
@@ -1953,7 +1953,9 @@
     .panel-actions {
         display: flex;
         justify-content: flex-end;
-        margin-top: 0.25rem;
+        margin-top: 0.6rem;
+        padding-top: 0.4rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
     }
     .panel-actions.left {
         justify-content: flex-start;

@@ -333,6 +333,7 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
 
     let mut items = Vec::new();
     let mut seen = HashMap::new();
+    let mut labels = HashMap::new();
     if let Some(arr) = list.as_array() {
         for item in arr {
             let addr = item["address"].as_str().unwrap_or("").to_string();
@@ -344,6 +345,7 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
                 .or(item["account"].as_str())
                 .unwrap_or("")
                 .to_string();
+            labels.insert(addr.clone(), label.clone());
             let bal = balances.get(&addr).copied().unwrap_or(0.0);
             items.push(AddressItem {
                 label,
@@ -352,6 +354,45 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
             });
             seen.insert(addr, true);
         }
+    }
+
+    // `listreceivedbyaddress` can omit funded addresses from restored or
+    // imported wallets even though Core already recognizes and can spend
+    // their UTXOs. Merge those addresses from `listunspent` so Receive and
+    // Coin Control present a consistent view of wallet-owned funds.
+    let unspent_raw = run_cli(&[
+        String::from("listunspent"),
+        String::from("0"),
+        String::from("9999999"),
+        String::from("[]"),
+        String::from("true"),
+    ])?;
+    let unspents: Vec<UtxoItem> =
+        serde_json::from_str(&unspent_raw).map_err(|e| e.to_string())?;
+    let mut funded_balances: HashMap<String, f64> = HashMap::new();
+    for utxo in unspents {
+        let Some(addr) = utxo.address.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if let Some(label) = utxo.label.filter(|value| !value.is_empty()) {
+            labels.entry(addr.clone()).or_insert(label);
+        }
+        *funded_balances.entry(addr).or_insert(0.0) += utxo.amount;
+    }
+
+    for (addr, balance) in funded_balances {
+        if seen.contains_key(&addr) {
+            continue;
+        }
+        items.push(AddressItem {
+            label: labels
+                .get(&addr)
+                .cloned()
+                .unwrap_or_else(|| "(Funded wallet address)".to_string()),
+            address: addr.clone(),
+            balance: format!("{balance:.8}"),
+        });
+        seen.insert(addr, true);
     }
 
     if show_change {

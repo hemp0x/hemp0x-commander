@@ -138,8 +138,27 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
                 return Ok(());
             }
         }
-        // Lock exists but Core is not responding — the lock may be stale.
-        // Proceed with spawning; the daemon will either take over or fail.
+        // Lock exists but Core is not responding. This commonly happens during
+        // rapid stop/start while the previous daemon is still releasing the
+        // datadir, or while Core is warming up before RPC is ready. Do not
+        // spawn a second daemon into the same datadir; wait for either RPC to
+        // become queryable or the lock to clear.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while lock_path.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            if let Ok(raw) = crate::modules::commands::run_cli(&[String::from("getblockchaininfo")])
+            {
+                if serde_json::from_str::<serde_json::Value>(&raw).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        if lock_path.exists() {
+            return Err(format!(
+                "CORE_LOCK_BUSY::Core is still holding the data directory lock at {}. It may still be starting or stopping; wait a few moments and try again.",
+                lock_path.to_string_lossy()
+            ));
+        }
     }
 
     let settings: crate::modules::models::AppSettings = load_app_settings()?;

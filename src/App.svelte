@@ -688,6 +688,17 @@
     }
   }
 
+  function isCoreLockBusyMessage(err) {
+    const msg = String(err || "");
+    return msg.includes("CORE_LOCK_BUSY::") || msg.includes("Cannot obtain a lock on data directory");
+  }
+
+  function formatCoreLockBusyMessage(err) {
+    return String(err || "")
+      .replace("CORE_LOCK_BUSY::", "")
+      .trim() || "Core is still starting or stopping. Wait a few moments and try again.";
+  }
+
   async function handleStart() {
     if (!tauriReady || daemonOperation !== "idle") return;
     if (daemonStatusClearTimer) {
@@ -714,6 +725,7 @@
         daemonStatusMessage = "Ready";
         lastDaemonStartSuccessAt = Date.now();
         await refreshRpcAuthStatus();
+        await refreshDashboard();
         addRuntimeNotification("Daemon started", "", "success");
         // Verify the active vault wallet is loaded; warn if not.
         await verifyActiveVaultWalletLoaded();
@@ -721,7 +733,14 @@
       setTimeout(refreshDashboard, 1500);
     } catch (err) {
       lastError = String(err || "Failed to start node");
-      addRuntimeNotification("Daemon start failed", lastError, "error");
+      if (isCoreLockBusyMessage(lastError)) {
+        daemonStatusMessage = "Core busy";
+        daemonPollProgress = formatCoreLockBusyMessage(lastError);
+        addRuntimeNotification("Core is still settling", daemonPollProgress, "warning");
+        setTimeout(refreshDashboard, 1500);
+      } else {
+        addRuntimeNotification("Daemon start failed", lastError, "error");
+      }
     } finally {
       daemonOperation = "idle";
       daemonStatusClearTimer = setTimeout(() => {
@@ -745,6 +764,7 @@
     try {
       await core.invoke("stop_node");
       await refreshRpcAuthStatus();
+      await refreshDashboard();
       addRuntimeNotification("Daemon stopped", "", "info");
       daemonStatusMessage = "Stopped";
       setTimeout(refreshDashboard, 1500);
@@ -2259,7 +2279,6 @@
     font-size: 0.65rem;
     color: #ffa500;
     letter-spacing: 0.5px;
-    margin-left: auto;
     flex: 1 1 auto;
     min-width: 0;
     white-space: nowrap;
@@ -2279,9 +2298,8 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    margin-left: auto;
     min-width: 0;
-    flex-shrink: 1;
+    flex: 0 1 auto;
   }
   .daemon-loader-label {
     font-size: 0.6rem;

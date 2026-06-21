@@ -417,16 +417,16 @@
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     flex: 0 0 auto;
-    gap: 0.35rem;
-    margin-bottom: 0.5rem;
-    padding: 0.35rem;
+    gap: 0.25rem;
+    margin-bottom: 0.35rem;
+    padding: 0.22rem;
     border: 1px solid rgba(0, 255, 65, 0.1);
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.34);
   }
   .advanced-tab-btn {
     min-width: 0;
-    padding: 0.55rem 0.7rem;
+    padding: 0.38rem 0.65rem;
     overflow: hidden;
     border: 1px solid transparent;
     border-radius: 4px;

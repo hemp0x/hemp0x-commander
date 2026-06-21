@@ -1,5 +1,6 @@
 <script>
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { core } from "@tauri-apps/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
@@ -32,6 +33,7 @@
   const unsubscribeCoreBusy = coreBusyUntil.subscribe((value) => {
     coreBusyUntilMs = Number(value || 0);
   });
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   /**
    * @typedef {{ name: string, address: string, category: string, amount: string|number, time: number|string, date?: string, type?: string, txid?: string, asset?: string, conf?: number, confirmations?: number, direction?: string }} RecentTx
@@ -693,10 +695,17 @@
     return msg.includes("CORE_LOCK_BUSY::") || msg.includes("Cannot obtain a lock on data directory");
   }
 
-  function formatCoreLockBusyMessage(err) {
-    return String(err || "")
-      .replace("CORE_LOCK_BUSY::", "")
-      .trim() || "Core is still starting or stopping. Wait a few moments and try again.";
+  async function waitForDaemonStopped(timeoutMs = 45000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await refreshDashboard();
+      const status = get(nodeStatus);
+      if (!status.online && nodeInfo.state !== "RUNNING") {
+        return true;
+      }
+      await sleep(750);
+    }
+    return false;
   }
 
   async function handleStart() {
@@ -735,7 +744,7 @@
       lastError = String(err || "Failed to start node");
       if (isCoreLockBusyMessage(lastError)) {
         daemonStatusMessage = "Core busy";
-        daemonPollProgress = formatCoreLockBusyMessage(lastError);
+        daemonPollProgress = "Try again in a few moments.";
         addRuntimeNotification("Core is still settling", daemonPollProgress, "warning");
         setTimeout(refreshDashboard, 1500);
       } else {
@@ -763,11 +772,18 @@
     addRuntimeNotification("Daemon stop requested", "", "info");
     try {
       await core.invoke("stop_node");
+      daemonStatusMessage = "Stopping";
+      const stopped = await waitForDaemonStopped();
       await refreshRpcAuthStatus();
-      await refreshDashboard();
-      addRuntimeNotification("Daemon stopped", "", "info");
-      daemonStatusMessage = "Stopped";
-      setTimeout(refreshDashboard, 1500);
+      if (stopped) {
+        addRuntimeNotification("Daemon stopped", "", "info");
+        daemonStatusMessage = "Stopped";
+      } else {
+        daemonStatusMessage = "Stopping";
+        daemonPollProgress = "Core is still shutting down. Status will update shortly.";
+        addRuntimeNotification("Daemon still stopping", daemonPollProgress, "warning");
+        setTimeout(refreshDashboard, 1500);
+      }
     } catch (err) {
       lastError = String(err || "Failed to stop node");
       addRuntimeNotification("Daemon stop failed", lastError, "error");
@@ -2277,7 +2293,7 @@
 
   .daemon-status-text {
     font-size: 0.65rem;
-    color: #ffa500;
+    color: var(--color-primary);
     letter-spacing: 0.5px;
     flex: 1 1 auto;
     min-width: 0;
@@ -2303,7 +2319,7 @@
   }
   .daemon-loader-label {
     font-size: 0.6rem;
-    color: #ffa500;
+    color: var(--color-primary);
     letter-spacing: 0.5px;
     font-family: var(--font-mono);
   }

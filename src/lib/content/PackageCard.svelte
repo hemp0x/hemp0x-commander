@@ -231,7 +231,7 @@
     }
     .action-btn {
         background: transparent;
-        border: 1.5px solid rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.14);
         color: #aaa;
         padding: 0.3rem 0.6rem;
         font-size: 0.6rem;
@@ -279,11 +279,10 @@
         align-items: center;
         justify-content: flex-end;
         gap: 0.3rem;
-        background: rgba(30, 10, 10, 0.92);
-        border: 1px solid rgba(255, 68, 68, 0.25);
+        background: rgba(2, 4, 3, 0.96);
+        border: 1px solid rgba(255, 68, 68, 0.3);
         border-radius: 6px;
         padding: 0 0.5rem;
-        backdrop-filter: blur(2px);
     }
     .delete-overlay-text {
         color: #c66;

@@ -1201,7 +1201,7 @@
     .header-btn:hover:not(:disabled) {
         background: rgba(0, 255, 65, 0.15);
         border-color: var(--color-primary);
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.18);
     }
     .header-btn:disabled {
         opacity: 0.4;
@@ -1926,7 +1926,7 @@
     .cyber-btn:hover {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn.small {
         padding: 0.2rem 0.5rem;
@@ -2007,7 +2007,7 @@
     }
     select.form-input {
         cursor: pointer;
-        background: #020604;
+        background: rgba(0, 0, 0, 0.55);
         color: var(--color-primary);
         border-color: rgba(0, 255, 65, 0.28);
     }

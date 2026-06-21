@@ -586,7 +586,6 @@
         color: #ffaa00;
         border-color: #ffaa00;
         background: rgba(255, 170, 0, 0.08);
-        text-shadow: 0 0 6px rgba(255, 170, 0, 0.3);
     }
 
     .section-tab-spacer {
@@ -681,7 +680,7 @@
     .cyber-btn:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
 
     .cyber-btn:disabled {

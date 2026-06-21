@@ -1731,7 +1731,6 @@
 
     .neon {
         color: var(--color-primary) !important;
-        text-shadow: 0 0 6px rgba(0, 255, 65, 0.3);
     }
 
     .stat-item.warn .stat-value {
@@ -1914,7 +1913,7 @@
     .cyber-btn:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
 
     .cyber-btn:disabled {
@@ -1964,9 +1963,9 @@
     }
 
     .modal-header {
-        background: rgba(0, 255, 65, 0.08);
+        background: rgba(0, 255, 65, 0.05);
         padding: 0.8rem 1.2rem;
-        border-bottom: 1px solid rgba(0, 255, 65, 0.2);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.14);
         display: flex;
         align-items: center;
         gap: 0.6rem;
@@ -2003,7 +2002,6 @@
 
     .tx-detail .value.neon {
         color: var(--color-primary);
-        text-shadow: 0 0 8px rgba(0, 255, 65, 0.3);
     }
 
     .addr-trunc {

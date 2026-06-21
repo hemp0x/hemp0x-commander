@@ -161,12 +161,10 @@
         flex-direction: column;
     }
     .glass-modal {
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
-        box-shadow:
-            0 0 80px rgba(0, 0, 0, 0.8),
-            0 0 40px rgba(0, 255, 65, 0.1);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         overflow: hidden;
     }
     .confirm-header {
@@ -175,8 +173,8 @@
         font-weight: 700;
         color: var(--color-primary);
         letter-spacing: 1px;
-        border-bottom: 1px solid rgba(0, 255, 65, 0.2);
-        background: rgba(0, 255, 65, 0.05);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
+        background: rgba(0, 255, 65, 0.04);
     }
     .confirm-body {
         padding: 1rem 1.25rem;
@@ -229,8 +227,8 @@
         font-size: 0.9rem;
     }
     .summary-box {
-        background: rgba(0, 255, 65, 0.05);
-        border-left: 3px solid var(--color-primary);
+        background: rgba(0, 255, 65, 0.04);
+        border-left: 3px solid rgba(0, 255, 65, 0.5);
         border-radius: 0 4px 4px 0;
         padding: 0.8rem;
         margin-top: 0.8rem;
@@ -244,7 +242,8 @@
         display: flex;
         gap: 0.75rem;
         padding: 1rem 1.25rem;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.4);
+        border-top: 1px solid rgba(0, 255, 65, 0.08);
     }
     .confirm-footer button {
         flex: 1;

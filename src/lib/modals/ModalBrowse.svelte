@@ -500,21 +500,21 @@
     }
     .modal {
         width: min(640px, 92vw); max-width: 92vw; max-height: min(44rem, calc(100dvh - 2rem));
-        border: 1px solid rgba(0, 255, 65, 0.2); box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        border: 1px solid rgba(0, 255, 65, 0.2); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
     }
     .modal-header {
         display: flex; justify-content: space-between; align-items: center;
-        padding: 0.5rem 1rem 0.65rem; background: rgba(0, 0, 0, 0.3);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05); flex-shrink: 0;
+        padding: 0.5rem 1rem 0.65rem; background: rgba(0, 0, 0, 0.4);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1); flex-shrink: 0;
     }
     .header-left { display: flex; align-items: center; gap: 0.6rem; }
     .header-right { display: flex; align-items: center; gap: 0.3rem; }
     .header-time { font-size: 0.55rem; color: #555; font-family: var(--font-mono); }
     .modal-header h3 {
         margin: 0; color: var(--color-primary);
-        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3); font-size: 0.9rem; letter-spacing: 1px;
+        font-size: 0.9rem; letter-spacing: 1px;
     }
     .close-btn {
         background: none; border: none; color: #888; font-size: 1.3rem;

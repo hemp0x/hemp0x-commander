@@ -147,26 +147,25 @@
         max-width: 92vw;
         max-height: min(44rem, calc(100dvh - 2rem));
         border: 1px solid rgba(0, 255, 65, 0.2);
-        box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         border-radius: 8px;
         overflow: hidden;
         display: flex;
         flex-direction: column;
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
     }
     .modal-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding: 0.5rem 1rem 0.65rem;
-        background: rgba(0, 0, 0, 0.3);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        background: rgba(0, 0, 0, 0.4);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         flex-shrink: 0;
     }
     .modal-header h3 {
         margin: 0;
         color: var(--color-primary);
-        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
         font-size: 0.9rem;
         letter-spacing: 1px;
     }
@@ -325,7 +324,6 @@
     .confirm-check input:checked + .checkbox-visual {
         background: var(--color-primary);
         border-color: var(--color-primary);
-        box-shadow: 0 0 10px var(--color-primary);
     }
     .confirm-check input:checked + .checkbox-visual::after {
         content: "✓";
@@ -370,7 +368,7 @@
     .cyber-btn:hover:not(:disabled) {
         background: rgba(0, 255, 65, 0.15);
         border-color: var(--color-primary);
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.18);
     }
     .cyber-btn:disabled {
         opacity: 0.4;

@@ -1412,15 +1412,13 @@
         flex-direction: column;
         background: linear-gradient(
             180deg,
-            rgba(8, 14, 12, 0.95) 0%,
-            rgba(5, 10, 8, 0.98) 100%
+            rgba(4, 6, 5, 0.95) 0%,
+            rgba(2, 4, 3, 0.98) 100%
         );
-        border: 1px solid rgba(0, 255, 65, 0.15);
+        border: 1px solid rgba(0, 255, 65, 0.14);
         border-radius: 8px;
         overflow: hidden;
-        box-shadow:
-            0 0 40px rgba(0, 0, 0, 0.5),
-            inset 0 0 30px rgba(0, 255, 65, 0.02);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     }
 
     /* ═══════════════ HEADER / NAV ═══════════════ */
@@ -1532,7 +1530,6 @@
         font-weight: 700;
         color: var(--color-primary);
         letter-spacing: 2px;
-        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
         cursor: default;
         user-select: none;
         transition: all 0.2s;

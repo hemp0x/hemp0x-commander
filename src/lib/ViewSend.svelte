@@ -1892,7 +1892,6 @@
     }
     .tx-detail .value.neon {
         color: var(--color-primary);
-        text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
     }
     .tx-detail .value.dust {
         color: #ff6644;
@@ -2138,7 +2137,7 @@
 
     /* === ADDRESS BOOK POPUP (asset-page style) === */
     .ab-modal {
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         width: 100%;

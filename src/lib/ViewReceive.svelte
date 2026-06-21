@@ -300,10 +300,10 @@
         z-index: 9999;
         margin: 0;
         border-radius: 8px;
-        background: rgba(8, 12, 10, 0.95);
+        background: rgba(0, 0, 0, 0.92);
         backdrop-filter: blur(20px);
-        border: 1px solid rgba(0, 255, 65, 0.3);
-        box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
         padding: 1.5rem;
         box-sizing: border-box;
     }
@@ -315,13 +315,11 @@
     .cyber-panel {
         background: linear-gradient(
             180deg,
-            rgba(8, 14, 12, 0.95) 0%,
-            rgba(5, 10, 8, 0.98) 100%
+            rgba(4, 6, 5, 0.95) 0%,
+            rgba(2, 4, 3, 0.98) 100%
         );
-        border: 1px solid rgba(0, 255, 65, 0.15);
-        box-shadow:
-            0 0 40px rgba(0, 0, 0, 0.5),
-            inset 0 0 30px rgba(0, 255, 65, 0.02);
+        border: 1px solid rgba(0, 255, 65, 0.14);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
         position: relative;
         overflow: hidden;
         display: flex;
@@ -340,7 +338,6 @@
         color: var(--color-primary);
         font-size: 0.75rem;
         letter-spacing: 2px;
-        text-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
     }
     .header-spacer {
         flex: 1;

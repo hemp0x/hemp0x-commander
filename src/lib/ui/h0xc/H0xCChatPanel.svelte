@@ -593,12 +593,10 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
-        background: linear-gradient(180deg, #080b09 0%, #0c110d 100%);
-        border: 1px solid rgba(0, 255, 65, 0.28);
-        border-radius: 10px;
-        box-shadow:
-            0 0 120px rgba(0, 0, 0, 0.9),
-            0 0 40px rgba(0, 255, 65, 0.12);
+        background: linear-gradient(180deg, #020403 0%, #050907 100%);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 8px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
     }
     .h0xc-panel-inline {
         width: 100%;

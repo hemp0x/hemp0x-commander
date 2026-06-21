@@ -102,7 +102,6 @@
     .hub-tab.active {
         color: var(--color-primary);
         border-bottom-color: var(--color-primary);
-        text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
     }
     .hub-help-inline {
         margin-left: auto;

@@ -907,7 +907,7 @@ https://ipfs.io/ipfs/"
     .gateway-textarea {
         width: 100%;
         box-sizing: border-box;
-        background: #020604;
+        background: rgba(0, 0, 0, 0.55);
         border: 1px solid rgba(0, 255, 65, 0.22);
         color: #d8d8d8;
         border-radius: 4px;
@@ -1001,7 +1001,7 @@ https://ipfs.io/ipfs/"
     .cyber-btn:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn:disabled {
         opacity: 0.4;
@@ -1037,7 +1037,7 @@ https://ipfs.io/ipfs/"
         padding: 1rem;
     }
     .modal-container {
-        background: #0a0f0d;
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         width: 100%;
@@ -1120,7 +1120,7 @@ https://ipfs.io/ipfs/"
         text-transform: uppercase;
         position: sticky;
         top: 0;
-        background: #0a0f0d;
+        background: rgba(2, 4, 3, 0.98);
     }
     .col-check { width: 32px; }
     .col-name { min-width: 100px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

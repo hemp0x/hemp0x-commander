@@ -34,8 +34,7 @@
             transition:scale={{ duration: 150, start: 0.95 }}
         >
             <div class="modal-header">
-                <h3>
-                    {#if type === "warning"}⚠️{:else if type === "error"}❌{:else}ℹ️{/if}
+                <h3 class:is-warning={type === "warning"} class:is-error={type === "error"}>
                     {title}
                 </h3>
             </div>
@@ -68,23 +67,30 @@
         flex-direction: column;
     }
     .modal-header {
-        padding: 1rem;
-        background: rgba(255, 255, 255, 0.05);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 0.85rem 1rem;
+        background: rgba(0, 255, 65, 0.04);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
     }
     .modal-header h3 {
         margin: 0;
         color: var(--color-primary);
-        font-size: 1.1rem;
+        font-size: 0.85rem;
+        letter-spacing: 1px;
         display: flex;
         align-items: center;
         gap: 0.5rem;
     }
+    .modal-header h3.is-warning {
+        color: #ffcc66;
+    }
+    .modal-header h3.is-error {
+        color: #ff8888;
+    }
     .modal-body {
         padding: 1.25rem;
         text-align: center;
-        color: #ddd;
-        font-size: 0.9rem;
+        color: #ccc;
+        font-size: 0.85rem;
         line-height: 1.5;
         overflow-y: auto;
         max-height: min(36rem, calc(100dvh - 10rem));
@@ -93,15 +99,17 @@
         padding: 0.85rem 1rem;
         display: flex;
         justify-content: center;
+        background: rgba(0, 0, 0, 0.35);
+        border-top: 1px solid rgba(0, 255, 65, 0.08);
     }
 
     @media (max-width: 520px) {
         .modal-header h3 {
-            font-size: 1rem;
+            font-size: 0.8rem;
         }
         .modal-body {
             padding: 1rem;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
         }
     }
 </style>

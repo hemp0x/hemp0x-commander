@@ -267,33 +267,28 @@
   /* --- TOAST --- */
   .toast-popup {
     position: fixed;
-    background: rgba(10, 10, 10, 0.95);
-    border: 1px solid var(--color-primary);
-    padding: 0.8rem 1.2rem;
+    top: 4.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(2, 4, 3, 0.98);
+    border: 1px solid rgba(0, 255, 65, 0.3);
+    padding: 0.7rem 1.1rem;
     border-radius: 6px;
     z-index: 2000000; /* Ensure above all modals */
-    max-width: 300px;
-    /* CENTERED POPUP as requested */
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    bottom: auto;
-    right: auto;
-
-    box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+    max-width: min(420px, 90vw);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.8);
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
+    color: #ccc;
     pointer-events: none;
   }
   .toast-popup.error {
-    border-color: #ff5555;
+    border-color: rgba(255, 85, 85, 0.45);
     color: #ffaaaa;
-    box-shadow: 0 0 30px rgba(255, 80, 80, 0.2);
   }
   .toast-popup.success {
-    border-color: #00ff41;
-    color: #fff;
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.3);
+    border-color: rgba(0, 255, 65, 0.45);
+    color: #c8ffd0;
   }
 
   /* --- HEADER --- */
@@ -301,22 +296,24 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: rgba(0, 0, 0, 0.4);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.45);
+    border-bottom: 1px solid rgba(0, 255, 65, 0.08);
   }
   .sub-tabs {
     display: flex;
     gap: 2px;
+    flex-wrap: wrap;
   }
   .sub-tab-btn {
     background: transparent;
     border: none;
     color: var(--color-muted);
-    padding: 1rem 1.5rem;
-    font-size: 0.8rem;
+    padding: 0.85rem 1.25rem;
+    font-size: 0.78rem;
     letter-spacing: 1px;
     border-bottom: 2px solid transparent;
     transition: all 0.2s;
+    white-space: nowrap;
   }
   .sub-tab-btn:hover {
     color: #fff;
@@ -328,9 +325,8 @@
     background: linear-gradient(
       180deg,
       rgba(0, 0, 0, 0) 0%,
-      rgba(0, 255, 65, 0.05) 100%
+      rgba(0, 255, 65, 0.06) 100%
     );
-    text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
   }
   .header-status {
     padding-right: 1.5rem;
@@ -348,7 +344,6 @@
   }
   .dot.online {
     background: var(--color-primary);
-    box-shadow: 0 0 5px var(--color-primary);
   }
 
   /* --- BODY --- */
@@ -386,12 +381,11 @@
     cursor: pointer;
     text-transform: uppercase;
     font-size: 0.8rem;
-    white-space: nowrap;
   }
   .cyber-btn:hover {
     background: var(--color-primary);
     color: #000;
-    box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.25);
   }
   .cyber-btn.ghost {
     border-color: rgba(255, 255, 255, 0.2);

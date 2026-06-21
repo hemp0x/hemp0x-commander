@@ -247,7 +247,7 @@
     }
 
     .gateway-confirm {
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.25);
         border-radius: 8px;
         padding: 1rem;

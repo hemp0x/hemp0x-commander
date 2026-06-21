@@ -1225,7 +1225,7 @@
         right: 0;
         max-height: 220px;
         overflow-y: auto;
-        background: rgba(12, 14, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 4px;
         z-index: 50;
@@ -1390,7 +1390,7 @@
     .cyber-btn:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 12px rgba(0, 255, 65, 0.35);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn:disabled {
         opacity: 0.3;
@@ -1404,7 +1404,7 @@
     .cyber-btn.danger:hover:not(:disabled) {
         background: #ff5555;
         color: #000;
-        box-shadow: 0 0 12px rgba(255, 68, 68, 0.35);
+        box-shadow: 0 0 10px rgba(255, 68, 68, 0.25);
     }
     .cyber-btn.reset-btn {
         border-color: #4da6ff;
@@ -1415,7 +1415,7 @@
     .cyber-btn.reset-btn:hover:not(:disabled) {
         background: #4da6ff;
         color: #000;
-        box-shadow: 0 0 12px rgba(77, 166, 255, 0.35);
+        box-shadow: 0 0 10px rgba(77, 166, 255, 0.25);
     }
 
     /* Connection */

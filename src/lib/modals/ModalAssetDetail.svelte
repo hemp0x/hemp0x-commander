@@ -515,12 +515,10 @@
         max-width: min(550px, 92vw);
         max-height: min(44rem, calc(100dvh - 2rem));
         position: relative;
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
-        box-shadow:
-            0 0 80px rgba(0, 0, 0, 0.8),
-            0 0 40px rgba(0, 255, 65, 0.1);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -545,15 +543,10 @@
         transition: all 0.2s;
         padding: 0.5rem;
         opacity: 0.5;
-        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
     }
     .nav-arrow:hover {
         opacity: 1;
-        text-shadow:
-            0 0 10px var(--color-primary),
-            0 0 20px var(--color-primary),
-            0 0 30px rgba(0, 255, 65, 0.5);
-        transform: scale(1.2);
+        transform: scale(1.15);
     }
 
     .modal-close {
@@ -578,15 +571,14 @@
         background: rgba(255, 255, 255, 0.1);
     }
     .detail-icon {
-        font-size: 1.5rem;
+        font-size: 1.4rem;
         color: var(--color-primary);
-        text-shadow: 0 0 30px rgba(0, 255, 65, 0.5);
     }
     .detail-title {
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-weight: 700;
         color: #fff;
-        letter-spacing: 2px;
+        letter-spacing: 1.5px;
     }
     .detail-title-group {
         display: flex;

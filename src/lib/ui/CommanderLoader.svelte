@@ -24,11 +24,10 @@
         align-items: center;
         gap: 0.55rem;
         padding: 0.45rem 0.65rem;
-        border: 1px solid rgba(0, 255, 65, 0.22);
+        border: 1px solid rgba(0, 255, 65, 0.18);
         border-radius: 8px;
-        background: rgba(6, 12, 9, 0.85);
-        color: #d8e7dc;
-        box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.05);
+        background: rgba(2, 4, 3, 0.9);
+        color: #cfd8d2;
     }
 
     .loader-wrap.compact {
@@ -76,13 +75,12 @@
         left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
-        box-shadow: 0 0 8px rgba(0, 255, 65, 0.45);
     }
 
     .loader-label {
         font-size: 0.72rem;
         letter-spacing: 0.4px;
-        color: #d6e3d9;
+        color: #cfd8d2;
         font-weight: 600;
         line-height: 1.1;
     }
@@ -90,7 +88,7 @@
     .loader-detail {
         margin-top: 0.12rem;
         font-size: 0.62rem;
-        color: #97ae9d;
+        color: #8a9a90;
         line-height: 1.2;
     }
 

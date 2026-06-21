@@ -1832,7 +1832,6 @@
     font-size: 1rem;
     letter-spacing: 1.5px;
     color: #fff;
-    text-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1848,7 +1847,6 @@
     font-size: 0.65rem;
     letter-spacing: 0.5px;
     margin-top: 2px;
-    text-shadow: 0 0 4px rgba(0, 255, 65, 0.2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2102,12 +2100,12 @@
     margin: 0.5rem; /* Tiny margin to show rounded corners against edge */
     border-radius: 8px;
     border: none;
-    background: rgba(0, 0, 0, 0.85); /* Semi-transparent for blur */
+    background: rgba(0, 0, 0, 0.9); /* Semi-transparent for blur */
     backdrop-filter: blur(20px); /* GLASS EFFECT */
     padding: 1.5rem; /* Better framing */
     box-sizing: border-box; /* SAFETY: Include padding/border in width */
-    border: 1px solid rgba(0, 255, 65, 0.3); /* GREEN BORDER */
-    box-shadow: 0 0 50px rgba(0, 0, 0, 0.8); /* Deep shadow for float effect */
+    border: 1px solid rgba(0, 255, 65, 0.22);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.8); /* Deep shadow for float effect */
   }
   .activity-card.expanded .panel-header {
     background: transparent;
@@ -2524,7 +2522,6 @@
 
   .amount.pos {
     color: var(--color-primary);
-    text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
   }
   .amount.neg {
     color: #ff8888;
@@ -2547,17 +2544,6 @@
     color: var(--color-danger);
     font-size: 0.75rem;
     opacity: 0.85;
-  }
-
-  .coming-soon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    border: 1px dashed rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    font-family: var(--font-mono);
-    color: var(--color-muted);
   }
 
   /* --- FOOTER LINK --- */
@@ -2585,11 +2571,11 @@
     left: 50%;
     transform: translate(-50%, -50%);
     width: min(400px, 90vw);
-    background: rgba(5, 10, 7, 0.96);
-    border: 1px solid rgba(0, 255, 65, 0.32);
+    background: rgba(2, 4, 3, 0.98);
+    border: 1px solid rgba(0, 255, 65, 0.22);
     border-radius: 8px;
     padding: 1.5rem;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     z-index: 20001;
   }
   .modal-title {
@@ -2603,7 +2589,7 @@
   .modal-divider {
     height: 1px;
     margin: 0.75rem 0;
-    background: linear-gradient(90deg, transparent, rgba(0, 255, 65, 0.32), transparent);
+    background: linear-gradient(90deg, transparent, rgba(0, 255, 65, 0.4), transparent);
   }
   .modal-text {
     margin: 0 0 0.75rem 0;
@@ -2682,7 +2668,6 @@
   }
   .footer-link:hover {
     color: var(--color-primary);
-    text-shadow: 0 0 12px rgba(0, 255, 65, 0.8); /* Stronger hover glow */
     opacity: 1;
   }
 
@@ -2706,10 +2691,10 @@
     }
   }
   .welcome-modal {
-    background: rgba(8, 8, 8, 0.98);
+    background: rgba(2, 4, 3, 0.98);
     border: 1px solid rgba(0, 255, 65, 0.2);
     border-radius: 8px;
-    box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     max-width: 480px;
     width: 90%;
     animation: slideUp 0.3s ease-out;
@@ -2822,7 +2807,7 @@
     flex-shrink: 0;
   }
   .welcome-btn:hover {
-    box-shadow: 0 0 20px rgba(0, 255, 65, 0.35);
+    box-shadow: 0 0 14px rgba(0, 255, 65, 0.28);
   }
   .welcome-btn.disabled {
     background: #444;

@@ -218,7 +218,7 @@
         left: 0;
         right: 0;
         z-index: 500;
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);

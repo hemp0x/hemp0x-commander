@@ -326,12 +326,12 @@
     .nc-trigger.active {
         color: var(--color-primary);
         border-color: rgba(0, 255, 65, 0.3);
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.15);
+        box-shadow: 0 0 8px rgba(0, 255, 65, 0.12);
     }
 
     .nc-trigger.has-unread {
         border-color: rgba(0, 255, 65, 0.4);
-        box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
+        box-shadow: 0 0 6px rgba(0, 255, 65, 0.15);
     }
 
     .nc-icon {
@@ -355,7 +355,7 @@
         align-items: center;
         justify-content: center;
         padding: 0 4px;
-        box-shadow: 0 0 6px rgba(255, 68, 68, 0.5);
+        box-shadow: 0 0 4px rgba(255, 68, 68, 0.4);
     }
 
     .nc-backdrop {
@@ -372,13 +372,10 @@
         width: 380px;
         max-width: calc(100vw - 32px);
         max-height: 480px;
-        background: rgba(8, 12, 10, 0.97);
-        border: 1px solid rgba(0, 255, 65, 0.2);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.18);
         border-radius: 8px;
-        box-shadow:
-            0 20px 50px rgba(0, 0, 0, 0.8),
-            0 0 20px rgba(0, 255, 65, 0.08);
-        backdrop-filter: blur(16px);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -389,7 +386,7 @@
         justify-content: space-between;
         align-items: center;
         padding: 0.65rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.08);
         flex-shrink: 0;
     }
 
@@ -514,22 +511,18 @@
 
     .nc-severity-dot.severity-error {
         background: #ff5555;
-        box-shadow: 0 0 4px rgba(255, 85, 85, 0.5);
     }
 
     .nc-severity-dot.severity-warning {
         background: #ffaa00;
-        box-shadow: 0 0 4px rgba(255, 170, 0, 0.5);
     }
 
     .nc-severity-dot.severity-success {
         background: #00ff41;
-        box-shadow: 0 0 4px rgba(0, 255, 65, 0.5);
     }
 
     .nc-severity-dot.severity-info {
         background: #4488ff;
-        box-shadow: 0 0 4px rgba(68, 136, 255, 0.5);
     }
 
     .nc-category {
@@ -607,7 +600,6 @@
 
     .nc-action-btn:hover {
         background: rgba(0, 255, 65, 0.15);
-        box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
     }
 
     .nc-action-message {

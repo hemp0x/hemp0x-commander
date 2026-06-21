@@ -1160,7 +1160,6 @@ rpcallowip=127.0.0.1
   .hub-tab.active {
     color: var(--color-primary);
     border-bottom-color: var(--color-primary);
-    text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
   }
   .hub-body {
     min-height: 0;
@@ -1382,7 +1381,7 @@ rpcallowip=127.0.0.1
   .sh-btn:hover:not(:disabled) {
     background: var(--color-primary);
     color: #000;
-    box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
   }
   .sh-btn:disabled {
     opacity: 0.5;

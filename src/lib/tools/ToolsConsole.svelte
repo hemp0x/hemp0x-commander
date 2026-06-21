@@ -609,7 +609,6 @@
     </div>
 
     <div class="terminal-screen">
-        <div class="scanline"></div>
         <div class="output-toolbar">
             <input
                 class="search-input mono"
@@ -825,8 +824,8 @@
         align-items: center;
         justify-content: space-between;
         padding: 0.45rem 0.7rem;
-        background: rgba(0, 20, 10, 0.6);
-        border: 1px solid rgba(0, 255, 65, 0.15);
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(0, 255, 65, 0.14);
         border-radius: 8px;
         flex-shrink: 0;
     }
@@ -938,8 +937,8 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        background: rgba(0, 20, 10, 0.6);
-        border: 1px solid rgba(0, 255, 65, 0.15);
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(0, 255, 65, 0.14);
         color: #888;
         padding: 3px 10px;
         font-size: 0.7rem;
@@ -952,13 +951,12 @@
     .tab-btn:hover {
         color: #fff;
         border-color: rgba(0, 255, 65, 0.3);
-        background: rgba(0, 30, 10, 0.7);
+        background: rgba(0, 0, 0, 0.65);
     }
     .tab-btn.active {
         color: var(--color-primary);
         border-color: var(--color-primary);
-        background: rgba(0, 0, 0, 0.7);
-        text-shadow: 0 0 6px rgba(0, 255, 65, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
     .tab-btn.shell {
         border-color: rgba(255, 165, 0, 0.15);
@@ -972,7 +970,6 @@
     .tab-btn.shell.active {
         border-color: #ffa500;
         color: #ffa500;
-        text-shadow: 0 0 6px rgba(255, 165, 0, 0.3);
     }
     .tab-label {
         max-width: 120px;
@@ -1030,20 +1027,6 @@
         flex-direction: column;
         min-height: 0;
     }
-    .scanline {
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 2px;
-        background: rgba(0, 255, 65, 0.1);
-        opacity: 0.5;
-        animation: scan 6s linear infinite;
-        pointer-events: none;
-        z-index: 2;
-    }
-    @keyframes scan {
-        0% { transform: translateY(-100%); }
-        100% { transform: translateY(1000%); }
-    }
 
     .output-toolbar {
         display: flex;
@@ -1058,7 +1041,7 @@
         flex: 1;
         background: rgba(0, 0, 0, 0.6);
         border: 1px solid rgba(0, 255, 65, 0.2);
-        color: #00ff41;
+        color: var(--color-primary);
         padding: 2px 8px;
         font-size: 0.7rem;
         border-radius: 3px;
@@ -1089,7 +1072,7 @@
         flex: 1;
         background: transparent;
         border: none;
-        color: #00ff41;
+        color: var(--color-primary);
         padding: 0.4rem 0.7rem;
         font-size: 0.8rem;
         resize: none;
@@ -1170,7 +1153,7 @@
         padding: 0.4rem 0.6rem;
         background: #111;
         border: 1px solid rgba(0, 255, 65, 0.3);
-        color: #00ff41;
+        color: var(--color-primary);
         border-radius: 4px;
         font-family: inherit;
         font-size: 0.75rem;
@@ -1199,14 +1182,14 @@
         left: 0;
         width: 280px;
         max-height: 260px;
-        background: rgba(10, 10, 10, 0.98);
-        border: 1px solid rgba(0, 255, 65, 0.35);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 6px;
         display: flex;
         flex-direction: column;
         overflow: hidden;
         z-index: 200;
-        box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.8);
+        box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.8);
     }
     .cmd-dropdown-search {
         padding: 6px 8px;
@@ -1217,7 +1200,7 @@
         width: 100%;
         background: rgba(0, 0, 0, 0.6);
         border: 1px solid rgba(0, 255, 65, 0.25);
-        color: #00ff41;
+        color: var(--color-primary);
         padding: 4px 8px;
         font-size: 0.75rem;
         border-radius: 3px;
@@ -1253,7 +1236,7 @@
         width: 100%;
         background: transparent;
         border: none;
-        color: #00ff41;
+        color: var(--color-primary);
         padding: 3px 10px;
         font-size: 0.75rem;
         cursor: pointer;
@@ -1332,7 +1315,7 @@
         width: 100%;
         background: #111;
         border: 1px solid rgba(0, 255, 65, 0.3);
-        color: #00ff41;
+        color: var(--color-primary);
         padding: 0.45rem 0.6rem;
         border-radius: 4px;
         font-family: inherit;
@@ -1360,7 +1343,7 @@
     .cyber-btn:hover {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn.ghost {
         border-color: rgba(255, 255, 255, 0.15);
@@ -1418,14 +1401,14 @@
     .shell-enable-modal {
         width: 100%;
         max-width: 520px;
-        background: rgba(10, 10, 10, 0.95);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(255, 165, 0, 0.35);
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 1.5rem;
         display: flex;
         flex-direction: column;
         gap: 1rem;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     }
     .shell-enable-header {
         display: flex;
@@ -1495,12 +1478,12 @@
     }
     .console-disclaimer-modal {
         width: min(560px, 100%);
-        background: rgba(3, 12, 8, 0.98);
-        border: 1px solid rgba(0, 255, 65, 0.35);
-        box-shadow: 0 0 42px rgba(0, 255, 65, 0.12), 0 24px 80px rgba(0, 0, 0, 0.8);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         border-radius: 8px;
         overflow: hidden;
-        color: #d8ffe2;
+        color: #cfd8d2;
     }
     .console-disclaimer-header {
         display: flex;
@@ -1514,7 +1497,7 @@
         font-size: 0.82rem;
     }
     .console-disclaimer-icon {
-        color: #00ff41;
+        color: var(--color-primary);
         font-size: 1rem;
     }
     .console-disclaimer-body {

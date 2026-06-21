@@ -1108,7 +1108,7 @@
         flex: 1;
         display: flex;
         flex-direction: column;
-        background: rgba(8, 12, 10, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: none;
         border-radius: 0;
         overflow: hidden;
@@ -1324,7 +1324,7 @@
         display: flex;
         flex-wrap: wrap;
         gap: 0.25rem;
-        background: rgba(8, 12, 10, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 6px;
         padding: 0.35rem;

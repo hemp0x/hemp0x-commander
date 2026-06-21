@@ -595,7 +595,6 @@
     }
     .input-glass:focus {
         border-color: var(--color-primary);
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
     }
 
     /* BUTTONS */
@@ -615,7 +614,7 @@
     .cyber-btn:hover {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn.ghost {
         border-color: rgba(255, 255, 255, 0.2);
@@ -660,9 +659,9 @@
         animation: toolsNetworkFadeIn 0.2s ease-out;
     }
     .modal-staged {
-        background: rgba(10, 15, 12, 0.95);
-        border: 1px solid var(--color-primary);
-        box-shadow: 0 0 40px rgba(0, 255, 65, 0.15);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         border-radius: 8px;
         width: 400px;
         max-width: 90vw;
@@ -680,9 +679,9 @@
         }
     }
     .modal-header {
-        background: rgba(0, 255, 65, 0.05);
+        background: rgba(0, 255, 65, 0.04);
         padding: 1rem 1.5rem;
-        border-bottom: 1px solid rgba(0, 255, 65, 0.2);
+        border-bottom: 1px solid rgba(0, 255, 65, 0.12);
         display: flex;
         justify-content: space-between;
         align-items: center;

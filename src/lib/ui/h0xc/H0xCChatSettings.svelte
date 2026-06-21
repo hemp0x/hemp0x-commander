@@ -378,7 +378,7 @@
         height: 100%;
         max-width: 100%;
         max-height: 100%;
-        background: rgba(10, 15, 12, 0.98);
+        background: rgba(2, 4, 3, 0.98);
         border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);

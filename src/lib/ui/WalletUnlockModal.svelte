@@ -76,10 +76,10 @@
     .wallet-unlock-box {
         width: min(30rem, 92vw);
         overflow: hidden;
-        border: 1px solid rgba(0, 255, 65, 0.32);
+        border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
-        background: linear-gradient(180deg, #080b09 0%, #101310 100%);
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
+        background: linear-gradient(180deg, #020403 0%, #070b09 100%);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     }
     .wallet-unlock-header {
         display: flex;
@@ -167,7 +167,7 @@
     .wallet-unlock-confirm:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 16px rgba(0, 255, 65, 0.38);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.25);
     }
     .wallet-unlock-cancel:disabled,
     .wallet-unlock-confirm:disabled,

@@ -765,7 +765,7 @@
     .cyber-btn:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 15px rgba(0, 255, 65, 0.4);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.22);
     }
     .cyber-btn:disabled {
         opacity: 0.4;

@@ -125,7 +125,7 @@
     .help-btn:hover {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
+        box-shadow: 0 0 8px rgba(0, 255, 65, 0.3);
     }
 
     .help-popover {
@@ -134,14 +134,11 @@
         max-width: 90vw;
         max-height: 70vh;
         overflow-y: auto;
-        background: rgba(8, 14, 10, 0.98);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
         padding: 0.7rem 0.95rem;
-        box-shadow:
-            0 0 40px rgba(0, 0, 0, 0.7),
-            0 0 20px rgba(0, 255, 65, 0.08);
-        backdrop-filter: blur(6px);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75);
         z-index: 1000;
         scrollbar-width: thin;
         scrollbar-color: rgba(0, 255, 65, 0.35) transparent;

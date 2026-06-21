@@ -179,10 +179,10 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
-        background: linear-gradient(180deg, #080b09 0%, #0f1410 100%);
-        border: 1px solid rgba(0, 255, 65, 0.25);
+        background: linear-gradient(180deg, #020403 0%, #060a08 100%);
+        border: 1px solid rgba(0, 255, 65, 0.2);
         border-radius: 8px;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 36px rgba(0, 255, 65, 0.12);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
     }
     .message-detail-header {
         display: flex;

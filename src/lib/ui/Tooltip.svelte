@@ -81,18 +81,21 @@
     .tooltip-popup {
         position: fixed;
         transform: translateX(-50%) translateY(-100%);
-        background: rgba(10, 20, 15, 0.98);
-        border: 1px solid var(--color-primary);
+        background: rgba(2, 4, 3, 0.98);
+        border: 1px solid rgba(0, 255, 65, 0.3);
         color: var(--color-primary);
         padding: 5px 10px;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         border-radius: 4px;
-        white-space: nowrap;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
+        max-width: 16rem;
+        white-space: normal;
+        text-align: center;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.8);
         z-index: 99999;
         pointer-events: none;
         letter-spacing: 0.5px;
         font-weight: 600;
+        animation: tooltipFadeIn 0.12s ease-out;
     }
 
     .arrow {
@@ -102,17 +105,15 @@
         margin-left: -5px;
         border-width: 5px;
         border-style: solid;
-        border-color: var(--color-primary) transparent transparent transparent;
+        border-color: rgba(0, 255, 65, 0.3) transparent transparent transparent;
     }
 
     @keyframes tooltipFadeIn {
         from {
             opacity: 0;
-            transform: translateX(-50%) translateY(4px);
         }
         to {
             opacity: 1;
-            transform: translateX(-50%) translateY(0);
         }
     }
 </style>

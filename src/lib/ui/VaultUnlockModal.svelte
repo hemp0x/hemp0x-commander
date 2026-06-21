@@ -76,10 +76,10 @@
     .vault-unlock-box {
         width: min(25rem, 92vw);
         overflow: hidden;
-        border: 1px solid rgba(0, 255, 65, 0.32);
+        border: 1px solid rgba(0, 255, 65, 0.22);
         border-radius: 8px;
-        background: rgba(5, 10, 7, 0.96);
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.82), 0 0 36px rgba(0, 255, 65, 0.14);
+        background: rgba(2, 4, 3, 0.98);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
         padding: 1.5rem;
     }
     .vault-unlock-header {
@@ -169,7 +169,7 @@
     .vault-unlock-confirm:hover:not(:disabled) {
         background: var(--color-primary);
         color: #000;
-        box-shadow: 0 0 16px rgba(0, 255, 65, 0.38);
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.25);
     }
     .vault-unlock-cancel:disabled,
     .vault-unlock-confirm:disabled,

@@ -14,6 +14,7 @@
   import ToolsConsolidation from "./tools/ToolsConsolidation.svelte";
   import ToolsRawTx from "./tools/ToolsRawTx.svelte";
   import ToolsSoloMining from "./tools/ToolsSoloMining.svelte";
+  import ExplorerView from "./explorer/ExplorerView.svelte";
   import ContentLibraryPanel from "./content/ContentLibraryPanel.svelte";
   import IpfsHub from "./content/IpfsHub.svelte";
   import SystemHub from "./content/SystemHub.svelte";
@@ -24,6 +25,7 @@
   import { systemHubSection } from "./stores/systemHub.js";
 
   let activeSubTab = "CONSOLE";
+  let explorerTarget = "";
   let tauriReady = false;
   let ipfsOpenCid = null;
   let lastCidTarget = null;
@@ -45,6 +47,11 @@
 
   function openHistoryFromAnywhere() {
     activeSubTab = "HISTORY";
+  }
+
+  function openExplorerFromAnywhere(event) {
+    explorerTarget = String(event?.detail?.target || "");
+    activeSubTab = "EXPLORER";
   }
 
   let toastMsg = "";
@@ -89,6 +96,7 @@
     window.addEventListener("commander-open-content-library", openLibraryFromPicker);
     window.addEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
     window.addEventListener("commander-open-tools-history", openHistoryFromAnywhere);
+    window.addEventListener("commander-open-explorer", openExplorerFromAnywhere);
     tauriReady = typeof core?.isTauri === "function" ? core.isTauri() : false;
   });
 
@@ -96,6 +104,7 @@
     window.removeEventListener("commander-open-content-library", openLibraryFromPicker);
     window.removeEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
     window.removeEventListener("commander-open-tools-history", openHistoryFromAnywhere);
+    window.removeEventListener("commander-open-explorer", openExplorerFromAnywhere);
     clearTimeout(toastTimer);
   });
 </script>
@@ -105,7 +114,7 @@
     <!-- HEADER / TABS -->
     <header class="panel-header no-border">
       <div class="sub-tabs">
-        {#each ["CONSOLE", "WALLET", "SYSTEM", "HISTORY", "JOURNAL", "CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"] as tab}
+        {#each ["CONSOLE", "WALLET", "SYSTEM", "HISTORY", "JOURNAL", "EXPLORER", "CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"] as tab}
           <button
             class="sub-tab-btn"
             class:active={activeSubTab === tab}
@@ -155,6 +164,8 @@
             <ToolsJournal
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
             />
+          {:else if activeSubTab === "EXPLORER"}
+            <ExplorerView initialTarget={explorerTarget} />
           {:else if activeSubTab === "CONSOLIDATE"}
             <ToolsConsolidation
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}

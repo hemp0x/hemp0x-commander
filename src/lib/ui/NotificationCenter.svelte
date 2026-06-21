@@ -153,7 +153,7 @@
     >
         <span class="nc-icon">&#x25C9;</span>
         {#if $unreadCount > 0}
-            <span class="nc-badge">{$unreadCount}</span>
+            <span class="nc-badge">{$unreadCount > 100 ? "100+" : $unreadCount}</span>
         {/if}
     </button>
 

@@ -359,6 +359,24 @@
     window.dispatchEvent(new CustomEvent("commander-open-tools-history"));
   }
 
+  function openExplorer(target) {
+    if (!target) return;
+    window.dispatchEvent(
+      new CustomEvent("commander-open-explorer", {
+        detail: { target },
+      }),
+    );
+  }
+
+  async function copyRecentTxid(txid) {
+    if (!txid) return;
+    try {
+      await navigator.clipboard.writeText(txid);
+    } catch {
+      addRuntimeNotification("Copy failed", "Could not copy the transaction ID.", "warning");
+    }
+  }
+
   /**
    * @param {string} tab
    */
@@ -840,6 +858,14 @@
       ipfsHubSection.set("library");
     };
     window.addEventListener("commander-open-content-library", openLibraryHandler);
+    const openExplorerHandler = () => {
+      activeTab = "TOOLS";
+    };
+    window.addEventListener("commander-open-explorer", openExplorerHandler);
+    const openAssetBrowserHandler = () => {
+      activeTab = "ASSETS";
+    };
+    window.addEventListener("commander-open-asset-browser", openAssetBrowserHandler);
     const vaultUnlockHandler = () => {
       openVaultUnlockModal();
     };
@@ -1063,6 +1089,8 @@
       unsubscribeCoreBusy();
       window.removeEventListener("resize", updateScale);
       window.removeEventListener("commander-open-content-library", openLibraryHandler);
+      window.removeEventListener("commander-open-explorer", openExplorerHandler);
+      window.removeEventListener("commander-open-asset-browser", openAssetBrowserHandler);
       window.removeEventListener("commander-open-vault-unlock", vaultUnlockHandler);
       if (typeof unlistenNetwork === "function") unlistenNetwork();
     };
@@ -1407,7 +1435,27 @@
                     {tx.amount}
                   </span>
                   <span class="mono dim">{tx.conf}</span>
-                  <span class="mono txid" title={tx.txid}>{tx.txid}</span>
+                  <span class="recent-tx-actions">
+                    <span class="mono txid" title={tx.txid}>{tx.txid}</span>
+                    <button
+                      class="activity-icon-btn"
+                      type="button"
+                      title="Explore transaction"
+                      aria-label="Explore transaction"
+                      on:click={() => openExplorer(tx.txid)}
+                    >
+                      &#x2315;
+                    </button>
+                    <button
+                      class="activity-icon-btn"
+                      type="button"
+                      title="Copy transaction ID"
+                      aria-label="Copy transaction ID"
+                      on:click={() => copyRecentTxid(tx.txid)}
+                    >
+                      &#x2398;
+                    </button>
+                  </span>
                 </div>
               {/each}
             </div>
@@ -2536,6 +2584,38 @@
   }
   .data-row:hover {
     background: rgba(0, 255, 65, 0.05);
+  }
+  .recent-tx-actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .recent-tx-actions .txid {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .activity-icon-btn {
+    display: inline-grid;
+    flex: 0 0 auto;
+    width: 1.6rem;
+    height: 1.6rem;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(0, 255, 65, 0.16);
+    border-radius: 4px;
+    background: rgba(0, 255, 65, 0.03);
+    color: #888;
+    font-size: 0.7rem;
+    letter-spacing: 0;
+  }
+  .activity-icon-btn:hover {
+    border-color: rgba(0, 255, 65, 0.45);
+    background: rgba(0, 255, 65, 0.08);
+    color: var(--color-primary);
+    transform: none;
   }
 
   .status-chip {

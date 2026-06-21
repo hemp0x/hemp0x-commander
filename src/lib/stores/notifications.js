@@ -1,7 +1,7 @@
 import { writable, derived } from "svelte/store";
 
 const STORAGE_KEY = "hemp0x_notifications";
-const MAX_ITEMS = 100;
+const MAX_ITEMS = 500;
 const DEDUPE_WINDOW_MS = 5000;
 
 function getStorage() {

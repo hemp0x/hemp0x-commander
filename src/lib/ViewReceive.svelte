@@ -12,6 +12,10 @@
     let tauriReady = false;
     let showChange = false;
     let isExpanded = false; // EXPANSION STATE
+    let generating = false;
+    let editingAddress = null;
+    let editingLabel = "";
+    let savingLabel = false;
 
     $: isNodeOnline = $nodeStatus.online;
 
@@ -46,6 +50,7 @@
             status = "Tauri backend not available.";
             return;
         }
+        generating = true;
         try {
             const addr = await core.invoke("new_address", { label });
             status = `Created: ${addr}`;
@@ -53,6 +58,8 @@
             await refreshList();
         } catch (err) {
             status = `Error: ${err}`;
+        } finally {
+            generating = false;
         }
     }
 
@@ -67,6 +74,47 @@
 
     function toggleExpand() {
         isExpanded = !isExpanded;
+    }
+
+    function openExplorer(address) {
+        window.dispatchEvent(
+            new CustomEvent("commander-open-explorer", {
+                detail: { target: address },
+            }),
+        );
+    }
+
+    function beginEditLabel(item) {
+        editingAddress = item.address;
+        editingLabel = item.label || "";
+    }
+
+    function closeEditLabel() {
+        if (savingLabel) return;
+        editingAddress = null;
+        editingLabel = "";
+    }
+
+    async function saveAddressLabel() {
+        if (!editingAddress || savingLabel) return;
+        savingLabel = true;
+        try {
+            await core.invoke("set_wallet_address_label", {
+                address: editingAddress,
+                label: editingLabel,
+            });
+            status = "Address label updated.";
+            closeEditLabel();
+            await refreshList();
+        } catch (err) {
+            status = `Error: ${err}`;
+        } finally {
+            savingLabel = false;
+            if (!savingLabel) {
+                editingAddress = null;
+                editingLabel = "";
+            }
+        }
     }
 
     onMount(() => {
@@ -148,14 +196,28 @@
                 <label for="new-label" class="field-label"
                     >LABEL (OPTIONAL)</label
                 >
-                <div class="input-wrapper brackets">
+                <div class="generate-row">
                     <input
                         id="new-label"
                         type="text"
                         bind:value={label}
                         placeholder="MINING_PAYOUTS..."
                         class="input-glass mono"
+                        on:keydown={(e) =>
+                            e.key === "Enter" &&
+                            !generating &&
+                            isNodeOnline &&
+                            generateAddr()}
                     />
+                    <button
+                        class="square-action primary"
+                        disabled={!isNodeOnline || generating}
+                        on:click={generateAddr}
+                        title="Generate receiving address"
+                        aria-label="Generate receiving address"
+                    >
+                        {generating ? "..." : "+"}
+                    </button>
                 </div>
             </div>
 
@@ -170,7 +232,7 @@
                     INCLUDE CHANGE ADDR
                 </label>
 
-                <div class="btn-group">
+                <div class="recovery-row">
                     <button
                         class="btn-gen ghost"
                         class:disabled={!isNodeOnline}
@@ -178,14 +240,6 @@
                         on:click={refreshList}
                     >
                         REFRESH
-                    </button>
-                    <button
-                        class="btn-gen cyber-btn"
-                        class:disabled={!isNodeOnline}
-                        disabled={!isNodeOnline}
-                        on:click={generateAddr}
-                    >
-                        {isNodeOnline ? "[ GENERATE ]" : "[ NOT CONNECTED ]"}
                     </button>
                 </div>
             </div>
@@ -208,7 +262,7 @@
                     <span class="expand-icon">{isExpanded ? "▼" : "▲"}</span>
                 </button>
             </div>
-            <span class="hint mono">CLICK TO COPY</span>
+            <span class="hint mono">{sortedAddresses.length} ADDRESSES</span>
         </header>
 
         <!-- TECH HEADER -->
@@ -234,26 +288,43 @@
             >
                 BALANCE
             </span>
+            <span class="right">ACTIONS</span>
         </div>
 
         <div class="scroll-body">
             {#each sortedAddresses as item, i}
-                <div
-                    class="data-row addr-row"
-                    role="button"
-                    tabindex="0"
-                    on:click={() => copyAddr(item.address)}
-                    on:keydown={(e) =>
-                        (e.key === "Enter" || e.key === " ") &&
-                        copyAddr(item.address)}
-                    title="Click to Copy"
-                    in:fly={{ y: 20, duration: 300, delay: i * 50 }}
-                >
+                <div class="data-row addr-row" in:fly={{ y: 20, duration: 300, delay: i * 50 }}>
                     <span class="dim label-text">{item.label || "-"}</span>
                     <span class="mono addr">{item.address}</span>
                     <span class="mono val right"
                         >{formatBalance(item.balance)}</span
                     >
+                    <span class="address-actions">
+                        <button
+                            class="square-action"
+                            on:click={() => beginEditLabel(item)}
+                            title="Edit label"
+                            aria-label="Edit address label"
+                        >
+                            &#x270E;
+                        </button>
+                        <button
+                            class="square-action"
+                            on:click={() => openExplorer(item.address)}
+                            title="Explore address"
+                            aria-label="Explore address"
+                        >
+                            &#x2315;
+                        </button>
+                        <button
+                            class="square-action"
+                            on:click={() => copyAddr(item.address)}
+                            title="Copy address"
+                            aria-label="Copy address"
+                        >
+                            &#x2398;
+                        </button>
+                    </span>
                 </div>
             {/each}
         </div>
@@ -270,6 +341,39 @@
         {/if}
     </div>
 </div>
+
+{#if editingAddress}
+    <div class="label-modal-backdrop" role="presentation">
+        <div
+            class="label-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-label-title"
+        >
+            <span class="eyebrow mono">RECEIVE ADDRESS</span>
+            <h3 id="edit-label-title">EDIT LABEL</h3>
+            <span class="modal-address mono">{editingAddress}</span>
+            <input
+                class="input-glass mono"
+                bind:value={editingLabel}
+                maxlength="256"
+                placeholder="Address label"
+                on:keydown={(e) =>
+                    e.key === "Enter"
+                        ? saveAddressLabel()
+                        : e.key === "Escape" && closeEditLabel()}
+            />
+            <div class="modal-actions">
+                <button class="btn-gen ghost" on:click={closeEditLabel} disabled={savingLabel}
+                    >CANCEL</button
+                >
+                <button class="btn-gen cyber-btn" on:click={saveAddressLabel} disabled={savingLabel}
+                    >{savingLabel ? "SAVING..." : "SAVE"}</button
+                >
+            </div>
+        </div>
+    </div>
+{/if}
 
 <style>
     .view-receive {
@@ -375,8 +479,11 @@
         display: block;
         letter-spacing: 0.5px;
     }
-    .input-wrapper {
-        position: relative;
+    .generate-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 2.6rem;
+        gap: 0.55rem;
+        align-items: stretch;
     }
 
     .input-glass {
@@ -400,10 +507,14 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 1rem;
         margin-top: 0.3rem;
     }
-    .btn-group {
+    .recovery-row {
         display: flex;
+        flex: 1;
+        justify-content: flex-end;
+        align-items: center;
         gap: 0.6rem;
     }
 
@@ -469,11 +580,44 @@
         opacity: 0.4;
         cursor: not-allowed;
     }
+    .square-action {
+        display: inline-grid;
+        width: 2rem;
+        height: 2rem;
+        flex: 0 0 auto;
+        place-items: center;
+        padding: 0;
+        border: 1px solid rgba(0, 255, 65, 0.18);
+        border-radius: 5px;
+        background: rgba(0, 255, 65, 0.035);
+        color: var(--color-primary);
+        font-size: 0.85rem;
+        line-height: 1;
+        letter-spacing: 0;
+    }
+    .square-action.primary {
+        width: 2.6rem;
+        height: auto;
+        min-height: 2.2rem;
+        background: rgba(0, 255, 65, 0.09);
+        border-color: rgba(0, 255, 65, 0.3);
+        font-size: 1.15rem;
+    }
+    .square-action:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        background: rgba(0, 255, 65, 0.12);
+        box-shadow: 0 0 12px rgba(0, 255, 65, 0.12);
+        transform: none;
+    }
+    .square-action:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
 
     /* --- ADDRESS LIST --- */
     .addr-grid-header {
         display: grid;
-        grid-template-columns: 180px 1fr 100px; /* Wider label column */
+        grid-template-columns: minmax(110px, 180px) minmax(240px, 1fr) 140px 112px;
         padding: 0.6rem 1.2rem;
         border-bottom: 1px solid rgba(0, 255, 65, 0.15);
         background: rgba(0, 255, 65, 0.02);
@@ -502,12 +646,11 @@
 
     .data-row {
         display: grid;
-        grid-template-columns: 180px 1fr 140px; /* Wider balance column */
+        grid-template-columns: minmax(110px, 180px) minmax(240px, 1fr) 140px 112px;
         padding: 0.8rem 1.2rem;
         border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         align-items: center;
         transition: all 0.15s;
-        cursor: copy;
     }
     .data-row:hover {
         background: rgba(0, 255, 65, 0.05);
@@ -536,6 +679,11 @@
     }
     .right {
         text-align: right;
+    }
+    .address-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.35rem;
     }
 
     /* STATUS BAR */
@@ -587,5 +735,75 @@
     .header-left {
         display: flex;
         align-items: center;
+    }
+
+    .label-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 11000;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.78);
+        backdrop-filter: blur(8px);
+    }
+    .label-modal {
+        width: min(440px, 100%);
+        padding: 1.1rem;
+        border: 1px solid rgba(0, 255, 65, 0.22);
+        border-radius: 8px;
+        background: #030604;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8);
+    }
+    .label-modal h3 {
+        margin: 0.25rem 0 0.55rem;
+        color: var(--color-primary);
+        font-size: 0.9rem;
+        letter-spacing: 1px;
+    }
+    .eyebrow {
+        color: #777;
+        font-size: 0.6rem;
+        letter-spacing: 1px;
+    }
+    .modal-address {
+        display: block;
+        margin-bottom: 0.8rem;
+        overflow: hidden;
+        color: #aaa;
+        font-size: 0.7rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.55rem;
+        margin-top: 0.8rem;
+    }
+
+    @media (max-width: 760px) {
+        .controls-row {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+        .recovery-row {
+            width: 100%;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .addr-grid-header,
+        .data-row {
+            grid-template-columns: minmax(90px, 130px) minmax(190px, 1fr) 110px 104px;
+        }
+        .addr-grid-header {
+            min-width: 600px;
+        }
+        .data-row {
+            min-width: 600px;
+        }
+        .scroll-body {
+            overflow: auto;
+        }
     }
 </style>

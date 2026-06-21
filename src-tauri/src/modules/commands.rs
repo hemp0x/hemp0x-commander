@@ -4939,6 +4939,590 @@ pub fn estimate_announcement_fee() -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Local Chain Explorer
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerAsset {
+    pub name: Option<String>,
+    pub amount: Option<f64>,
+    pub asset_type: Option<String>,
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerVin {
+    pub txid: Option<String>,
+    pub vout: Option<u64>,
+    pub sequence: Option<u64>,
+    pub coinbase: Option<String>,
+    pub addresses: Vec<String>,
+    pub assets: Vec<ExplorerAsset>,
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerVout {
+    pub n: Option<u64>,
+    pub value: Option<f64>,
+    pub script_type: Option<String>,
+    pub script_hex: Option<String>,
+    pub addresses: Vec<String>,
+    pub assets: Vec<ExplorerAsset>,
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionDetail {
+    pub txid: String,
+    pub confirmations: Option<i64>,
+    pub size: Option<u64>,
+    pub vsize: Option<u64>,
+    pub blockhash: Option<String>,
+    pub time: Option<i64>,
+    pub vin: Vec<ExplorerVin>,
+    pub vout: Vec<ExplorerVout>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddressIndexState {
+    Supported,
+    Unsupported,
+    Error,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBalanceCapability {
+    pub supported: bool,
+    pub state: AddressIndexState,
+    pub balance: Option<i64>,
+    pub received: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressTxidsCapability {
+    pub supported: bool,
+    pub state: AddressIndexState,
+    pub txids: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressDetail {
+    pub address: String,
+    pub is_valid: bool,
+    pub is_mine: bool,
+    pub is_watch_only: bool,
+    pub script_pub_key: Option<String>,
+    pub labels: Vec<String>,
+    pub address_balance_supported: bool,
+    pub address_txids_supported: bool,
+    pub balance: AddressBalanceCapability,
+    pub transactions: AddressTxidsCapability,
+    pub validation: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressLabelUpdate {
+    pub address: String,
+    pub label: String,
+    pub method: String,
+}
+
+fn validate_explorer_txid(txid: &str) -> Result<String, String> {
+    let txid = txid.trim();
+    if txid.len() != 64 || !txid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Transaction id must be exactly 64 hexadecimal characters".to_string());
+    }
+    Ok(txid.to_ascii_lowercase())
+}
+
+fn validate_explorer_address_input(address: &str) -> Result<String, String> {
+    let address = address.trim();
+    if address.is_empty() {
+        return Err("Address is required".to_string());
+    }
+    if address.len() > 128 {
+        return Err("Address is too long".to_string());
+    }
+    if address
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err("Address cannot contain whitespace or control characters".to_string());
+    }
+    Ok(address.to_string())
+}
+
+fn validate_address_label(label: &str) -> Result<String, String> {
+    if label.len() > 256 {
+        return Err("Address label must not exceed 256 characters".to_string());
+    }
+    if label.chars().any(|character| character.is_control()) {
+        return Err("Address label cannot contain control characters".to_string());
+    }
+    Ok(label.to_string())
+}
+
+fn parse_cli_json(raw: &str, method: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str(raw)
+        .map_err(|error| format!("Malformed {method} response from Core: {error}"))
+}
+
+fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn collect_addresses(value: &serde_json::Value) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for container in [
+        Some(value),
+        value.get("scriptPubKey"),
+        value.get("scriptSig"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(address) = container.get("address").and_then(serde_json::Value::as_str) {
+            addresses.push(address.to_string());
+        }
+        if let Some(items) = container
+            .get("addresses")
+            .and_then(serde_json::Value::as_array)
+        {
+            addresses.extend(
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string),
+            );
+        }
+    }
+    addresses.sort();
+    addresses.dedup();
+    addresses
+}
+
+fn parse_explorer_asset(value: &serde_json::Value) -> ExplorerAsset {
+    ExplorerAsset {
+        name: string_field(value, "name")
+            .or_else(|| string_field(value, "asset_name"))
+            .or_else(|| string_field(value, "assetName")),
+        amount: value
+            .get("amount")
+            .or_else(|| value.get("qty"))
+            .and_then(serde_json::Value::as_f64),
+        asset_type: string_field(value, "type")
+            .or_else(|| string_field(value, "asset_type"))
+            .or_else(|| string_field(value, "assetType")),
+        raw: value.clone(),
+    }
+}
+
+fn collect_assets(value: &serde_json::Value) -> Vec<ExplorerAsset> {
+    let mut assets = Vec::new();
+    for container in [
+        Some(value),
+        value.get("scriptPubKey"),
+        value.get("scriptSig"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(asset) = container.get("asset") {
+            if let Some(items) = asset.as_array() {
+                assets.extend(items.iter().map(parse_explorer_asset));
+            } else if asset.is_object() {
+                assets.push(parse_explorer_asset(asset));
+            }
+        }
+        if let Some(items) = container
+            .get("assets")
+            .and_then(serde_json::Value::as_array)
+        {
+            assets.extend(items.iter().map(parse_explorer_asset));
+        }
+    }
+    assets
+}
+
+fn parse_transaction_detail(
+    decoded: &serde_json::Value,
+    metadata: &serde_json::Value,
+    requested_txid: &str,
+    source: &str,
+) -> Result<TransactionDetail, String> {
+    let decoded_object = decoded
+        .as_object()
+        .ok_or_else(|| "Decoded transaction response must be a JSON object".to_string())?;
+    let txid = decoded_object
+        .get("txid")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| metadata.get("txid").and_then(serde_json::Value::as_str))
+        .unwrap_or(requested_txid)
+        .to_string();
+
+    let vin = decoded_object
+        .get("vin")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| ExplorerVin {
+                    txid: string_field(item, "txid"),
+                    vout: item.get("vout").and_then(serde_json::Value::as_u64),
+                    sequence: item.get("sequence").and_then(serde_json::Value::as_u64),
+                    coinbase: string_field(item, "coinbase"),
+                    addresses: collect_addresses(item),
+                    assets: collect_assets(item),
+                    raw: item.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let vout = decoded_object
+        .get("vout")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let script = item.get("scriptPubKey").unwrap_or(&serde_json::Value::Null);
+                    ExplorerVout {
+                        n: item.get("n").and_then(serde_json::Value::as_u64),
+                        value: item.get("value").and_then(serde_json::Value::as_f64),
+                        script_type: string_field(script, "type"),
+                        script_hex: string_field(script, "hex"),
+                        addresses: collect_addresses(item),
+                        assets: collect_assets(item),
+                        raw: item.clone(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(TransactionDetail {
+        txid,
+        confirmations: metadata
+            .get("confirmations")
+            .and_then(serde_json::Value::as_i64)
+            .or_else(|| {
+                decoded
+                    .get("confirmations")
+                    .and_then(serde_json::Value::as_i64)
+            }),
+        size: decoded.get("size").and_then(serde_json::Value::as_u64),
+        vsize: decoded.get("vsize").and_then(serde_json::Value::as_u64),
+        blockhash: string_field(metadata, "blockhash")
+            .or_else(|| string_field(decoded, "blockhash")),
+        time: metadata
+            .get("blocktime")
+            .or_else(|| metadata.get("time"))
+            .or_else(|| metadata.get("timereceived"))
+            .or_else(|| decoded.get("blocktime"))
+            .or_else(|| decoded.get("time"))
+            .and_then(serde_json::Value::as_i64),
+        vin,
+        vout,
+        source: source.to_string(),
+    })
+}
+
+fn get_transaction_detail_blocking(txid: &str) -> Result<TransactionDetail, String> {
+    let raw_result = run_cli(&[
+        "getrawtransaction".to_string(),
+        txid.to_string(),
+        "true".to_string(),
+    ]);
+    if let Ok(raw) = raw_result.as_ref() {
+        let verbose = parse_cli_json(raw, "getrawtransaction")?;
+        return parse_transaction_detail(&verbose, &verbose, txid, "getrawtransaction");
+    }
+
+    let wallet_raw = run_cli(&["gettransaction".to_string(), txid.to_string()]).map_err(
+        |wallet_error| {
+            format!(
+                "Transaction was not available from the node or wallet. getrawtransaction: {}; gettransaction: {wallet_error}",
+                raw_result.unwrap_err()
+            )
+        },
+    )?;
+    let wallet = parse_cli_json(&wallet_raw, "gettransaction")?;
+    let hex = wallet
+        .get("hex")
+        .and_then(serde_json::Value::as_str)
+        .filter(|hex| !hex.is_empty())
+        .ok_or_else(|| {
+            "Wallet transaction response did not include raw transaction hex".to_string()
+        })?;
+    let decoded_raw = run_cli(&["decoderawtransaction".to_string(), hex.to_string()])?;
+    let decoded = parse_cli_json(&decoded_raw, "decoderawtransaction")?;
+    parse_transaction_detail(&decoded, &wallet, txid, "gettransaction")
+}
+
+#[tauri::command]
+pub async fn get_transaction_detail(txid: String) -> Result<TransactionDetail, String> {
+    let txid = validate_explorer_txid(&txid)?;
+    tauri::async_runtime::spawn_blocking(move || get_transaction_detail_blocking(&txid))
+        .await
+        .map_err(|error| format!("Transaction detail task failed: {error}"))?
+}
+
+fn is_unsupported_rpc_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "method not found",
+        "unknown command",
+        "unknown method",
+        "-32601",
+        "address index",
+        "addressindex",
+        "not enabled",
+        "disabled",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
+fn is_unavailable_method_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "method not found",
+        "unknown command",
+        "unknown method",
+        "-32601",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
+fn address_index_state(error: &str) -> AddressIndexState {
+    if is_unsupported_rpc_error(error) {
+        AddressIndexState::Unsupported
+    } else {
+        AddressIndexState::Error
+    }
+}
+
+fn address_balance_capability(address: &str) -> AddressBalanceCapability {
+    let query = serde_json::json!({ "addresses": [address] }).to_string();
+    match run_cli(&["getaddressbalance".to_string(), query]) {
+        Ok(raw) => match parse_cli_json(&raw, "getaddressbalance") {
+            Ok(value) => AddressBalanceCapability {
+                supported: true,
+                state: AddressIndexState::Supported,
+                balance: value.get("balance").and_then(serde_json::Value::as_i64),
+                received: value.get("received").and_then(serde_json::Value::as_i64),
+                error: None,
+            },
+            Err(error) => AddressBalanceCapability {
+                supported: true,
+                state: AddressIndexState::Error,
+                balance: None,
+                received: None,
+                error: Some(error),
+            },
+        },
+        Err(error) => AddressBalanceCapability {
+            supported: false,
+            state: address_index_state(&error),
+            balance: None,
+            received: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn address_txids_capability(address: &str) -> AddressTxidsCapability {
+    let query = serde_json::json!({ "addresses": [address] }).to_string();
+    match run_cli(&["getaddresstxids".to_string(), query]) {
+        Ok(raw) => match parse_cli_json(&raw, "getaddresstxids") {
+            Ok(value) => match value.as_array() {
+                Some(items) => AddressTxidsCapability {
+                    supported: true,
+                    state: AddressIndexState::Supported,
+                    txids: items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                    error: None,
+                },
+                None => AddressTxidsCapability {
+                    supported: true,
+                    state: AddressIndexState::Error,
+                    txids: Vec::new(),
+                    error: Some(
+                        "Malformed getaddresstxids response from Core: expected an array"
+                            .to_string(),
+                    ),
+                },
+            },
+            Err(error) => AddressTxidsCapability {
+                supported: true,
+                state: AddressIndexState::Error,
+                txids: Vec::new(),
+                error: Some(error),
+            },
+        },
+        Err(error) => AddressTxidsCapability {
+            supported: false,
+            state: address_index_state(&error),
+            txids: Vec::new(),
+            error: Some(error),
+        },
+    }
+}
+
+fn parse_address_labels(validation: &serde_json::Value) -> Vec<String> {
+    let mut labels = Vec::new();
+    for field in ["label", "account"] {
+        if let Some(label) = validation.get(field).and_then(serde_json::Value::as_str) {
+            labels.push(label.to_string());
+        }
+    }
+    if let Some(items) = validation
+        .get("labels")
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in items {
+            if let Some(label) = item
+                .as_str()
+                .or_else(|| item.get("name").and_then(serde_json::Value::as_str))
+            {
+                labels.push(label.to_string());
+            }
+        }
+    }
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+fn validate_address_with_core(address: &str) -> Result<serde_json::Value, String> {
+    let raw = run_cli(&["validateaddress".to_string(), address.to_string()])?;
+    let validation = parse_cli_json(&raw, "validateaddress")?;
+    if !validation
+        .get("isvalid")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("Core rejected the address as invalid".to_string());
+    }
+    Ok(validation)
+}
+
+fn get_address_detail_blocking(address: &str) -> Result<AddressDetail, String> {
+    let validation = validate_address_with_core(address)?;
+    let canonical_address =
+        string_field(&validation, "address").unwrap_or_else(|| address.to_string());
+    let balance = address_balance_capability(&canonical_address);
+    let transactions = address_txids_capability(&canonical_address);
+
+    Ok(AddressDetail {
+        address: canonical_address,
+        is_valid: true,
+        is_mine: validation
+            .get("ismine")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_watch_only: validation
+            .get("iswatchonly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        script_pub_key: string_field(&validation, "scriptPubKey"),
+        labels: parse_address_labels(&validation),
+        address_balance_supported: balance.supported,
+        address_txids_supported: transactions.supported,
+        balance,
+        transactions,
+        validation,
+    })
+}
+
+#[tauri::command]
+pub async fn get_address_detail(address: String) -> Result<AddressDetail, String> {
+    let address = validate_explorer_address_input(&address)?;
+    tauri::async_runtime::spawn_blocking(move || get_address_detail_blocking(&address))
+        .await
+        .map_err(|error| format!("Address detail task failed: {error}"))?
+}
+
+fn set_wallet_address_label_blocking(
+    address: &str,
+    label: &str,
+) -> Result<AddressLabelUpdate, String> {
+    let validation = validate_address_with_core(address)?;
+    let is_wallet_address = validation
+        .get("ismine")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        || validation
+            .get("iswatchonly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    if !is_wallet_address {
+        return Err("Address does not belong to the current wallet".to_string());
+    }
+
+    let canonical_address =
+        string_field(&validation, "address").unwrap_or_else(|| address.to_string());
+    let setlabel_args = [
+        "setlabel".to_string(),
+        canonical_address.clone(),
+        label.to_string(),
+    ];
+    let method = match run_cli(&setlabel_args) {
+        Ok(_) => "setlabel",
+        Err(error) if is_unavailable_method_error(&error) => {
+            run_cli(&[
+                "setaccount".to_string(),
+                canonical_address.clone(),
+                label.to_string(),
+            ])?;
+            "setaccount"
+        }
+        Err(error) => return Err(error),
+    };
+
+    Ok(AddressLabelUpdate {
+        address: canonical_address,
+        label: label.to_string(),
+        method: method.to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn set_wallet_address_label(
+    address: String,
+    label: String,
+) -> Result<AddressLabelUpdate, String> {
+    let address = validate_explorer_address_input(&address)?;
+    let label = validate_address_label(&label)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        set_wallet_address_label_blocking(&address, &label)
+    })
+    .await
+    .map_err(|error| format!("Address label task failed: {error}"))?
+}
+
+// ---------------------------------------------------------------------------
 // IPFS Reference Helpers
 // ---------------------------------------------------------------------------
 
@@ -4998,22 +5582,24 @@ pub fn ipfs_gateway_url(hash: String, gateway_base: Option<String>) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_balance_from_listmyassets, build_ipfs_gateway_url, build_issue_unique_args,
-        build_reissue_args, build_reissue_preview, clamp_fee_rate_sat_per_byte,
-        collect_selected_safe_utxos, derive_authority_asset, detect_duplicate_inputs,
-        estimate_consolidation_round_count, estimate_fee_from_bytes, estimate_legacy_tx_bytes,
-        format_hemp_amount, h0xc_resolve_authority_addresses, hemp_to_sat, is_h0xc_channel,
-        is_utxo_unsafe_for_hemp, max_policy_inputs, message_authority_asset_name,
-        normalize_cli_txid, normalize_raw_tx_outputs, normalize_unique_asset_inputs,
-        parse_channel_name_list, parse_estimatesmartfee_sat_per_byte, parse_message_entry,
-        parse_message_list, parse_messaging_info, parse_non_negative_amount, parse_output_sum,
-        parse_positive_amount, recommended_consolidation_fee_rate_sat_per_byte, sat_to_hemp,
-        validate_asset_name, validate_asset_transfer_preview_fields, validate_channel_name,
+        address_index_state, asset_balance_from_listmyassets, build_ipfs_gateway_url,
+        build_issue_unique_args, build_reissue_args, build_reissue_preview,
+        clamp_fee_rate_sat_per_byte, collect_selected_safe_utxos, derive_authority_asset,
+        detect_duplicate_inputs, estimate_consolidation_round_count, estimate_fee_from_bytes,
+        estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
+        hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
+        max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
+        normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
+        parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
+        parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
+        parse_transaction_detail, recommended_consolidation_fee_rate_sat_per_byte, sat_to_hemp,
+        validate_address_label, validate_asset_name, validate_asset_transfer_preview_fields,
+        validate_channel_name, validate_explorer_address_input, validate_explorer_txid,
         validate_fee_rate_sat_per_byte, validate_ipfs_hash, validate_ipfs_reference,
         validate_message_expire_time, validate_migration_passphrase, validate_migration_path,
         validate_migration_wallet_name, validate_qualifier_name, validate_raw_tx_hex,
         validate_restricted_name, validate_send_preview_fields, validate_tx_input,
-        validate_verifier_string,
+        validate_verifier_string, AddressIndexState,
     };
     use crate::modules::models::RawTxInput;
     use std::collections::HashMap;
@@ -5059,6 +5645,70 @@ mod tests {
     fn rejects_non_hemp_asset_for_hemp_preview() {
         let result = validate_send_preview_fields("Haddr1", "1.0", "TOKEN", None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validates_explorer_inputs() {
+        assert_eq!(
+            validate_explorer_txid(&"A".repeat(64)).unwrap(),
+            "a".repeat(64)
+        );
+        assert!(validate_explorer_txid("abc").is_err());
+        assert!(validate_explorer_txid(&"z".repeat(64)).is_err());
+        assert!(validate_explorer_address_input(" HValidAddress ").is_ok());
+        assert!(validate_explorer_address_input("bad address").is_err());
+        assert!(validate_address_label("wallet savings").is_ok());
+        assert!(validate_address_label("bad\nlabel").is_err());
+    }
+
+    #[test]
+    fn classifies_address_index_capability_errors() {
+        assert_eq!(
+            address_index_state("RPC error: Method not found"),
+            AddressIndexState::Unsupported
+        );
+        assert_eq!(
+            address_index_state("Address index is not enabled"),
+            AddressIndexState::Unsupported
+        );
+        assert_eq!(
+            address_index_state("RPC connection reset"),
+            AddressIndexState::Error
+        );
+        assert!(is_unavailable_method_error("RPC error: Method not found"));
+        assert!(!is_unavailable_method_error("Wallet is disabled"));
+    }
+
+    #[test]
+    fn parses_verbose_transaction_addresses_and_assets() {
+        let txid = "1".repeat(64);
+        let verbose = serde_json::json!({
+            "txid": txid,
+            "confirmations": 7,
+            "size": 225,
+            "vsize": 144,
+            "blockhash": "block",
+            "blocktime": 1234,
+            "vin": [{ "txid": "2".repeat(64), "vout": 1, "sequence": 42 }],
+            "vout": [{
+                "value": 1.25,
+                "n": 0,
+                "scriptPubKey": {
+                    "hex": "deadbeef",
+                    "type": "transfer_asset",
+                    "addresses": ["HAddress"],
+                    "asset": { "name": "TEST", "amount": 5.0, "type": "transfer" }
+                }
+            }]
+        });
+
+        let detail =
+            parse_transaction_detail(&verbose, &verbose, &"0".repeat(64), "getrawtransaction")
+                .unwrap();
+        assert_eq!(detail.confirmations, Some(7));
+        assert_eq!(detail.vout[0].addresses, vec!["HAddress"]);
+        assert_eq!(detail.vout[0].assets[0].name.as_deref(), Some("TEST"));
+        assert_eq!(detail.vout[0].assets[0].amount, Some(5.0));
     }
 
     #[test]

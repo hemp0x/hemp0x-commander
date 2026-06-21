@@ -184,6 +184,24 @@
         || !!selectedDetail || transferModalOpen || reissueModalOpen
         || subModalOpen || nftModalOpen || govModalOpen;
 
+    /** @param {DragEvent} e */
+    function handleGlobalDrag(e) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    }
+
+    /** @param {DragEvent} e */
+    function preventGlobalDrop(e) {
+        e.preventDefault();
+    }
+
+    function openNetworkAssetBrowser() {
+        browseModalOpen = true;
+        advancedModalOpen = false;
+        createModalOpen = false;
+        selectedDetail = null;
+    }
+
     onMount(async () => {
         tauriReady =
             typeof core?.isTauri === "function" ? core.isTauri() : false;
@@ -193,14 +211,9 @@
         }
 
         // Global DnD Fix: Explicitly allow 'move' everywhere to prevent forbidden cursor
-        /** @param {DragEvent} e */
-        const handleGlobalDrag = (e) => {
-            e.preventDefault();
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; // CRITICAL: Must match effectAllowed
-            return false;
-        };
         window.addEventListener("dragover", handleGlobalDrag, false);
-        window.addEventListener("drop", (e) => e.preventDefault(), false); // Prevent actual file open behavior
+        window.addEventListener("drop", preventGlobalDrop, false);
+        window.addEventListener("commander-open-asset-browser", openNetworkAssetBrowser);
 
         // Load UI settings from backend
         try {
@@ -229,6 +242,9 @@
     onDestroy(() => {
         dragGhostEl?.remove();
         dragGhostEl = null;
+        window.removeEventListener("dragover", handleGlobalDrag, false);
+        window.removeEventListener("drop", preventGlobalDrop, false);
+        window.removeEventListener("commander-open-asset-browser", openNetworkAssetBrowser);
     });
 
     // Save helpers

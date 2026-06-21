@@ -82,6 +82,15 @@
         }
     }
 
+    function openExplorer(target) {
+        if (!target) return;
+        window.dispatchEvent(
+            new CustomEvent("commander-open-explorer", {
+                detail: { target },
+            }),
+        );
+    }
+
     function toggleDetails(txid) {
         expandedTxid = expandedTxid === txid ? null : txid;
     }
@@ -178,11 +187,35 @@
                                     {tx.asset || "HEMP"}
                                 </td>
                                 <td class="conf-cell" on:click={() => toggleDetails(tx.txid)}>{tx.confirmations}</td>
-                                <td class="addr-cell mono" on:click={() => toggleDetails(tx.txid)}>
-                                    {tx.address ? tx.address.substring(0, 12) + "..." : "-"}
+                                <td class="addr-cell mono">
+                                    <button
+                                        class="address-summary-btn"
+                                        on:click={() => toggleDetails(tx.txid)}
+                                        title={tx.address || ""}
+                                    >
+                                        {tx.address ? tx.address.substring(0, 12) + "..." : "-"}
+                                    </button>
+                                    {#if tx.address}
+                                        <button
+                                            class="copy-btn"
+                                            on:click={() => openExplorer(tx.address)}
+                                            title="Explore address"
+                                            aria-label="Explore address"
+                                        >
+                                            &#x2315;
+                                        </button>
+                                    {/if}
                                 </td>
                                 <td class="txid-cell">
                                     <span class="mono txid-text">{tx.txid.substring(0, 16)}...</span>
+                                    <button
+                                        class="copy-btn"
+                                        on:click={() => openExplorer(tx.txid)}
+                                        title="Explore transaction"
+                                        aria-label="Explore transaction"
+                                    >
+                                        &#x2315;
+                                    </button>
                                     <button class="copy-btn" on:click={() => copyTxid(tx.txid)} title="Copy TXID">
                                         &#x2398;
                                     </button>
@@ -352,7 +385,32 @@
     .amount-cell.negative { color: #ff6666; }
     .asset-cell { font-size: 0.7rem; color: #aaa; }
     .conf-cell { font-size: 0.7rem; color: #888; }
-    .addr-cell { font-size: 0.7rem; color: #aaa; }
+    .addr-cell {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.7rem;
+        color: #aaa;
+    }
+    .address-summary-btn {
+        min-width: 0;
+        padding: 0;
+        overflow: hidden;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        letter-spacing: 0;
+        text-align: left;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .address-summary-btn:hover {
+        background: transparent;
+        color: var(--color-primary);
+        box-shadow: none;
+        transform: none;
+    }
     .txid-cell {
         display: flex;
         align-items: center;

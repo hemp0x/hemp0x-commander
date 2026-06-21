@@ -72,12 +72,11 @@ pub fn start_node_blocking() -> Result<(), String> {
 }
 
 /// Poll Core until the named wallet answers `getwalletinfo`, or surface a
-/// F2: Bounded polling with delay between probes, no loadwallet.
-/// Uses Instant deadline and ~750ms sleep between probes.
-/// Retains ~30s bounded wait.
+/// bounded readiness error. Some restarts need longer than the old 30s window,
+/// especially after wallet encryption or rapid wallet switching.
 fn verify_named_wallet_loaded_after_start(wallet_name: &str) -> Result<(), String> {
     let wallet_arg = format!("-wallet={wallet_name}");
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(90);
     let mut last_error = String::new();
     // Brief initial wait for daemon bind
     thread::sleep(Duration::from_millis(800));
@@ -100,11 +99,14 @@ fn verify_named_wallet_loaded_after_start(wallet_name: &str) -> Result<(), Strin
         thread::sleep(Duration::from_millis(750));
     }
 
+    let status = if last_error.is_empty() {
+        "no response"
+    } else {
+        &last_error
+    };
     Err(format!(
-    "Core started, but the active vault wallet '{}' is not queryable after 30 seconds. Last status: {}. Start Core through Commander again, or use the Wallet page to restore/load the vault wallet.",
-    wallet_name,
-    if last_error.is_empty() { "no response" } else { &last_error }
-  ))
+        "Core started, but the active vault wallet '{wallet_name}' is not queryable after 90 seconds. Last status: {status}. Start Core through Commander again, or use the Wallet page to restore/load the vault wallet."
+    ))
 }
 
 pub fn wait_for_default_wallet_queryable(timeout: Duration) -> Result<(), String> {
@@ -282,6 +284,41 @@ pub fn restart_node_with_wallet_for_default_context(wallet_name: &str) -> Result
     restart_node_with_wallet_robust_inner(wallet_name, true, true)
 }
 
+fn stop_daemon_for_wallet_restart(timeout: Duration) -> Result<(), String> {
+    if !daemon_process_running() {
+        return Ok(());
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut last_stop_error = String::new();
+    let mut next_stop_attempt = Instant::now();
+
+    while daemon_process_running() && Instant::now() < deadline {
+        if Instant::now() >= next_stop_attempt {
+            match run_cli(&[String::from("stop")]) {
+                Ok(_) => last_stop_error = "stop requested".to_string(),
+                Err(e) => last_stop_error = e,
+            }
+            next_stop_attempt = Instant::now() + Duration::from_secs(5);
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    if daemon_process_running() {
+        return Err(format!(
+            "CORE_LOCK_BUSY::Core is still stopping with data directory {}. Last stop status: {}. Wait a few moments and try again.",
+            data_dir()?.join(".lock").to_string_lossy(),
+            if last_stop_error.is_empty() {
+                "no stop response"
+            } else {
+                last_stop_error.as_str()
+            }
+        ));
+    }
+
+    Ok(())
+}
+
 fn restart_node_with_wallet_robust_inner(
     wallet_name: &str,
     poll_until_loaded: bool,
@@ -305,42 +342,18 @@ fn restart_node_with_wallet_robust_inner(
         // If the wallet is not queryable, fall through to the stop/restart path.
     }
 
-    // Step 1: stop Core if running
-    let _ = run_cli(&[String::from("stop")]);
-    thread::sleep(Duration::from_secs(2));
+    // Step 1/2: stop Core and wait until the process is gone. Do not call the
+    // normal start helper while a different wallet is still running; Core Next
+    // cannot dynamically switch wallets in that state.
+    stop_daemon_for_wallet_restart(Duration::from_secs(90))?;
 
-    // Step 2: wait for the daemon process to exit (up to 30s). The .lock file
-    // may persist after shutdown, so its existence is not a reliable signal.
-    let mut handled_running_daemon = false;
-    for _ in 0..60 {
-        if !daemon_process_running() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(500));
-    }
-    if daemon_process_running() {
-        // If RPC is still responding, the daemon is alive; try
-        // the running-daemon load path one more time instead of failing.
-        if crate::modules::commands::run_cli(&[String::from("getblockchaininfo")]).is_ok() {
-            start_node_inner(Some(wallet_name))?;
-            handled_running_daemon = true;
-        } else {
-            return Err(
-                "Core is still stopping and RPC is unavailable. Wait a few moments and retry."
-                    .to_string(),
-            );
-        }
-    }
-
-    // Step 3: start Core with the target wallet
-    if !handled_running_daemon {
-        start_node_inner(Some(wallet_name))?;
-    }
+    // Step 3: start Core with the target wallet.
+    start_node_inner(Some(wallet_name))?;
 
     // Step 4: poll until the named wallet is queryable
     if poll_until_loaded {
         let wallet_arg = format!("-wallet={wallet_name}");
-        for _ in 0..30 {
+        for _ in 0..60 {
             thread::sleep(Duration::from_millis(1500));
             if let Ok(raw) = crate::modules::commands::run_cli(&[
                 wallet_arg.clone(),
@@ -351,7 +364,7 @@ fn restart_node_with_wallet_robust_inner(
                 }
             }
         }
-        return Err(format!("Core started but wallet '{}' is not queryable after 45 seconds. The wallet may need to be loaded manually.", wallet_name));
+        return Err(format!("Core started but wallet '{}' is not queryable after 90 seconds. The wallet may need to be loaded manually.", wallet_name));
     }
 
     Ok(())

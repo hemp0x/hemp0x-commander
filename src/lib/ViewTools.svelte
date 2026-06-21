@@ -26,7 +26,7 @@
 
   const primaryTabs = ["WALLET", "SYSTEM", "HISTORY", "EXPLORER", "CONSOLE", "ADVANCED"];
   const advancedTabs = ["CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"];
-  let activeSubTab = "CONSOLE";
+  let activeSubTab = "WALLET";
   let lastAdvancedTab = "CONSOLIDATE";
   let explorerTarget = "";
   let tauriReady = false;

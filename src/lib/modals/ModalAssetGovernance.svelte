@@ -432,13 +432,19 @@
                     >.
                 </p>
 
-                <div class="coming-soon">
-                    <p>Feature coming soon.</p>
-                    <small>
-                        For now use
-                        <button type="button" class="inline-link" on:click={openRewards}>Advanced / Rewards</button>
-                        or the dividends function in WebCom.
-                    </small>
+                <div class="dividends-soon">
+                    <p class="dividends-soon-title">Feature coming soon.</p>
+                    <p class="dividends-soon-body">
+                        Owner dividends distribution is being finalized. In the
+                        meantime, you can run a snapshot-based payout from
+                        Advanced / Rewards, or use the dividends function in
+                        WebCom.
+                    </p>
+                    <div class="dividends-soon-actions">
+                        <button type="button" class="cyber-btn small" on:click={openRewards}>
+                            Open Advanced / Rewards
+                        </button>
+                    </div>
                 </div>
             </div>
         {:else if activeTab === "lock"}
@@ -760,32 +766,30 @@
         font-size: 0.7rem;
         margin-bottom: 0.3rem;
     }
-    .coming-soon {
-        text-align: center;
-        padding: 1rem;
-        border: 1px dashed rgba(255, 255, 255, 0.2);
+    .dividends-soon {
+        background: rgba(0, 200, 255, 0.05);
+        border: 1px solid rgba(0, 200, 255, 0.22);
         border-radius: 8px;
-        color: #aaa;
-        font-size: 0.72rem;
+        padding: 0.85rem 1rem;
+        margin-top: 0.5rem;
     }
-    .coming-soon p {
-        margin: 0 0 0.2rem;
-        font-size: 0.75rem;
-        color: #ccc;
-    }
-    .coming-soon small {
-        font-size: 0.62rem;
-        color: #666;
-    }
-    .inline-link {
-        border: 0;
-        background: transparent;
+    .dividends-soon-title {
+        margin: 0 0 0.35rem;
         color: var(--color-primary);
-        font: inherit;
-        padding: 0;
-        cursor: pointer;
-        text-decoration: underline;
-        text-underline-offset: 3px;
+        font-size: 0.78rem;
+        letter-spacing: 0.5px;
+        font-weight: 700;
+    }
+    .dividends-soon-body {
+        margin: 0 0 0.6rem;
+        color: #9fb6c4;
+        font-size: 0.68rem;
+        line-height: 1.45;
+    }
+    .dividends-soon-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
     }
 
     .gov-panel {

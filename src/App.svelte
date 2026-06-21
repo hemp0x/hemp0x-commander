@@ -1921,11 +1921,12 @@
   .trust-strip {
     display: flex;
     gap: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    background: rgba(0, 0, 0, 0.4);
+    border-bottom: 1px solid rgba(0, 255, 65, 0.08);
+    background: rgba(0, 0, 0, 0.5);
     flex-shrink: 0;
     z-index: 40;
     overflow-x: auto;
+    min-height: 1.7rem;
   }
   .trust-strip::-webkit-scrollbar {
     height: 0;
@@ -1934,7 +1935,7 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.25rem 0.75rem;
+    padding: 0.3rem 0.75rem;
     border-right: 1px solid rgba(255, 255, 255, 0.04);
     flex-shrink: 0;
     white-space: nowrap;
@@ -1958,14 +1959,14 @@
   }
   .ts-label {
     font-size: 0.55rem;
-    color: #555;
+    color: #666;
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
   .ts-val {
     font-size: 0.6rem;
     font-family: var(--font-mono);
-    color: #888;
+    color: #999;
     letter-spacing: 0.5px;
   }
   .ts-ok .ts-val {
@@ -1999,13 +2000,13 @@
 
   /* --- COMMON PANEL STYLE --- */
   .glass-panel {
-    background: rgba(10, 14, 12, 0.75);
+    background: rgba(5, 7, 6, 0.82);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(0, 255, 65, 0.12);
-    border-top: 1px solid rgba(0, 255, 65, 0.2);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.5);
+    border-top: 1px solid rgba(0, 255, 65, 0.18);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.55);
     border-radius: 8px;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
     padding: 1.1rem;
     display: flex;
     flex-direction: column;
@@ -2134,9 +2135,9 @@
     display: flex;
     flex-direction: column;
     padding: 0;
-    border: 1px solid rgba(0, 255, 65, 0.15);
-    background: rgba(8, 12, 10, 0.85);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(0, 255, 65, 0.14);
+    background: rgba(4, 6, 5, 0.92);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   }
 
   .wallet-card {
@@ -2189,8 +2190,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.6rem 1rem;
-    background: rgba(0, 0, 0, 0.3);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    background: rgba(0, 0, 0, 0.45);
+    border-bottom: 1px solid rgba(0, 255, 65, 0.1);
     flex-shrink: 0;
   }
   .hud-title {
@@ -2280,12 +2281,13 @@
   /* PANEL ACTIONS */
   .panel-actions {
     padding: 0.8rem 1.2rem;
-    background: rgba(0, 0, 0, 0.2);
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.35);
+    border-top: 1px solid rgba(0, 255, 65, 0.08);
     display: flex;
     gap: 0.8rem;
     align-items: center;
     min-height: 3.1rem;
+    flex-wrap: nowrap;
   }
   .panel-actions.right {
     justify-content: flex-end;
@@ -2333,10 +2335,13 @@
     text-transform: uppercase;
     background: rgba(0, 255, 65, 0.15);
     border: 1px solid var(--color-primary);
+    border-bottom: 1px solid var(--color-primary);
     color: var(--color-primary);
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
     box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.16);
   }
   .btn-xs:hover {
@@ -2656,11 +2661,15 @@
     background: transparent;
     color: var(--color-muted);
     border: 1px solid rgba(255, 255, 255, 0.18);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   }
   .btn-sm.primary {
     border: 1px solid var(--color-primary);
+    border-bottom: 1px solid var(--color-primary);
     background: rgba(0, 255, 65, 0.12);
     color: var(--color-primary);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 65, 0.16);
   }
   .footer-link {
     font-family: var(--font-mono);

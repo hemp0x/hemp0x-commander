@@ -159,9 +159,9 @@ button:active {
 
 /* Stronger glass treatment for non-dashboard panels to match HUD feel */
 .glass-panel.panel-strong {
-  background: rgba(6, 14, 10, 0.9);
-  border: 1px solid rgba(0, 255, 65, 0.18);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  background: rgba(4, 7, 5, 0.92);
+  border: 1px solid rgba(0, 255, 65, 0.16);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
   border-radius: 8px;
 }
 

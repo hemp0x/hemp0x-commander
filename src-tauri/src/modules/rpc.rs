@@ -4,7 +4,9 @@ use std::time::Duration;
 use base64::prelude::*;
 use serde::Serialize;
 
-use crate::modules::files::{config_path, data_dir, ensure_config, parse_config};
+use crate::modules::files::{
+    config_path, data_dir, ensure_config, load_app_settings_impl, parse_config,
+};
 use crate::modules::models::DashboardData;
 
 #[derive(Debug, Serialize)]
@@ -135,10 +137,7 @@ pub(crate) struct RpcContext {
 pub(crate) fn rpc_context() -> Result<RpcContext, String> {
     let url = rpc_url()?;
     let (auth, _auth_mode) = rpc_auth()?;
-    Ok(RpcContext {
-        url,
-        auth,
-    })
+    Ok(RpcContext { url, auth })
 }
 
 impl RpcContext {
@@ -318,7 +317,12 @@ pub(crate) fn call_rpc_wallet_with_timeouts(
 }
 
 fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcResult {
-    match call_rpc(method, params) {
+    let result = if is_wallet_scoped_method(method) {
+        call_active_wallet_or_default(method, params)
+    } else {
+        call_rpc(method, params)
+    };
+    match result {
         Ok(data) => RpcResult {
             success: true,
             data,
@@ -329,6 +333,29 @@ fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcRes
             data: serde_json::Value::Null,
             error: e,
         },
+    }
+}
+
+fn is_wallet_scoped_method(method: &str) -> bool {
+    matches!(method, "getwalletinfo" | "listtransactions" | "listunspent")
+}
+
+fn active_vault_wallet_name() -> Option<String> {
+    load_app_settings_impl()
+        .ok()
+        .and_then(|settings| settings.active_vault_wallet_name)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn call_active_wallet_or_default(
+    method: &str,
+    params: &[serde_json::Value],
+) -> Result<serde_json::Value, String> {
+    if let Some(wallet_name) = active_vault_wallet_name() {
+        call_rpc_wallet(&wallet_name, method, params)
+    } else {
+        call_rpc(method, params)
     }
 }
 
@@ -344,10 +371,22 @@ pub fn rpc_get_network_info() -> RpcResult {
 
 #[tauri::command]
 pub fn rpc_get_wallet_info() -> RpcResult {
-    match call_rpc("getwalletinfo", &[]) {
+    match call_active_wallet_or_default("getwalletinfo", &[]) {
         Ok(mut data) => {
-            if let Ok(migration_info) = call_rpc("getwalletmigrationinfo", &[]) {
+            if let Ok(migration_info) = call_active_wallet_or_default("getwalletmigrationinfo", &[])
+            {
                 merge_wallet_security_status(&mut data, &migration_info);
+            }
+            if let Some(wallet_name) = active_vault_wallet_name() {
+                if let Some(wallet) = data.as_object_mut() {
+                    wallet
+                        .entry("walletname".to_string())
+                        .or_insert_with(|| serde_json::Value::String(wallet_name.clone()));
+                    wallet.insert(
+                        "commander_active_wallet_name".to_string(),
+                        serde_json::Value::String(wallet_name),
+                    );
+                }
             }
             RpcResult {
                 success: true,
@@ -360,6 +399,23 @@ pub fn rpc_get_wallet_info() -> RpcResult {
             data: serde_json::Value::Null,
             error: e,
         },
+    }
+}
+
+fn overlay_wallet_info(info: &mut serde_json::Value, wallet_info: &serde_json::Value) {
+    let Some(info_obj) = info.as_object_mut() else {
+        return;
+    };
+    for field in [
+        "balance",
+        "unconfirmed_balance",
+        "immature_balance",
+        "unlocked_until",
+        "walletname",
+    ] {
+        if let Some(value) = wallet_info.get(field) {
+            info_obj.insert(field.to_string(), value.clone());
+        }
     }
 }
 
@@ -506,15 +562,19 @@ pub fn rpc_dashboard() -> Result<DashboardData, String> {
     let _cfg = ensure_config()?;
     let ctx = rpc_context()?;
 
-    let info = ctx.call("getinfo", &[])?;
+    let mut info = ctx.call("getinfo", &[])?;
     let bc = ctx.call("getblockchaininfo", &[])?;
-    let tx_raw = ctx.call(
-        "listtransactions",
-        &[
-            serde_json::Value::String("*".to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(100)),
-        ],
-    )?;
+    let tx_params = [
+        serde_json::Value::String("*".to_string()),
+        serde_json::Value::Number(serde_json::value::Number::from(100)),
+    ];
+    let tx_raw = if let Some(wallet_name) = active_vault_wallet_name() {
+        let wallet_info = call_rpc_wallet(&wallet_name, "getwalletinfo", &[])?;
+        overlay_wallet_info(&mut info, &wallet_info);
+        call_rpc_wallet(&wallet_name, "listtransactions", &tx_params)?
+    } else {
+        ctx.call("listtransactions", &tx_params)?
+    };
 
     build_dashboard_from_rpc(&info, &bc, &tx_raw)
 }
@@ -615,6 +675,34 @@ mod tests {
         merge_wallet_security_status(&mut wallet_info, &serde_json::json!({}));
         assert!(wallet_info.get("encrypted").is_none());
         assert!(wallet_info.get("locked").is_none());
+    }
+
+    #[test]
+    fn overlay_wallet_info_replaces_default_wallet_fields() {
+        let mut info = serde_json::json!({
+            "blocks": 100,
+            "connections": 8,
+            "difficulty": 1.5,
+            "balance": 0.0,
+            "unconfirmed_balance": 0.0,
+            "immature_balance": 0.0,
+            "unlocked_until": 0,
+        });
+        let wallet_info = serde_json::json!({
+            "walletname": "hemp0x-vault-main",
+            "balance": 42.0,
+            "unconfirmed_balance": 1.0,
+            "immature_balance": 2.0,
+            "unlocked_until": 123,
+        });
+
+        overlay_wallet_info(&mut info, &wallet_info);
+
+        assert_eq!(info["walletname"], "hemp0x-vault-main");
+        assert_eq!(info["balance"], 42.0);
+        assert_eq!(info["unconfirmed_balance"], 1.0);
+        assert_eq!(info["immature_balance"], 2.0);
+        assert_eq!(info["unlocked_until"], 123);
     }
 
     #[test]

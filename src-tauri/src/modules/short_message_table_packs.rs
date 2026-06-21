@@ -554,9 +554,7 @@ fn initial_state() -> PackState {
             return PackState { active: pack };
         }
     }
-    PackState {
-        active: builtin,
-    }
+    PackState { active: builtin }
 }
 
 fn read_selection_from_disk() -> Option<TablePackSelection> {
@@ -581,9 +579,7 @@ fn write_selection_to_disk(selection: &TablePackSelection) -> Result<(), String>
 }
 
 fn set_active_state(pack: ValidatedTablePack, _selection: TablePackSelection) {
-    let new_state = Arc::new(PackState {
-        active: pack,
-    });
+    let new_state = Arc::new(PackState { active: pack });
     let mut guard = pack_state().lock().expect("pack state poisoned");
     *guard = new_state;
 }

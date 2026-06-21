@@ -115,6 +115,45 @@ pub fn run_cli(args: &[String]) -> Result<String, String> {
     Ok(out.trim().to_string())
 }
 
+fn active_vault_wallet_name() -> Option<String> {
+    load_app_settings_impl()
+        .ok()
+        .and_then(|settings| settings.active_vault_wallet_name)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn active_wallet_cli_args(args: &[String]) -> Vec<String> {
+    let Some(wallet_name) = active_vault_wallet_name() else {
+        return args.to_vec();
+    };
+    let mut scoped = Vec::with_capacity(args.len() + 1);
+    scoped.push(format!("-wallet={wallet_name}"));
+    scoped.extend(args.iter().cloned());
+    scoped
+}
+
+fn run_active_wallet_cli(args: &[String]) -> Result<String, String> {
+    run_cli(&active_wallet_cli_args(args))
+}
+
+fn overlay_wallet_info(info: &mut serde_json::Value, wallet_info: &serde_json::Value) {
+    let Some(info_obj) = info.as_object_mut() else {
+        return;
+    };
+    for field in [
+        "balance",
+        "unconfirmed_balance",
+        "immature_balance",
+        "unlocked_until",
+        "walletname",
+    ] {
+        if let Some(value) = wallet_info.get(field) {
+            info_obj.insert(field.to_string(), value.clone());
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn run_cli_command(command: String, args: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -152,7 +191,7 @@ pub fn get_info() -> Result<String, String> {
 /// List address groupings for wallet keys display
 #[tauri::command]
 pub fn list_address_groupings() -> Result<serde_json::Value, String> {
-    let raw = run_cli(&[String::from("listaddressgroupings")])?;
+    let raw = run_active_wallet_cli(&[String::from("listaddressgroupings")])?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
@@ -214,7 +253,13 @@ pub fn dashboard_data() -> Result<DashboardData, String> {
     }
 
     let info_raw = run_cli(&[String::from("getinfo")])?;
-    let info: serde_json::Value = serde_json::from_str(&info_raw).map_err(|e| e.to_string())?;
+    let mut info: serde_json::Value = serde_json::from_str(&info_raw).map_err(|e| e.to_string())?;
+    if active_vault_wallet_name().is_some() {
+        let wallet_raw = run_active_wallet_cli(&[String::from("getwalletinfo")])?;
+        let wallet_info: serde_json::Value =
+            serde_json::from_str(&wallet_raw).map_err(|e| e.to_string())?;
+        overlay_wallet_info(&mut info, &wallet_info);
+    }
 
     let blocks_info = info["blocks"].as_u64().unwrap_or(0);
     let peers = info["connections"].as_u64().unwrap_or(0);
@@ -265,7 +310,7 @@ pub fn dashboard_data() -> Result<DashboardData, String> {
         status: status.to_string(),
     };
 
-    let tx_raw = run_cli(&[
+    let tx_raw = run_active_wallet_cli(&[
         String::from("listtransactions"),
         String::from("*"),
         String::from("100"),
@@ -319,12 +364,12 @@ pub fn dashboard_data() -> Result<DashboardData, String> {
 pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, String> {
     ensure_config()?;
 
-    let groups_raw = run_cli(&[String::from("listaddressgroupings")])?;
+    let groups_raw = run_active_wallet_cli(&[String::from("listaddressgroupings")])?;
     let groups: serde_json::Value = serde_json::from_str(&groups_raw).map_err(|e| e.to_string())?;
     let mut balances = HashMap::new();
     parse_balances(&groups, &mut balances);
 
-    let list_raw = run_cli(&[
+    let list_raw = run_active_wallet_cli(&[
         String::from("listreceivedbyaddress"),
         String::from("0"),
         String::from("true"),
@@ -360,15 +405,14 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
     // imported wallets even though Core already recognizes and can spend
     // their UTXOs. Merge those addresses from `listunspent` so Receive and
     // Coin Control present a consistent view of wallet-owned funds.
-    let unspent_raw = run_cli(&[
+    let unspent_raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
         String::from("[]"),
         String::from("true"),
     ])?;
-    let unspents: Vec<UtxoItem> =
-        serde_json::from_str(&unspent_raw).map_err(|e| e.to_string())?;
+    let unspents: Vec<UtxoItem> = serde_json::from_str(&unspent_raw).map_err(|e| e.to_string())?;
     let mut funded_balances: HashMap<String, f64> = HashMap::new();
     for utxo in unspents {
         let Some(addr) = utxo.address.filter(|value| !value.is_empty()) else {
@@ -414,15 +458,17 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
 pub fn new_address(label: Option<String>) -> Result<String, String> {
     ensure_config()?;
     match label {
-        Some(l) if !l.trim().is_empty() => run_cli(&[String::from("getnewaddress"), l]),
-        _ => run_cli(&[String::from("getnewaddress")]),
+        Some(l) if !l.trim().is_empty() => {
+            run_active_wallet_cli(&[String::from("getnewaddress"), l])
+        }
+        _ => run_active_wallet_cli(&[String::from("getnewaddress")]),
     }
 }
 
 #[tauri::command]
 pub fn get_change_address() -> Result<String, String> {
     ensure_config()?;
-    run_cli(&[String::from("getrawchangeaddress")])
+    run_active_wallet_cli(&[String::from("getrawchangeaddress")])
 }
 
 #[tauri::command]
@@ -457,7 +503,7 @@ pub fn get_network_mode() -> Result<String, String> {
 #[tauri::command]
 pub fn send_hemp(to: String, amount: String) -> Result<String, String> {
     ensure_config()?;
-    run_cli(&[String::from("sendtoaddress"), to, amount])
+    run_active_wallet_cli(&[String::from("sendtoaddress"), to, amount])
 }
 
 fn classify_asset_type(name: &str) -> &'static str {
@@ -725,7 +771,7 @@ pub fn reissue_asset(
         return Err("Units must be between 0 and 8".to_string());
     }
     let to_addr = if to_address.trim().is_empty() {
-        run_cli(&[String::from("getnewaddress")])?
+        run_active_wallet_cli(&[String::from("getnewaddress")])?
     } else {
         to_address
     };
@@ -1098,7 +1144,7 @@ pub fn dump_priv_key(address: String) -> Result<String, String> {
     if !validation["ismine"].as_bool().unwrap_or(false) {
         return Err("Address does not belong to current wallet".to_string());
     }
-    run_cli(&[String::from("dumpprivkey"), address])
+    run_active_wallet_cli(&[String::from("dumpprivkey"), address])
 }
 
 fn validate_migration_path(path: &str, label: &str) -> Result<String, String> {
@@ -1386,7 +1432,7 @@ pub fn wallet_unlock_named(
 #[tauri::command]
 pub fn wallet_lock() -> Result<String, String> {
     ensure_config()?;
-    run_cli(&[String::from("walletlock")])
+    run_active_wallet_cli(&[String::from("walletlock")])
 }
 
 #[tauri::command]
@@ -1644,7 +1690,7 @@ pub fn preview_send_hemp(
         return Err("Invalid destination address format".to_string());
     }
 
-    let available_balance = match run_cli(&[String::from("getbalance")]) {
+    let available_balance = match run_active_wallet_cli(&[String::from("getbalance")]) {
         Ok(raw) => {
             let bal: f64 = raw.trim().parse().unwrap_or(0.0);
             format!("{:.8}", bal)
@@ -1849,7 +1895,7 @@ fn asset_balance_from_listmyassets(value: &serde_json::Value, asset: &str) -> Op
 #[tauri::command]
 pub fn list_utxos() -> Result<Vec<UtxoItem>, String> {
     ensure_config()?;
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -1905,7 +1951,7 @@ pub fn broadcast_advanced_transaction(
         .map(|u| format!("{}:{}", u.txid.trim(), u.vout))
         .collect();
 
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -1990,7 +2036,7 @@ pub fn broadcast_advanced_transaction(
         outputs_json,
     ])?;
 
-    let signed_res_raw = run_cli(&[String::from("signrawtransaction"), raw_hex])?;
+    let signed_res_raw = run_active_wallet_cli(&[String::from("signrawtransaction"), raw_hex])?;
     let signed_res: serde_json::Value =
         serde_json::from_str(&signed_res_raw).map_err(|e| e.to_string())?;
 
@@ -2031,7 +2077,7 @@ pub fn preview_wallet_consolidation(
 
     validate_destination_address(&destination)?;
 
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -2241,7 +2287,7 @@ pub fn broadcast_wallet_consolidation(
     ));
     }
 
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -2508,7 +2554,7 @@ pub fn get_policy_diagnostics(
 ) -> Result<PolicyDiagnostics, String> {
     ensure_config()?;
     let fee_rate = recommended_consolidation_fee_rate_sat_per_byte(fee_rate_sat_per_byte)?;
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -2572,7 +2618,7 @@ pub fn plan_wallet_consolidation(
     let max_rounds = std::cmp::max(1, max_rounds.unwrap_or(usize::MAX / 2));
     let target_max_tx_bytes = target_max_tx_bytes.unwrap_or(DEFAULT_TARGET_TX_BYTES);
 
-    let raw = run_cli(&[
+    let raw = run_active_wallet_cli(&[
         String::from("listunspent"),
         String::from("0"),
         String::from("9999999"),
@@ -2775,13 +2821,13 @@ pub fn backup_wallet() -> Result<String, String> {
     let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
     let dest = dir.join(format!("hemp0x_backup_{}.dat", ts));
     let dest_str = dest.to_string_lossy().to_string();
-    run_cli(&[String::from("backupwallet"), dest_str.clone()])?;
+    run_active_wallet_cli(&[String::from("backupwallet"), dest_str.clone()])?;
     Ok(dest_str)
 }
 
 #[tauri::command]
 pub fn backup_wallet_to(path: String) -> Result<(), String> {
-    run_cli(&[String::from("backupwallet"), path])?;
+    run_active_wallet_cli(&[String::from("backupwallet"), path])?;
     Ok(())
 }
 
@@ -2791,7 +2837,7 @@ pub fn lock_asset_supply(name: String, current_units: u8) -> Result<String, Stri
     validate_asset_name(&name)?;
     // To lock: reissue with amount 0, reissuable=false.
     // We need a destination address (can be same wallet).
-    let to_addr = run_cli(&[String::from("getnewaddress")])?;
+    let to_addr = run_active_wallet_cli(&[String::from("getnewaddress")])?;
     let change_addr = to_addr.clone();
 
     let args = build_reissue_args(&name, "0", &to_addr, &change_addr, false, current_units, "")?;
@@ -2815,17 +2861,18 @@ pub fn get_transaction_history(
     };
     let fetch_skip = if active_filter.is_some() { 0 } else { skip };
 
-    let tx_raw = match rpc::call_rpc(
-        "listtransactions",
-        &[
-            serde_json::Value::String("*".to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(fetch_count)),
-            serde_json::Value::Number(serde_json::value::Number::from(fetch_skip)),
-        ],
-    ) {
+    let tx_params = [
+        serde_json::Value::String("*".to_string()),
+        serde_json::Value::Number(serde_json::value::Number::from(fetch_count)),
+        serde_json::Value::Number(serde_json::value::Number::from(fetch_skip)),
+    ];
+    let tx_raw = match active_vault_wallet_name()
+        .map(|wallet_name| rpc::call_rpc_wallet(&wallet_name, "listtransactions", &tx_params))
+        .unwrap_or_else(|| rpc::call_rpc("listtransactions", &tx_params))
+    {
         Ok(result) => result,
         Err(_rpc_err) => {
-            let raw = run_cli(&[
+            let raw = run_active_wallet_cli(&[
                 String::from("listtransactions"),
                 String::from("*"),
                 format!("{}", fetch_count),
@@ -3183,7 +3230,7 @@ pub fn update_asset_metadata(
         return Err("IPFS hash or metadata value is required".to_string());
     }
     // To update IPFS: reissue with amount 0, reissuable=true, same units, new IPFS.
-    let to_addr = run_cli(&[String::from("getnewaddress")])?;
+    let to_addr = run_active_wallet_cli(&[String::from("getnewaddress")])?;
     let change_addr = to_addr.clone();
 
     let args = build_reissue_args(
@@ -3298,7 +3345,7 @@ pub fn issue_qualifier_asset(
     if qty_val < 1.0 || qty_val > 10.0 {
         return Err("Qualifier asset amount must be between 1 and 10".to_string());
     }
-    let change_addr = run_cli(&[String::from("getnewaddress")])?;
+    let change_addr = run_active_wallet_cli(&[String::from("getnewaddress")])?;
 
     let ipfs_str = ipfs.map(|h| h.trim().to_string()).unwrap_or_default();
     let has_ipfs = !ipfs_str.is_empty();
@@ -3453,9 +3500,9 @@ pub fn issue_restricted_asset(
     }
     let to_addr = match destination {
         Some(address) => address,
-        None => run_cli(&[String::from("getnewaddress")])?,
+        None => run_active_wallet_cli(&[String::from("getnewaddress")])?,
     };
-    let change_addr = run_cli(&[String::from("getnewaddress")])?;
+    let change_addr = run_active_wallet_cli(&[String::from("getnewaddress")])?;
 
     let ipfs_str = ipfs.unwrap_or_else(|| String::new());
     let has_ipfs = !ipfs_str.trim().is_empty();

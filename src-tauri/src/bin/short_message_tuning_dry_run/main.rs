@@ -56,8 +56,7 @@
 // Reports are written to <out-dir>/runs/<LABEL>/.
 
 use app_lib::modules::short_message_tables::{
-    table_identity, ALPHABET_5BIT, ALPHABET_6BIT, DICTIONARIES,
-    HOXSHT_VERSION_MARKER,
+    table_identity, ALPHABET_5BIT, ALPHABET_6BIT, DICTIONARIES, HOXSHT_VERSION_MARKER,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};

@@ -12,6 +12,36 @@ use crate::modules::files::{
 };
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
 
+fn daemon_process_running() -> bool {
+    #[cfg(unix)]
+    {
+        return Command::new("pgrep")
+            .arg("-x")
+            .arg("hemp0xd")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        return Command::new("tasklist")
+            .creation_flags(0x08000000)
+            .arg("/FI")
+            .arg("IMAGENAME eq hemp0xd.exe")
+            .arg("/NH")
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains("hemp0xd.exe"))
+            .unwrap_or(false);
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+
 #[tauri::command]
 pub async fn start_node() -> Result<(), String> {
     // start_node_inner does CLI probes, lock waits, and process spawn —
@@ -112,10 +142,10 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
     let dir = data_dir()?;
     let lock_path = dir.join(".lock");
 
-    // If Core is already running and owns the data-dir lock, do not
-    // try to spawn a second daemon. Instead, check whether the running
-    // daemon is queryable and return success if it is.
-    if lock_path.exists() {
+    // The .lock file can persist after a clean shutdown. Treat an actual
+    // hemp0xd process as authoritative; file existence alone does not mean
+    // the datadir is currently locked.
+    if daemon_process_running() {
         if let Ok(raw) = crate::modules::commands::run_cli(&[String::from("getblockchaininfo")]) {
             if serde_json::from_str::<serde_json::Value>(&raw).is_ok() {
                 // Core is already running and responding. If a wallet_name was
@@ -142,9 +172,9 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
         // rapid stop/start while the previous daemon is still releasing the
         // datadir, or while Core is warming up before RPC is ready. Do not
         // spawn a second daemon into the same datadir; wait for either RPC to
-        // become queryable or the lock to clear.
+        // become queryable or the process to exit.
         let deadline = Instant::now() + Duration::from_secs(30);
-        while lock_path.exists() && Instant::now() < deadline {
+        while daemon_process_running() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(500));
             if let Ok(raw) = crate::modules::commands::run_cli(&[String::from("getblockchaininfo")])
             {
@@ -153,9 +183,9 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
                 }
             }
         }
-        if lock_path.exists() {
+        if daemon_process_running() {
             return Err(format!(
-                "CORE_LOCK_BUSY::Core is still holding the data directory lock at {}. It may still be starting or stopping; wait a few moments and try again.",
+                "CORE_LOCK_BUSY::Core is still starting or stopping with data directory {}. Wait a few moments and try again.",
                 lock_path.to_string_lossy()
             ));
         }
@@ -257,8 +287,7 @@ fn restart_node_with_wallet_robust_inner(
     poll_until_loaded: bool,
     force_restart: bool,
 ) -> Result<(), String> {
-    let dir = data_dir()?;
-    let lock_path = dir.join(".lock");
+    let _dir = data_dir()?;
 
     // Fast path: if Core is already running, try to load/query the target
     // wallet without a full daemon restart. This is the least disruptive path
@@ -280,31 +309,26 @@ fn restart_node_with_wallet_robust_inner(
     let _ = run_cli(&[String::from("stop")]);
     thread::sleep(Duration::from_secs(2));
 
-    // Step 2: wait for lock release (up to 30s)
+    // Step 2: wait for the daemon process to exit (up to 30s). The .lock file
+    // may persist after shutdown, so its existence is not a reliable signal.
     let mut handled_running_daemon = false;
     for _ in 0..60 {
-        if !lock_path.exists() {
+        if !daemon_process_running() {
             break;
         }
         thread::sleep(Duration::from_millis(500));
     }
-    if lock_path.exists() {
-        // If RPC is still responding, the daemon is alive despite the lock; try
+    if daemon_process_running() {
+        // If RPC is still responding, the daemon is alive; try
         // the running-daemon load path one more time instead of failing.
         if crate::modules::commands::run_cli(&[String::from("getblockchaininfo")]).is_ok() {
             start_node_inner(Some(wallet_name))?;
             handled_running_daemon = true;
         } else {
-            // RPC is not reachable and the lock remains after a bounded wait. This
-            // is most likely a stale lock left by a crashed or defunct daemon. Remove
-            // only the lock file; never touch hemp.conf or wallet files.
-            fs::remove_file(&lock_path).map_err(|e| {
-        format!(
-          "Cannot obtain a lock on data directory and failed to remove stale lock {}: {}. Stop any running hemp0xd process manually and retry.",
-          lock_path.to_string_lossy(),
-          e
-        )
-      })?;
+            return Err(
+                "Core is still stopping and RPC is unavailable. Wait a few moments and retry."
+                    .to_string(),
+            );
         }
     }
 

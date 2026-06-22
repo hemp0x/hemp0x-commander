@@ -88,10 +88,20 @@ pub fn start_node_blocking() -> Result<(), String> {
 /// bounded readiness error. Some restarts need longer than the old 30s window,
 /// especially after wallet encryption or rapid wallet switching.
 fn verify_named_wallet_loaded_after_start(wallet_name: &str) -> Result<(), String> {
+    wait_for_named_wallet_queryable_with_restart(wallet_name, Duration::from_secs(90))
+}
+
+fn wait_for_named_wallet_queryable_with_restart(
+    wallet_name: &str,
+    timeout: Duration,
+) -> Result<(), String> {
     let wallet_arg = format!("-wallet={wallet_name}");
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let mut last_error = String::new();
-    // Brief initial wait for daemon bind
+    let deadline = Instant::now() + timeout;
+    let mut next_start_attempt = Instant::now() + Duration::from_secs(3);
+    let mut last_wallet_error = String::new();
+    let mut last_start_error = String::new();
+
+    // Brief initial wait for the daemon to bind RPC after the first launch.
     thread::sleep(Duration::from_millis(800));
     while Instant::now() < deadline {
         match crate::modules::commands::run_cli(&[
@@ -102,23 +112,38 @@ fn verify_named_wallet_loaded_after_start(wallet_name: &str) -> Result<(), Strin
                 if serde_json::from_str::<serde_json::Value>(&raw).is_ok() {
                     return Ok(());
                 }
-                last_error = "Core returned non-JSON wallet status".to_string();
+                last_wallet_error = "Core returned non-JSON wallet status".to_string();
             }
             Err(e) => {
-                last_error = e;
+                last_wallet_error = e;
             }
         }
-        // F2: Bounded sleep between probes (removed loadwallet in 66d)
+
+        // A daemonized launcher can return success and then exit immediately
+        // if the previous process is still releasing the datadir lock. Retry
+        // only when there is no live daemon, so a second instance can never be
+        // started alongside one that is still warming up.
+        if !daemon_process_running() && Instant::now() >= next_start_attempt {
+            match start_node_inner(Some(wallet_name)) {
+                Ok(()) => last_start_error.clear(),
+                Err(e) => last_start_error = e,
+            }
+            next_start_attempt = Instant::now() + Duration::from_secs(5);
+        }
+
         thread::sleep(Duration::from_millis(750));
     }
 
-    let status = if last_error.is_empty() {
-        "no response"
+    let status = if !last_wallet_error.is_empty() {
+        last_wallet_error
+    } else if !last_start_error.is_empty() {
+        last_start_error
     } else {
-        &last_error
+        "no response".to_string()
     };
     Err(format!(
-        "Core started, but the active vault wallet '{wallet_name}' is not queryable after 90 seconds. Last status: {status}. Start Core through Commander again, or use the Wallet page to restore/load the vault wallet."
+        "Core could not make wallet '{wallet_name}' queryable after {} seconds. Last status: {status}",
+        timeout.as_secs()
     ))
 }
 
@@ -368,26 +393,15 @@ fn restart_node_with_wallet_robust_inner(
     stop_daemon_for_wallet_restart(Duration::from_secs(90))?;
 
     // Step 3: start Core with the target wallet.
-    start_node_inner(Some(wallet_name))?;
+    let start_result = start_node_inner(Some(wallet_name));
 
-    // Step 4: poll until the named wallet is queryable
+    // Step 4: poll until the named wallet is queryable. This also retries a
+    // daemon launch that exited during datadir lock cleanup.
     if poll_until_loaded {
-        let wallet_arg = format!("-wallet={wallet_name}");
-        for _ in 0..60 {
-            thread::sleep(Duration::from_millis(1500));
-            if let Ok(raw) = crate::modules::commands::run_cli(&[
-                wallet_arg.clone(),
-                String::from("getwalletinfo"),
-            ]) {
-                if serde_json::from_str::<serde_json::Value>(&raw).is_ok() {
-                    return Ok(());
-                }
-            }
-        }
-        return Err(format!("Core started but wallet '{}' is not queryable after 90 seconds. The wallet may need to be loaded manually.", wallet_name));
+        return wait_for_named_wallet_queryable_with_restart(wallet_name, Duration::from_secs(90));
     }
 
-    Ok(())
+    start_result
 }
 
 #[tauri::command]

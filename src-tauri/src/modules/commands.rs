@@ -143,17 +143,51 @@ fn call_active_wallet_rpc_with_timeouts(
     connect_timeout: std::time::Duration,
     read_timeout: std::time::Duration,
 ) -> Result<serde_json::Value, String> {
-    if let Some(wallet_name) = active_vault_wallet_name() {
-        rpc::call_rpc_wallet_with_timeouts(
-            &wallet_name,
-            method,
-            params,
-            connect_timeout,
-            read_timeout,
-        )
+    let readiness_timeout = if cfg!(test) {
+        std::time::Duration::from_millis(100)
     } else {
-        rpc::call_rpc_with_timeouts(method, params, connect_timeout, read_timeout)
+        std::time::Duration::from_secs(90)
+    };
+    let retry_delay = if cfg!(test) {
+        std::time::Duration::from_millis(10)
+    } else {
+        std::time::Duration::from_millis(750)
+    };
+    let deadline = std::time::Instant::now() + readiness_timeout;
+    loop {
+        let result = if let Some(wallet_name) = active_vault_wallet_name() {
+            rpc::call_rpc_wallet_with_timeouts(
+                &wallet_name,
+                method,
+                params,
+                connect_timeout,
+                read_timeout,
+            )
+        } else {
+            rpc::call_rpc_with_timeouts(method, params, connect_timeout, read_timeout)
+        };
+
+        match result {
+            Ok(value) => return Ok(value),
+            Err(err)
+                if migration_rpc_readiness_error(&err)
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(retry_delay);
+            }
+            Err(err) => return Err(err),
+        }
     }
+}
+
+fn migration_rpc_readiness_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("rpc authentication unavailable")
+        || lower.contains("no cookie file")
+        || lower.contains("loading block index")
+        || lower.contains("verifying blocks")
+        || lower.contains("warming up")
+        || lower.contains("error code: -28")
 }
 
 fn overlay_wallet_info(info: &mut serde_json::Value, wallet_info: &serde_json::Value) {
@@ -5855,7 +5889,8 @@ mod tests {
         detect_duplicate_inputs, estimate_consolidation_round_count, estimate_fee_from_bytes,
         estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
         hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
-        max_policy_inputs, message_authority_asset_name, normalize_cli_txid,
+        max_policy_inputs, message_authority_asset_name, migration_rpc_readiness_error,
+        normalize_cli_txid,
         normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
         parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
         parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
@@ -7540,5 +7575,29 @@ mod tests {
     fn h0xc_resolve_rejects_non_h0xc() {
         assert!(h0xc_resolve_authority_addresses("HEMP".to_string()).is_err());
         assert!(h0xc_resolve_authority_addresses("ASSET/TOKEN".to_string()).is_err());
+    }
+
+    #[test]
+    fn migration_rpc_readiness_error_matches_cookie_and_core_warmup() {
+        assert!(migration_rpc_readiness_error(
+            "RPC authentication unavailable: no cookie file and no rpcuser/rpcpassword in hemp.conf"
+        ));
+        assert!(migration_rpc_readiness_error(
+            "RPC error (validatewalletmigration): Loading block index..."
+        ));
+        assert!(migration_rpc_readiness_error(
+            "error code: -28 error message: Verifying blocks..."
+        ));
+    }
+
+    #[test]
+    fn migration_rpc_readiness_error_rejects_ambiguous_failures() {
+        assert!(!migration_rpc_readiness_error(
+            "RPC transport error (restorewalletmigration): timed out reading response"
+        ));
+        assert!(!migration_rpc_readiness_error(
+            "RPC error (restorewalletmigration): Destination wallet already exists"
+        ));
+        assert!(!migration_rpc_readiness_error("Incorrect passphrase"));
     }
 }

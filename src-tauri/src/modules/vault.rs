@@ -5891,17 +5891,6 @@ pub fn connect_webcom_primary_wallet_to_core_guided(
         backup_skipped = true;
     }
 
-    // Pre-check: refuse to restore into a wallet name that already exists
-    // on disk. The user must choose a different name or remove the existing
-    // wallet before retrying.
-    let existing_state = describe_named_wallet_state(&safe_name);
-    if existing_state.wallet_file_exists {
-        return Err(format!(
-            "A wallet named '{}' already exists in Core at {}. Choose a different wallet name.",
-            safe_name, existing_state.wallet_file_path
-        ));
-    }
-
     let mut result = perform_webcom_to_core_restore_and_align(
         passphrase,
         &webcom_record,
@@ -6029,8 +6018,34 @@ fn verify_restored_wallet_identity(
     wallet_name: &str,
     expected_canonical_id: &str,
 ) -> Result<serde_json::Value, String> {
+    ensure_named_wallet_queryable_for_identity(wallet_name)?;
     verify_exact_wallet_identity(wallet_name, expected_canonical_id, None)?;
     verify_existing_wallet_after_duplicate(wallet_name)
+}
+
+fn ensure_named_wallet_queryable_for_identity(wallet_name: &str) -> Result<(), String> {
+    for _ in 0..10 {
+        if describe_named_wallet_state(wallet_name).named_wallet_loaded {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    crate::modules::process::restart_node_with_wallet_for_default_context(wallet_name).map_err(
+        |e| {
+            format!(
+                "Wallet '{wallet_name}' was restored on disk but could not be made queryable for identity verification: {e}"
+            )
+        },
+    )?;
+
+    if describe_named_wallet_state(wallet_name).named_wallet_loaded {
+        Ok(())
+    } else {
+        Err(format!(
+            "Wallet '{wallet_name}' is still not queryable after restarting Core with that wallet."
+        ))
+    }
 }
 
 /// After a successful near-tip restore, enumerate all derived
@@ -6383,6 +6398,7 @@ fn perform_webcom_to_core_restore_and_align(
         .unwrap_or("")
         .to_string();
 
+    ensure_named_wallet_queryable_for_identity(&restored_wallet_name)?;
     verify_exact_wallet_identity(&restored_wallet_name, &expected_canonical_id, None).map_err(
         |e| {
             format!(

@@ -854,6 +854,7 @@
 
     /** @type {(() => void) | undefined} */
     let unlistenNetwork;
+    let unlistenHistoryRecovery;
     const openLibraryHandler = () => {
       activeTab = "TOOLS";
       ipfsHubSection.set("library");
@@ -1060,6 +1061,26 @@
       }).then((fn) => {
         unlistenNetwork = fn;
       });
+
+      listen("wallet-history-recovery-complete", async (event) => {
+        coreBusyUntil.set(0);
+        await refreshDashboard();
+        if (event.payload?.success) {
+          addRuntimeNotification(
+            "Wallet history recovered",
+            `Balance and transactions refreshed for ${event.payload.wallet_name || "the active wallet"}.`,
+            "success",
+          );
+        } else {
+          addRuntimeNotification(
+            "Wallet history recovery failed",
+            String(event.payload?.error || "Core did not complete the wallet history scan."),
+            "error",
+          );
+        }
+      }).then((fn) => {
+        unlistenHistoryRecovery = fn;
+      });
     }
     checkWelcomePopup(); // Show welcome popup if enabled
 
@@ -1088,6 +1109,7 @@
     return () => {
       clearTimeout(timer);
       unsubscribeCoreBusy();
+      if (typeof unlistenHistoryRecovery === "function") unlistenHistoryRecovery();
       window.removeEventListener("resize", updateScale);
       window.removeEventListener("commander-open-content-library", openLibraryHandler);
       window.removeEventListener("commander-open-explorer", openExplorerHandler);

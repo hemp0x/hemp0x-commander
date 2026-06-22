@@ -2,6 +2,7 @@
     import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
     import { fly } from "svelte/transition";
     import { core } from "@tauri-apps/api";
+    import { listen } from "@tauri-apps/api/event";
     import { open, save } from "@tauri-apps/plugin-dialog";
     import CryptoJS from "crypto-js";
     import { coreBusyUntil, systemStatus, vaultStatus } from "../../stores.js"; // Import Store
@@ -435,6 +436,21 @@
         };
         tryInit();
 
+        listen("wallet-history-recovery-complete", async (event) => {
+            historyRecoveryBackgroundActive = false;
+            coreBusyUntil.set(0);
+            await refreshWalletHeader();
+            if (event.payload?.success) {
+                showToast("Wallet history recovery completed. Balance and transactions were refreshed.", "success");
+            } else {
+                vaultPageError = "History recovery failed: " + String(
+                    event.payload?.error || "Core did not complete the wallet history scan.",
+                );
+            }
+        }).then((fn) => {
+            unlistenHistoryRecovery = fn;
+        });
+
         const refreshRuntimeStatus = () => {
             if (!tauriReady || document.hidden || historyRecoveryBackgroundActive) return;
             loadWalletStatus(true);
@@ -446,6 +462,7 @@
 
         return () => {
             window.clearInterval(timer);
+            if (typeof unlistenHistoryRecovery === "function") unlistenHistoryRecovery();
             window.removeEventListener("focus", refreshRuntimeStatus);
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
@@ -1093,6 +1110,7 @@
     let utxoRefreshWorking = false;
     let historyRecoverWorking = false;
     let historyRecoveryBackgroundActive = false;
+    let unlistenHistoryRecovery = null;
     let pendingHistoryRecoveryWallet = "";
     let walletSwitchWorking = false;
     let walletSwitchTargetName = "";

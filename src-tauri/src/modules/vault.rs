@@ -11,6 +11,7 @@ use rand::RngCore;
 use scrypt::{scrypt, Params as ScryptParams};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
+use tauri::Emitter;
 use zeroize::Zeroizing;
 
 use bip39::Mnemonic;
@@ -7735,6 +7736,7 @@ fn refill_named_wallet_keypool_if_needed(
 
 #[tauri::command]
 pub async fn vault_start_wallet_history_recovery(
+    app: tauri::AppHandle,
     wallet_name: String,
     from_block: Option<i64>,
     keypool_size: Option<i64>,
@@ -7765,12 +7767,29 @@ pub async fn vault_start_wallet_history_recovery(
     .map_err(|e| format!("History recovery address materialization task failed: {e}"))??;
 
     let wn = wallet_name.clone();
+    let event_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(err) = recover_wallet_history_blocking(&wn, Some(start_block)) {
-            eprintln!(
-                "Background history recovery failed for wallet '{}': {}",
-                wn, err
-            );
+        let result = recover_wallet_history_blocking(&wn, Some(start_block));
+        let payload = match result {
+            Ok(details) => serde_json::json!({
+                "success": true,
+                "wallet_name": wn,
+                "details": details,
+            }),
+            Err(err) => {
+                eprintln!(
+                    "Background history recovery failed for wallet '{}': {}",
+                    wn, err
+                );
+                serde_json::json!({
+                    "success": false,
+                    "wallet_name": wn,
+                    "error": err,
+                })
+            }
+        };
+        if let Err(err) = event_app.emit("wallet-history-recovery-complete", payload) {
+            eprintln!("Failed to emit wallet history recovery completion: {err}");
         }
     });
     Ok(serde_json::json!({

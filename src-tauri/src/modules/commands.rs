@@ -200,37 +200,7 @@ pub fn dashboard_data() -> Result<DashboardData, String> {
     let cfg = ensure_config()?;
     let _ = parse_config(&cfg)?;
 
-    let mut is_running = true;
-
-    #[cfg(unix)]
-    {
-        // pgrep behavior
-        let output = Command::new("pgrep").arg("-f").arg("hemp0xd").output();
-
-        if let Ok(o) = output {
-            if !o.status.success() {
-                is_running = false;
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let output = Command::new("tasklist")
-            .creation_flags(0x08000000)
-            .arg("/FI")
-            .arg("IMAGENAME eq hemp0xd.exe")
-            .arg("/NH")
-            .output();
-
-        if let Ok(o) = output {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if !stdout.contains("hemp0xd.exe") {
-                is_running = false;
-            }
-        }
-    }
+    let is_running = crate::modules::process::daemon_process_running();
 
     if !is_running {
         return Ok(DashboardData {

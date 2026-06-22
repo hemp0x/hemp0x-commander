@@ -12,14 +12,27 @@ use crate::modules::files::{
 };
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
 
-fn daemon_process_running() -> bool {
+#[cfg(unix)]
+fn unix_process_table_has_live_hemp0xd(stdout: &str) -> bool {
+    stdout.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        let stat = parts.next().unwrap_or("");
+        let command = parts.next().unwrap_or("");
+        command == "hemp0xd" && !stat.starts_with('Z')
+    })
+}
+
+pub(crate) fn daemon_process_running() -> bool {
     #[cfg(unix)]
     {
-        return Command::new("pgrep")
-            .arg("-x")
-            .arg("hemp0xd")
+        return Command::new("ps")
+            .arg("-eo")
+            .arg("stat=,comm=")
             .output()
-            .map(|output| output.status.success())
+            .map(|output| {
+                output.status.success()
+                    && unix_process_table_has_live_hemp0xd(&String::from_utf8_lossy(&output.stdout))
+            })
             .unwrap_or(false);
     }
 
@@ -261,8 +274,15 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn stop_node() -> Result<(), String> {
-    let _ = run_cli(&[String::from("stop")])?;
-    Ok(())
+    if !daemon_process_running() {
+        return Ok(());
+    }
+
+    match run_cli(&[String::from("stop")]) {
+        Ok(_) => Ok(()),
+        Err(e) if !daemon_process_running() => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 #[tauri::command]
@@ -1001,6 +1021,28 @@ mod tests {
         let p = dir.join(name);
         fs::write(&p, content).unwrap();
         p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_process_table_ignores_defunct_hemp0xd() {
+        let table = "\
+Z+ hemp0xd
+Sl node
+S bash
+";
+        assert!(!unix_process_table_has_live_hemp0xd(table));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_process_table_detects_live_hemp0xd() {
+        let table = "\
+Z+ hemp0xd
+Sl hemp0xd
+S bash
+";
+        assert!(unix_process_table_has_live_hemp0xd(table));
     }
 
     #[test]

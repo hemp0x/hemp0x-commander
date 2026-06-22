@@ -2831,6 +2831,7 @@ const CORE_WALLET_SOURCE_UNKNOWN: &str = "unknown";
 
 const VERIFICATION_METHOD_RESTORE_FROM_GENERATED: &str =
     "core_restorewalletmigration_from_generated_envelope";
+const RUNTIME_IDENTITY_PROOF_CANONICAL_MNEMONIC_V1: &str = "canonical_mnemonic_v1";
 
 const MIGRATION_SCHEMA_IDENTIFIER: &str = "hemp0x-core.migration-envelope.v2";
 const MIGRATION_ENVELOPE_VERSION: i32 = 2;
@@ -4438,6 +4439,7 @@ fn promote_core_migration_to_portable_primary_blocking(
         "last_verified_at": now,
         "core_migration_backup_record_id": snapshot_id,
         "verification_method": VERIFICATION_METHOD_RESTORE_FROM_GENERATED,
+        "runtime_identity_proof": RUNTIME_IDENTITY_PROOF_CANONICAL_MNEMONIC_V1,
         "connection_state": "verified_aligned",
         "notes": [
             "Alignment verified by Core restorewalletmigration from Commander-generated v2 migration envelope during Core-to-WebCom promotion.",
@@ -6381,6 +6383,14 @@ fn perform_webcom_to_core_restore_and_align(
         .unwrap_or("")
         .to_string();
 
+    verify_exact_wallet_identity(&restored_wallet_name, &expected_canonical_id, None).map_err(
+        |e| {
+            format!(
+                "Restored Core wallet identity could not be proven against the vault primary: {e}. Alignment was not written."
+            )
+        },
+    )?;
+
     // FAST PATH: the restorewalletmigration above used a near-tip
     // birth_height so it took seconds. Now that the wallet.dat is
     // created and Core has derived all the addresses, we do four
@@ -6532,6 +6542,7 @@ fn perform_webcom_to_core_restore_and_align(
         "last_verified_at": now,
         "core_migration_backup_record_id": pre_connect_backup_record_id.unwrap_or(""),
         "verification_method": VERIFICATION_METHOD_RESTORE_FROM_GENERATED,
+        "runtime_identity_proof": RUNTIME_IDENTITY_PROOF_CANONICAL_MNEMONIC_V1,
         "connection_state": "verified_aligned",
         "notes": [
             "Alignment verified by Core restorewalletmigration from Commander-generated v2 migration envelope.",
@@ -6839,6 +6850,11 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
             .and_then(|v| v.as_str())
             .map(|vm| vm == VERIFICATION_METHOD_RESTORE_FROM_GENERATED)
             .unwrap_or(false);
+        let has_runtime_identity_proof = meta
+            .and_then(|m| m.get("runtime_identity_proof"))
+            .and_then(|v| v.as_str())
+            .map(|proof| proof == RUNTIME_IDENTITY_PROOF_CANONICAL_MNEMONIC_V1)
+            .unwrap_or(false);
 
         let _connection_state_label = meta
             .and_then(|m| m.get("connection_state"))
@@ -6880,7 +6896,7 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
         //   verification evidence + missing identity → stale
         //   verification evidence + mismatched identity → identity_mismatch
         //   no verification evidence → stale
-        if has_verification_evidence {
+        if has_verification_evidence && has_runtime_identity_proof {
             if identity_matches {
                 connection_state = "verified_aligned".to_string();
                 verification_status = "verified".to_string();
@@ -6930,6 +6946,9 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
             }
             if let Some(vm) = meta.and_then(|m| m.get("verification_method")) {
                 obj.insert("alignment_verification_method".to_string(), vm.clone());
+            }
+            if let Some(proof) = meta.and_then(|m| m.get("runtime_identity_proof")) {
+                obj.insert("alignment_runtime_identity_proof".to_string(), proof.clone());
             }
             if let Some(cs) = meta.and_then(|m| m.get("connection_state")) {
                 obj.insert("alignment_stored_connection_state".to_string(), cs.clone());
@@ -11111,6 +11130,7 @@ mod tests {
                 "last_verified_at": now,
                 "core_migration_backup_record_id": "",
                 "verification_method": VERIFICATION_METHOD_RESTORE_FROM_GENERATED,
+                "runtime_identity_proof": RUNTIME_IDENTITY_PROOF_CANONICAL_MNEMONIC_V1,
                 "connection_state": "verified_aligned",
                 "notes": [],
             })),
@@ -11133,6 +11153,58 @@ mod tests {
         assert_eq!(status["connection_state"], "verified_aligned");
         assert_eq!(status["verification_status"], "verified");
         assert_eq!(status["recommended_next_action"], "already_aligned");
+    }
+
+    #[test]
+    fn alignment_status_v2_rejects_legacy_alignment_without_runtime_identity_proof() {
+        let _guard = setup_test_vault_dir();
+        let passphrase = "test-v2-legacy-alignment";
+        let mut payload = make_provider_payload("pinata", "filebase");
+        let webcom = make_webcom_bip39_record(DERIVATION_HEMP_CANONICAL_420, "bip39");
+        let fp = build_alignment_fingerprint(&webcom);
+        payload.secrets.insert(webcom.record_id.clone(), webcom);
+        save_vault_with_payload(passphrase, payload);
+
+        let mut bundle = load_bundle().unwrap().unwrap();
+        let dek = unwrap_dek_with_passphrase(passphrase, &bundle.vault).unwrap();
+        let mut decrypted = decrypt_payload_with_dek(dek.as_slice(), &bundle.vault).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        decrypted.secrets.insert(
+            RECORD_ID_WALLET_ALIGNMENT.to_string(),
+            SecretRecord {
+                record_id: RECORD_ID_WALLET_ALIGNMENT.to_string(),
+                record_type: RECORD_TYPE_APP_SETTING_WALLET_ALIGNMENT.to_string(),
+                label: "Commander Wallet Alignment".to_string(),
+                value: String::new(),
+                metadata: Some(serde_json::json!({
+                    "schema": ALIGNMENT_SCHEMA,
+                    "schema_version": ALIGNMENT_SCHEMA_VERSION,
+                    "active_wallet_record_id": RECORD_ID_WALLET_HEMP_PRIMARY,
+                    "active_wallet_fingerprint": fp,
+                    "active_wallet_identity": canonical_wallet_identity("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
+                    "core_wallet_name": "hemp0x-vault-main",
+                    "core_wallet_source": CORE_WALLET_SOURCE_WEBCOM_BIP39,
+                    "derivation_profile": DERIVATION_HEMP_CANONICAL_420,
+                    "network": "mainnet",
+                    "verification_method": VERIFICATION_METHOD_RESTORE_FROM_GENERATED,
+                    "connection_state": "verified_aligned",
+                })),
+                tags: Some(vec!["wallet".to_string(), "alignment".to_string()]),
+                origin_app: Some(APP_IDENTIFIER.to_string()),
+                derivation_profiles: None,
+                network: Some("mainnet".to_string()),
+                created: now,
+                modified: now,
+            },
+        );
+        bundle.vault.payload =
+            encrypt_payload_with_dek(dek.as_slice(), &decrypted, &bundle.vault).unwrap();
+        save_bundle_atomic(&bundle).unwrap();
+
+        let status = get_wallet_alignment_status_v2(passphrase).unwrap();
+        assert_eq!(status["connection_state"], "stale_unverified_alignment");
+        assert_eq!(status["verification_status"], "not_verified");
+        assert_ne!(status["recommended_next_action"], "already_aligned");
     }
 
     #[test]

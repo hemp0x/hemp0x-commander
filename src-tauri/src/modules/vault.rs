@@ -84,6 +84,11 @@ pub const DERIVATION_HEMP_LEGACY_GENERIC: &str = "hemp0x.mainnet.bip44.p2pkh.v1"
 pub const DERIVATION_BTC_BIP84: &str = "btc.mainnet.bip84.p2wpkh.v1";
 pub const DERIVATION_WIF_SINGLE: &str = "hemp0x.mainnet.wif.single.v1";
 
+const VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR: i64 = 20;
+const VAULT_KEYPOOL_CHANGE_HINT_FLOOR: i64 = 6;
+const VAULT_KEYPOOL_HINT_CEILING: i64 = 10_000;
+const VAULT_CORE_KEYPOOL_REFILL_FLOOR: i64 = 1_000;
+
 const SUPPORTED_DERIVATION_PROFILES: &[(&str, &str, &str)] = &[
     (
         DERIVATION_HEMP_CANONICAL_420,
@@ -3192,6 +3197,75 @@ fn build_migration_aad(
     aad.into_bytes()
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WebcomKeypoolHints {
+    external_count_meta: i64,
+    change_count_meta: i64,
+    recovered_external_indices_count: i64,
+    max_recovered_external_index: i64,
+    external_count_hint: i64,
+    change_count_hint: i64,
+}
+
+fn webcom_keypool_hints(webcom_record: &SecretRecord) -> WebcomKeypoolHints {
+    let external_count_meta = webcom_record
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("external_count"))
+        .and_then(|v| v.as_i64())
+        .filter(|n| *n > 0)
+        .unwrap_or(0);
+    let change_count_meta = webcom_record
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("change_count"))
+        .and_then(|v| v.as_i64())
+        .filter(|n| *n > 0)
+        .unwrap_or(0);
+
+    let mut recovered_external_indices_count = 0_i64;
+    let mut max_recovered_external_index = 0_i64;
+    if let Some(indices) = webcom_record
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("recovered_external_indices"))
+        .and_then(|v| v.as_array())
+    {
+        for index in indices
+            .iter()
+            .filter_map(|v| v.as_i64())
+            .filter(|n| *n >= 0)
+        {
+            recovered_external_indices_count += 1;
+            max_recovered_external_index = max_recovered_external_index.max(index);
+        }
+    }
+
+    let external_count_hint = (external_count_meta + 1)
+        .max(max_recovered_external_index + 1)
+        .max(VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR)
+        .min(VAULT_KEYPOOL_HINT_CEILING);
+    let change_count_hint = (change_count_meta + 1)
+        .max(VAULT_KEYPOOL_CHANGE_HINT_FLOOR)
+        .min(VAULT_KEYPOOL_HINT_CEILING);
+
+    WebcomKeypoolHints {
+        external_count_meta,
+        change_count_meta,
+        recovered_external_indices_count,
+        max_recovered_external_index,
+        external_count_hint,
+        change_count_hint,
+    }
+}
+
+fn vault_keypool_refill_target(external_count_hint: i64, change_count_hint: i64) -> i64 {
+    external_count_hint
+        .max(change_count_hint)
+        .max(VAULT_CORE_KEYPOOL_REFILL_FLOOR)
+        .min(VAULT_KEYPOOL_HINT_CEILING)
+}
+
 fn build_migration_envelope_from_webcom_bip39(
     passphrase: &str,
     webcom_record: &SecretRecord,
@@ -3314,48 +3388,9 @@ fn build_migration_envelope_from_webcom_bip39(
     //
     // We use a reasonable floor (20) so that even records without
     // recovered_external_indices get a useful initial keypool.
-    let external_count_meta = webcom_record
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("external_count"))
-        .and_then(|v| v.as_i64())
-        .filter(|n| *n > 0)
-        .unwrap_or(0);
-    let change_count_meta = webcom_record
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("change_count"))
-        .and_then(|v| v.as_i64())
-        .filter(|n| *n > 0)
-        .unwrap_or(0);
-    let recovered_external_indices: Vec<i64> = webcom_record
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("recovered_external_indices"))
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
-        .unwrap_or_default();
-    let max_recovered_index = recovered_external_indices
-        .iter()
-        .max()
-        .copied()
-        .unwrap_or(0);
-
-    // The hint must cover the user's gap limit + any recovered
-    // indices + a small safety margin. We cap at 10_000 to avoid
-    // pathological keypool sizes from a corrupted vault.
-    const EXTERNAL_HINT_FLOOR: i64 = 20;
-    const CHANGE_HINT_FLOOR: i64 = 6;
-    const EXTERNAL_HINT_CEILING: i64 = 10_000;
-    const CHANGE_HINT_CEILING: i64 = 10_000;
-
-    let external_count_hint = (external_count_meta + 1)
-        .max(max_recovered_index + 1)
-        .max(EXTERNAL_HINT_FLOOR)
-        .min(EXTERNAL_HINT_CEILING);
-    let change_count_hint = (change_count_meta + 1)
-        .max(CHANGE_HINT_FLOOR)
-        .min(CHANGE_HINT_CEILING);
+    let keypool_hints = webcom_keypool_hints(webcom_record);
+    let external_count_hint = keypool_hints.external_count_hint;
+    let change_count_hint = keypool_hints.change_count_hint;
 
     let private_payload_plaintext = serde_json::json!({
         "payload_version": MIGRATION_PRIVATE_PAYLOAD_VERSION,
@@ -3437,8 +3472,8 @@ fn build_migration_envelope_from_webcom_bip39(
             "mnemonic_available": true,
             "watch_only_present": false,
             "private_keys_present": true,
-            "keypool_external": 20,
-            "keypool_internal": 6,
+            "keypool_external": external_count_hint,
+            "keypool_internal": change_count_hint,
         },
         "derivation": [
             {
@@ -3471,10 +3506,10 @@ fn build_migration_envelope_from_webcom_bip39(
             "balance": 0,
             "external_count_hint": external_count_hint,
             "change_count_hint": change_count_hint,
-            "external_count_from_vault": external_count_meta,
-            "change_count_from_vault": change_count_meta,
-            "recovered_external_indices_count": recovered_external_indices.len() as i64,
-            "max_recovered_external_index": max_recovered_index,
+            "external_count_from_vault": keypool_hints.external_count_meta,
+            "change_count_from_vault": keypool_hints.change_count_meta,
+            "recovered_external_indices_count": keypool_hints.recovered_external_indices_count,
+            "max_recovered_external_index": keypool_hints.max_recovered_external_index,
         },
         "warnings": [
             "Generated by Commander from a WebCom Hemp0x Vault BIP39 record.",
@@ -6154,6 +6189,11 @@ fn perform_webcom_to_core_restore_and_align(
 
     let envelope_json = build_migration_envelope_from_webcom_bip39(passphrase, webcom_record)
         .map_err(|e| format!("Failed to build migration envelope from WebCom BIP39 record: {e}"))?;
+    let keypool_hints = webcom_keypool_hints(webcom_record);
+    let keypool_refill_target = vault_keypool_refill_target(
+        keypool_hints.external_count_hint,
+        keypool_hints.change_count_hint,
+    );
 
     let temp = TempFileGuard::new("vault_webcom_connect")?;
     fs::write(&temp.path, &envelope_json)
@@ -6269,8 +6309,25 @@ fn perform_webcom_to_core_restore_and_align(
     // 4. Report history recovery as pending. Commander starts the
     //    rescan only after the restored runtime wallet is ready and
     //    any requested encryption/restart has completed.
-    let named_state = describe_named_wallet_state(&restored_wallet_name);
+    let mut named_state = describe_named_wallet_state(&restored_wallet_name);
     let named_wallet_loaded = named_state.named_wallet_loaded;
+    let mut keypool_refill: Option<serde_json::Value> = None;
+    if named_wallet_loaded {
+        match refill_named_wallet_keypool_if_needed(&restored_wallet_name, keypool_refill_target) {
+            Ok(status) => {
+                keypool_refill = Some(status);
+                named_state = describe_named_wallet_state(&restored_wallet_name);
+            }
+            Err(err) => {
+                keypool_refill = Some(serde_json::json!({
+                    "triggered": false,
+                    "wallet_name": restored_wallet_name,
+                    "target_size": keypool_refill_target,
+                    "error": err,
+                }));
+            }
+        }
+    }
     let wallet_state_json = named_wallet_state_to_json(&named_state);
 
     let mut addresses: Vec<String> = Vec::new();
@@ -6426,6 +6483,7 @@ fn perform_webcom_to_core_restore_and_align(
         "named_wallet_loaded": named_wallet_loaded,
         "named_wallet_loaded_via": named_state.loaded_via.clone(),
         "wallet_load_restart_required": named_state.restart_required,
+        "keypool_refill": keypool_refill.clone(),
         "wallet_balance": wallet_balance.clone(),
         "balance_source": balance_source.clone(),
         // Distinguish the three balances / scans honestly:
@@ -7454,10 +7512,89 @@ pub async fn vault_recover_wallet_history(
         .map_err(|e| format!("History recovery task failed: {e}"))?
 }
 
+fn refill_named_wallet_keypool_if_needed(
+    wallet_name: &str,
+    target_size: i64,
+) -> Result<serde_json::Value, String> {
+    let target_size = target_size
+        .max(VAULT_CORE_KEYPOOL_REFILL_FLOOR)
+        .min(VAULT_KEYPOOL_HINT_CEILING);
+    let state = describe_named_wallet_state(wallet_name);
+    if !state.named_wallet_loaded {
+        return Err(format!(
+            "Wallet '{}' is not loaded. Load or restart Core with this wallet first.",
+            wallet_name
+        ));
+    }
+
+    let current_external = state
+        .query_info
+        .as_ref()
+        .and_then(|info| info.get("keypool_external"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let current_internal = state
+        .query_info
+        .as_ref()
+        .and_then(|info| info.get("keypool_internal"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let current = current_external.max(current_internal);
+    if current >= target_size {
+        return Ok(serde_json::json!({
+            "triggered": false,
+            "wallet_name": wallet_name,
+            "target_size": target_size,
+            "keypool_external": current_external,
+            "keypool_internal": current_internal,
+            "reason": "already_sufficient",
+        }));
+    }
+
+    let args = vec![
+        format!("-wallet={}", wallet_name),
+        String::from("keypoolrefill"),
+        target_size.to_string(),
+    ];
+    crate::modules::commands::run_cli(&args).map_err(|err| {
+        if is_core_wallet_unlock_required_error(&err) {
+            format!(
+                "WALLET_UNLOCK_REQUIRED::The runtime wallet '{}' must be unlocked before Commander can recover this vault wallet history.",
+                wallet_name
+            )
+        } else {
+            format!("keypoolrefill failed for wallet '{}': {}", wallet_name, err)
+        }
+    })?;
+
+    let after = describe_named_wallet_state(wallet_name);
+    let after_external = after
+        .query_info
+        .as_ref()
+        .and_then(|info| info.get("keypool_external"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let after_internal = after
+        .query_info
+        .as_ref()
+        .and_then(|info| info.get("keypool_internal"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    Ok(serde_json::json!({
+        "triggered": true,
+        "wallet_name": wallet_name,
+        "target_size": target_size,
+        "keypool_external": after_external,
+        "keypool_internal": after_internal,
+    }))
+}
+
 #[tauri::command]
 pub fn vault_start_wallet_history_recovery(
     wallet_name: String,
     from_block: Option<i64>,
+    keypool_size: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     let state = describe_named_wallet_state(&wallet_name);
     if !state.named_wallet_loaded {
@@ -7470,6 +7607,11 @@ pub fn vault_start_wallet_history_recovery(
     if start_block < 0 {
         return Err("from_block cannot be negative".to_string());
     }
+    let refill_target = keypool_size
+        .unwrap_or(VAULT_KEYPOOL_HINT_CEILING)
+        .max(VAULT_CORE_KEYPOOL_REFILL_FLOOR)
+        .min(VAULT_KEYPOOL_HINT_CEILING);
+    let keypool_refill = refill_named_wallet_keypool_if_needed(&wallet_name, refill_target)?;
     let wn = wallet_name.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(err) = recover_wallet_history_blocking(&wn, Some(start_block)) {
@@ -7483,6 +7625,7 @@ pub fn vault_start_wallet_history_recovery(
         "started": true,
         "from_block": start_block,
         "wallet_name": wallet_name,
+        "keypool_refill": keypool_refill,
         "detail": "History recovery is running in the background.",
     }))
 }
@@ -10338,6 +10481,57 @@ mod tests {
             created: now,
             modified: now,
         }
+    }
+
+    #[test]
+    fn webcom_keypool_hints_cover_recovered_indices() {
+        let mut record = make_webcom_bip39_record(DERIVATION_HEMP_CANONICAL_420, "bip39");
+        record.metadata = Some(serde_json::json!({
+            "external_count": 2,
+            "change_count": 1,
+            "recovered_external_indices": [0, 4, 120],
+            "recovery": {
+                "seedType": "bip39",
+                "network": "mainnet",
+                "derivationProfiles": {
+                    "hemp": DERIVATION_HEMP_CANONICAL_420,
+                },
+            },
+        }));
+
+        let hints = webcom_keypool_hints(&record);
+        assert_eq!(hints.external_count_hint, 121);
+        assert_eq!(hints.change_count_hint, VAULT_KEYPOOL_CHANGE_HINT_FLOOR);
+        assert_eq!(hints.recovered_external_indices_count, 3);
+        assert_eq!(
+            vault_keypool_refill_target(hints.external_count_hint, hints.change_count_hint),
+            VAULT_CORE_KEYPOOL_REFILL_FLOOR
+        );
+    }
+
+    #[test]
+    fn webcom_keypool_hints_are_capped_for_corrupt_metadata() {
+        let mut record = make_webcom_bip39_record(DERIVATION_HEMP_CANONICAL_420, "bip39");
+        record.metadata = Some(serde_json::json!({
+            "external_count": 99_999,
+            "change_count": 88_888,
+            "recovered_external_indices": [150_000],
+            "recovery": {
+                "seedType": "bip39",
+                "network": "mainnet",
+                "derivationProfiles": {
+                    "hemp": DERIVATION_HEMP_CANONICAL_420,
+                },
+            },
+        }));
+
+        let hints = webcom_keypool_hints(&record);
+        assert_eq!(hints.external_count_hint, VAULT_KEYPOOL_HINT_CEILING);
+        assert_eq!(hints.change_count_hint, VAULT_KEYPOOL_HINT_CEILING);
+        assert_eq!(
+            vault_keypool_refill_target(hints.external_count_hint, hints.change_count_hint),
+            VAULT_KEYPOOL_HINT_CEILING
+        );
     }
 
     fn save_vault_with_payload(passphrase: &str, payload: VaultPayload) {

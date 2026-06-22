@@ -337,6 +337,7 @@
             await core.invoke("vault_start_wallet_history_recovery", {
                 walletName,
                 fromBlock: null,
+                keypoolSize: 10000,
             });
             historyRecoveryBackgroundActive = true;
             coreBusyUntil.set(Date.now() + 120000);
@@ -345,7 +346,20 @@
                 historyRecoveryBackgroundActive = false;
             }, 120000);
         } catch (err) {
-            console.warn("Deferred history recovery did not start:", err);
+            const text = String(err || "");
+            if (text.startsWith("WALLET_UNLOCK_REQUIRED::")) {
+                pendingHistoryRecoveryWallet = walletName;
+                unlockModalPurpose = "wallet_unlock";
+                unlockAfterWalletUnlock = async () => {
+                    await startPendingHistoryRecovery();
+                };
+                unlockPassword = "";
+                unlockError = "";
+                showUnlockModal = true;
+                showToast("Unlock the runtime wallet to recover vault wallet history.", "info", false);
+            } else {
+                console.warn("Deferred history recovery did not start:", err);
+            }
         }
     }
 
@@ -3838,7 +3852,7 @@
                             vaultPageError = "";
                             const walletName = alignmentStatus?.core_wallet_name || walletStatus?.walletname || "default";
                             try {
-                                await core.invoke("vault_start_wallet_history_recovery", { walletName, fromBlock: null });
+                                await core.invoke("vault_start_wallet_history_recovery", { walletName, fromBlock: null, keypoolSize: 10000 });
                                 historyRecoveryBackgroundActive = true;
                                 coreBusyUntil.set(Date.now() + 120000);
                                 showToast("History recovery started. It will continue in the background.", "info", false);
@@ -3846,7 +3860,22 @@
                                     historyRecoveryBackgroundActive = false;
                                 }, 120000);
                             } catch (e) {
-                                vaultPageError = "History recovery could not start: " + String(e);
+                                const text = String(e || "");
+                                if (text.startsWith("WALLET_UNLOCK_REQUIRED::")) {
+                                    unlockModalPurpose = "wallet_unlock";
+                                    unlockAfterWalletUnlock = async () => {
+                                        await core.invoke("vault_start_wallet_history_recovery", { walletName, fromBlock: null, keypoolSize: 10000 });
+                                        historyRecoveryBackgroundActive = true;
+                                        coreBusyUntil.set(Date.now() + 120000);
+                                        showToast("History recovery started. It will continue in the background.", "info", false);
+                                    };
+                                    unlockPassword = "";
+                                    unlockError = "";
+                                    showUnlockModal = true;
+                                    vaultPageError = "";
+                                } else {
+                                    vaultPageError = "History recovery could not start: " + text;
+                                }
                                 historyRecoveryBackgroundActive = false;
                             }
                             window.setTimeout(() => {

@@ -1283,6 +1283,9 @@ pub fn import_priv_key(priv_key: String, label: String, rescan: bool) -> Result<
 #[tauri::command]
 pub fn wallet_encrypt(password: String) -> Result<String, String> {
     ensure_config()?;
+    if active_vault_wallet_name().is_some() {
+        return run_active_wallet_cli(&[String::from("encryptwallet"), password]);
+    }
     let result = rpc::call_rpc("encryptwallet", &[serde_json::Value::String(password)])?;
     Ok(result.as_str().unwrap_or("").to_string())
 }

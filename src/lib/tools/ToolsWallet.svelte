@@ -1736,14 +1736,6 @@
         return !!walletName && walletStatus?.walletname === walletName;
     }
 
-    function runtimeWalletConnectedToVault() {
-        const runtimeName = loadedRuntimeWalletName();
-        if (isDefaultRuntimeWalletName(runtimeName)) return false;
-        return runtimeName === activeVaultWalletName
-            || runtimeName === alignedVaultWalletName()
-            || runtimeName === alignmentStatus?.core_wallet_name;
-    }
-
     function activeRuntimeWalletLabel() {
         if (walletStatus?.walletname && walletStatus.walletname !== "default") return walletStatus.walletname;
         if (activeVaultWalletName) return `${activeVaultWalletName} (selected for restart)`;
@@ -2359,6 +2351,24 @@
     function isDefaultRuntimeWalletName(name) {
         const normalized = String(name || "").trim();
         return !normalized || normalized === "default" || normalized === "wallet.dat";
+    }
+
+    let runtimeWalletIsVaultConnected = false;
+    $: {
+        const runtimeName = String(walletStatus?.walletname || "").trim();
+        const selectedVaultName = String(activeVaultWalletName || "").trim();
+        const alignedWalletName = String(alignmentStatus?.core_wallet_name || "").trim();
+        const verifiedAlignmentIsActive =
+            alignmentStatus?.connection_state === "verified_aligned"
+            && alignmentStatus?.aligned_core_wallet_active === true
+            && alignmentStatus?.aligned_core_wallet_loaded === true;
+
+        runtimeWalletIsVaultConnected =
+            !isDefaultRuntimeWalletName(runtimeName)
+            && (
+                (!!selectedVaultName && runtimeName === selectedVaultName)
+                || (verifiedAlignmentIsActive && !!alignedWalletName && runtimeName === alignedWalletName)
+            );
     }
 
     async function executeChangeVaultPassphrase() {
@@ -3811,7 +3821,7 @@
                 <!-- SECTION 2: Runtime Wallet Status -->
                 <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
                     <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem; letter-spacing:0.5px;">RUNTIME WALLET</h4>
-                    {#if !runtimeWalletConnectedToVault()}
+                    {#if !runtimeWalletIsVaultConnected}
                         <div style="background:rgba(255,170,0,0.08); border:1px solid rgba(255,170,0,0.2); border-radius:4px; padding:0.35rem 0.6rem; margin-bottom:0.5rem; font-size:0.6rem; color:#ffaa00;">
                             <strong>Mode: Legacy Core wallet</strong> — Commander is using the default wallet.dat, not a connected vault wallet.
                         </div>

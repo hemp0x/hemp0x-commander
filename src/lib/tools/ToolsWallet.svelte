@@ -638,12 +638,13 @@
             const unlockedForVaultBackup = unlockModalPurpose === "vault_backup";
             unlockModalPurpose = "key_export";
             unlockPassword = "";
+            await refreshWalletHeader();
             if (afterUnlock) {
                 await afterUnlock();
             } else if (!plainWalletUnlock) {
                 proceedExport();
             }
-            if (unlockedForVaultBackup || plainWalletUnlock) {
+            if (unlockedForVaultBackup || plainWalletUnlock || afterUnlock) {
                 await refreshWalletHeader();
             }
             if (plainWalletUnlock) {
@@ -1833,12 +1834,6 @@
         try {
             await refreshWalletHeader();
             await loadAlignmentStatus();
-            if (!justConnected && alignmentStatus?.wallet_record_state === "webcom_primary_detected") {
-                const target = alignedVaultWalletName();
-                if (alignmentStatus.connection_state === "verified_aligned" && target && !isVaultWalletActive(target)) {
-                    await useVaultWallet(target);
-                }
-            }
         } catch (e) {
             console.error("post-vault-unlock connection check failed:", e);
         }
@@ -3619,7 +3614,7 @@
                         <span style="font-size:0.7rem; color:#aaa;">
                             {walletStatus.walletname ?? "default"}
                             <span style="color:#666;">|</span>
-                            {#if alignmentStatus?.connection_state === "verified_aligned"}
+                            {#if alignmentStatus?.connection_state === "verified_aligned" && alignmentStatus?.aligned_core_wallet_active && alignmentStatus?.aligned_core_wallet_loaded && isVaultWalletActive(alignedVaultWalletName())}
                                 <span style="color:var(--color-primary);">Verified ✓</span>
                                 <span style="color:#666;">|</span>
                             {:else if alignmentStatus?.wallet_record_state === "webcom_primary_detected"}
@@ -3720,7 +3715,7 @@
                                     <span style="color:#888; font-size:0.6rem;">({alignmentStatus.webcom_primary_seed_type})</span>
                                 {/if}
                             </p>
-                            {#if alignmentStatus.connection_state === "verified_aligned" && isVaultWalletActive(alignedVaultWalletName())}
+                            {#if alignmentStatus.connection_state === "verified_aligned" && alignmentStatus.aligned_core_wallet_active && alignmentStatus.aligned_core_wallet_loaded && isVaultWalletActive(alignedVaultWalletName())}
                                 <p style="color:var(--color-primary); font-size:0.65rem; margin:0 0 0.25rem;">Commander wallet verified and loaded for this vault</p>
                             {:else if alignmentStatus.connection_state === "verified_aligned"}
                                 <p style="color:#ffaa00; font-size:0.65rem; margin:0 0 0.25rem;">Commander wallet is verified for this vault but not loaded</p>
@@ -3862,7 +3857,10 @@
                         <button class="cyber-btn ghost tiny" on:click={async () => {
                             historyRecoverWorking = true;
                             vaultPageError = "";
-                            const walletName = alignmentStatus?.core_wallet_name || walletStatus?.walletname || "default";
+                            const runtimeWalletName = loadedRuntimeWalletName();
+                            const walletName = !isDefaultRuntimeWalletName(runtimeWalletName)
+                                ? runtimeWalletName
+                                : (alignmentStatus?.core_wallet_name || walletStatus?.walletname || "default");
                             try {
                                 await core.invoke("vault_start_wallet_history_recovery", { walletName, fromBlock: null, keypoolSize: 10000 });
                                 historyRecoveryBackgroundActive = true;

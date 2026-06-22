@@ -402,7 +402,7 @@ pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, Stri
             label: labels
                 .get(&addr)
                 .cloned()
-                .unwrap_or_else(|| "(Funded wallet address)".to_string()),
+                .unwrap_or_else(|| "--".to_string()),
             address: addr.clone(),
             balance: format!("{balance:.8}"),
         });

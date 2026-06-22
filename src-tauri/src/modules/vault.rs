@@ -88,6 +88,7 @@ const VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR: i64 = 20;
 const VAULT_KEYPOOL_CHANGE_HINT_FLOOR: i64 = 6;
 const VAULT_KEYPOOL_HINT_CEILING: i64 = 10_000;
 const VAULT_CORE_KEYPOOL_REFILL_FLOOR: i64 = 1_000;
+const VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING: i64 = 2_000;
 
 const SUPPORTED_DERIVATION_PROFILES: &[(&str, &str, &str)] = &[
     (
@@ -3045,7 +3046,8 @@ pub fn get_wallet_alignment_status(passphrase: &str) -> Result<serde_json::Value
         }
     }
 
-    let mut core_reachable = false;
+    let mut core_reachable =
+        crate::modules::commands::run_cli(&[String::from("getnetworkinfo")]).is_ok();
     let mut _core_wallet_shape: Option<serde_json::Value> = None;
     let mut bip39_export_possible = false;
 
@@ -3264,6 +3266,23 @@ fn vault_keypool_refill_target(external_count_hint: i64, change_count_hint: i64)
         .max(change_count_hint)
         .max(VAULT_CORE_KEYPOOL_REFILL_FLOOR)
         .min(VAULT_KEYPOOL_HINT_CEILING)
+}
+
+fn vault_history_materialize_external_target(hints: WebcomKeypoolHints) -> i64 {
+    hints
+        .external_count_hint
+        .max(VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR)
+        .min(VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING)
+}
+
+fn current_vault_webcom_keypool_hints_from_cache() -> Option<WebcomKeypoolHints> {
+    let passphrase = crate::modules::provider_settings::get_cached_passphrase()?;
+    let bundle = load_bundle().ok().flatten()?;
+    let payload = decrypt_vault_envelope(&passphrase, &bundle.vault).ok()?;
+    payload
+        .secrets
+        .get(RECORD_ID_WALLET_HEMP_PRIMARY)
+        .map(webcom_keypool_hints)
 }
 
 fn build_migration_envelope_from_webcom_bip39(
@@ -6041,6 +6060,13 @@ fn enumerate_wallet_addresses(wallet_name: &str) -> Result<Vec<String>, String> 
             }
         }
     }
+    if let Ok(receive_addresses) = list_named_receive_addresses(wallet_name) {
+        for addr in receive_addresses {
+            if seen.insert(addr.clone()) {
+                addresses.push(addr);
+            }
+        }
+    }
     Ok(addresses)
 }
 
@@ -6097,6 +6123,81 @@ fn scantxoutset_for_addresses(addresses: &[String]) -> Result<serde_json::Value,
         "total_amount": total_amount,
         "utxo_count": utxo_count,
         "scanned_addresses": addresses.len(),
+    }))
+}
+
+fn list_named_receive_addresses(wallet_name: &str) -> Result<Vec<String>, String> {
+    let raw = crate::modules::commands::run_cli(&[
+        format!("-wallet={wallet_name}"),
+        String::from("listreceivedbyaddress"),
+        String::from("0"),
+        String::from("true"),
+    ])
+    .map_err(|e| format!("Failed to list receive addresses for wallet '{wallet_name}': {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Could not parse listreceivedbyaddress for wallet '{wallet_name}': {e}"))?;
+
+    let mut addresses = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(items) = parsed.as_array() {
+        for item in items {
+            if let Some(addr) = item.get("address").and_then(|v| v.as_str()) {
+                if !addr.is_empty() && seen.insert(addr.to_string()) {
+                    addresses.push(addr.to_string());
+                }
+            }
+        }
+    }
+    Ok(addresses)
+}
+
+fn materialize_named_wallet_external_addresses(
+    wallet_name: &str,
+    target_count: i64,
+) -> Result<serde_json::Value, String> {
+    let state = describe_named_wallet_state(wallet_name);
+    if !state.named_wallet_loaded {
+        return Err(format!(
+            "Wallet '{}' is not loaded. Load or restart Core with this wallet first.",
+            wallet_name
+        ));
+    }
+
+    let target_count = target_count
+        .max(VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR)
+        .min(VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING) as usize;
+    let mut addresses = list_named_receive_addresses(wallet_name)?;
+    let before_count = addresses.len();
+
+    while addresses.len() < target_count {
+        let raw = crate::modules::commands::run_cli(&[
+            format!("-wallet={wallet_name}"),
+            String::from("getnewaddress"),
+        ])
+        .map_err(|e| {
+            if is_core_wallet_unlock_required_error(&e) {
+                format!(
+                    "WALLET_UNLOCK_REQUIRED::The runtime wallet '{}' must be unlocked before Commander can recover this vault wallet history.",
+                    wallet_name
+                )
+            } else {
+                format!("Failed to materialize receive address for wallet '{wallet_name}': {e}")
+            }
+        })?;
+        let addr = raw.trim().to_string();
+        if addr.is_empty() {
+            break;
+        }
+        addresses.push(addr);
+    }
+
+    Ok(serde_json::json!({
+        "wallet_name": wallet_name,
+        "target_external_count": target_count,
+        "before_count": before_count,
+        "after_count": addresses.len(),
+        "generated_count": addresses.len().saturating_sub(before_count),
+        "capped": target_count as i64 == VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING,
     }))
 }
 
@@ -6728,6 +6829,7 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
 
     let mut connection_state = "none".to_string();
     let mut verification_status = "not_verified".to_string();
+    let mut alignment_core_wallet_name: Option<String> = None;
 
     if let Some(alignment) = alignment {
         let meta = alignment.metadata.as_ref();
@@ -6822,6 +6924,7 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
                 obj.insert("alignment_core_wallet_source".to_string(), src.clone());
             }
             if let Some(name) = meta.and_then(|m| m.get("core_wallet_name")) {
+                alignment_core_wallet_name = name.as_str().map(|s| s.to_string());
                 obj.insert("core_wallet_name".to_string(), name.clone());
             }
             if let Some(vm) = meta.and_then(|m| m.get("verification_method")) {
@@ -6839,8 +6942,42 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
     let mut current_core_wallet_exists = false;
     let mut core_locked = false;
 
-    if let Ok(raw) = crate::modules::commands::run_cli(&[String::from("getwalletmigrationinfo")]) {
-        if let Ok(info) = serde_json::from_str::<serde_json::Value>(&raw) {
+    let active_named_wallet = crate::modules::files::load_app_settings_impl()
+        .ok()
+        .and_then(|s| s.active_vault_wallet_name);
+    let wallet_status_target = active_named_wallet
+        .clone()
+        .or_else(|| alignment_core_wallet_name.clone());
+
+    if let Some(ref aligned_name) = alignment_core_wallet_name {
+        let aligned_state = describe_named_wallet_state(aligned_name);
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "aligned_core_wallet_state".to_string(),
+                named_wallet_state_to_json(&aligned_state),
+            );
+            obj.insert(
+                "aligned_core_wallet_loaded".to_string(),
+                serde_json::Value::Bool(aligned_state.named_wallet_loaded),
+            );
+            obj.insert(
+                "aligned_core_wallet_active".to_string(),
+                serde_json::Value::Bool(
+                    active_named_wallet.as_deref() == Some(aligned_name.as_str()),
+                ),
+            );
+        }
+    }
+
+    let migration_info = if let Some(ref wallet_name) = wallet_status_target {
+        crate::modules::rpc::call_rpc_wallet(wallet_name, "getwalletmigrationinfo", &[]).ok()
+    } else {
+        crate::modules::commands::run_cli(&[String::from("getwalletmigrationinfo")])
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    };
+
+    if let Some(info) = migration_info {
             core_reachable = true;
             let hd = info
                 .get("hd_enabled")
@@ -6887,7 +7024,6 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
                 );
             }
             _core_wallet_shape = Some(shape);
-        }
     }
 
     let webcom_primary_seed_type = result
@@ -7473,12 +7609,18 @@ fn refresh_wallet_utxos_blocking(wallet_name: &str) -> Result<serde_json::Value,
             wallet_name
         ));
     }
+    let materialize_target = current_vault_webcom_keypool_hints_from_cache()
+        .map(vault_history_materialize_external_target)
+        .unwrap_or(VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR);
+    let address_materialization =
+        materialize_named_wallet_external_addresses(wallet_name, materialize_target).ok();
     let addresses = enumerate_wallet_addresses(wallet_name)?;
     if addresses.is_empty() {
         return Ok(serde_json::json!({
             "wallet_name": wallet_name,
             "utxo_scan": null,
             "address_count": 0,
+            "address_materialization": address_materialization,
             "detail": "No addresses found for this wallet.",
         }));
     }
@@ -7495,6 +7637,7 @@ fn refresh_wallet_utxos_blocking(wallet_name: &str) -> Result<serde_json::Value,
         "wallet_name": wallet_name,
         "utxo_scan": utxo_scan,
         "address_count": addresses.len(),
+        "address_materialization": address_materialization,
         "wallet_info": wallet_info,
     }))
 }
@@ -7611,6 +7754,16 @@ pub async fn vault_start_wallet_history_recovery(
     .await
     .map_err(|e| format!("History recovery preflight task failed: {e}"))??;
 
+    let materialize_target = current_vault_webcom_keypool_hints_from_cache()
+        .map(vault_history_materialize_external_target)
+        .unwrap_or(VAULT_KEYPOOL_EXTERNAL_HINT_FLOOR);
+    let materialize_wallet_name = wallet_name.clone();
+    let address_materialization = tauri::async_runtime::spawn_blocking(move || {
+        materialize_named_wallet_external_addresses(&materialize_wallet_name, materialize_target)
+    })
+    .await
+    .map_err(|e| format!("History recovery address materialization task failed: {e}"))??;
+
     let wn = wallet_name.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(err) = recover_wallet_history_blocking(&wn, Some(start_block)) {
@@ -7625,6 +7778,7 @@ pub async fn vault_start_wallet_history_recovery(
         "from_block": start_block,
         "wallet_name": wallet_name,
         "keypool_refill": keypool_refill,
+        "address_materialization": address_materialization,
         "detail": "History recovery is running in the background.",
     }))
 }
@@ -10530,6 +10684,49 @@ mod tests {
         assert_eq!(
             vault_keypool_refill_target(hints.external_count_hint, hints.change_count_hint),
             VAULT_KEYPOOL_HINT_CEILING
+        );
+    }
+
+    #[test]
+    fn vault_history_materialize_external_target_uses_floor_and_recovered_indices() {
+        let mut record = make_webcom_bip39_record(DERIVATION_HEMP_CANONICAL_420, "bip39");
+        record.metadata = Some(serde_json::json!({
+            "external_count": 1,
+            "change_count": 1,
+            "recovered_external_indices": [0, 47],
+            "recovery": {
+                "seedType": "bip39",
+                "network": "mainnet",
+                "derivationProfiles": {
+                    "hemp": DERIVATION_HEMP_CANONICAL_420,
+                },
+            },
+        }));
+
+        let hints = webcom_keypool_hints(&record);
+        assert_eq!(vault_history_materialize_external_target(hints), 48);
+    }
+
+    #[test]
+    fn vault_history_materialize_external_target_caps_large_metadata() {
+        let mut record = make_webcom_bip39_record(DERIVATION_HEMP_CANONICAL_420, "bip39");
+        record.metadata = Some(serde_json::json!({
+            "external_count": 99_999,
+            "change_count": 1,
+            "recovered_external_indices": [9_999],
+            "recovery": {
+                "seedType": "bip39",
+                "network": "mainnet",
+                "derivationProfiles": {
+                    "hemp": DERIVATION_HEMP_CANONICAL_420,
+                },
+            },
+        }));
+
+        let hints = webcom_keypool_hints(&record);
+        assert_eq!(
+            vault_history_materialize_external_target(hints),
+            VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING
         );
     }
 

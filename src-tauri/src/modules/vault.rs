@@ -3277,6 +3277,12 @@ fn vault_history_materialize_external_target(hints: WebcomKeypoolHints) -> i64 {
         .min(VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING)
 }
 
+fn runtime_wallet_status_target(active_named_wallet: Option<String>) -> Option<String> {
+    active_named_wallet
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
 fn current_vault_webcom_keypool_hints_from_cache() -> Option<WebcomKeypoolHints> {
     let passphrase = crate::modules::provider_settings::get_cached_passphrase()?;
     let bundle = load_bundle().ok().flatten()?;
@@ -6972,19 +6978,18 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
         }
     }
 
-    let mut core_reachable = false;
+    let mut core_reachable =
+        crate::modules::commands::run_cli(&[String::from("getnetworkinfo")]).is_ok();
     let mut _core_wallet_shape: Option<serde_json::Value> = None;
     let mut bip39_export_possible = false;
     let mut current_core_wallet_exists = false;
     let mut core_locked = false;
 
-    let active_named_wallet = crate::modules::files::load_app_settings_impl()
-        .ok()
-        .and_then(|s| s.active_vault_wallet_name);
-    let wallet_status_target = active_named_wallet
-        .clone()
-        .or_else(|| alignment_core_wallet_name.clone());
-
+    let active_named_wallet = runtime_wallet_status_target(
+        crate::modules::files::load_app_settings_impl()
+            .ok()
+            .and_then(|s| s.active_vault_wallet_name),
+    );
     if let Some(ref aligned_name) = alignment_core_wallet_name {
         let aligned_state = describe_named_wallet_state(aligned_name);
         if let Some(obj) = result.as_object_mut() {
@@ -7005,7 +7010,12 @@ pub fn get_wallet_alignment_status_v2(passphrase: &str) -> Result<serde_json::Va
         }
     }
 
-    let migration_info = if let Some(ref wallet_name) = wallet_status_target {
+    // Read wallet capabilities from the wallet Core is actually running.
+    // A historical alignment record is only a candidate vault wallet; it
+    // must never replace the current runtime context for status probing.
+    // When no active named wallet is configured, the running wallet is the
+    // default wallet.dat and the base wallet RPC endpoint is correct.
+    let migration_info = if let Some(ref wallet_name) = active_named_wallet {
         crate::modules::rpc::call_rpc_wallet(wallet_name, "getwalletmigrationinfo", &[]).ok()
     } else {
         crate::modules::commands::run_cli(&[String::from("getwalletmigrationinfo")])
@@ -10782,6 +10792,16 @@ mod tests {
             vault_history_materialize_external_target(hints),
             VAULT_HISTORY_MATERIALIZE_EXTERNAL_CEILING
         );
+    }
+
+    #[test]
+    fn runtime_wallet_status_target_uses_only_configured_active_wallet() {
+        assert_eq!(runtime_wallet_status_target(None), None);
+        assert_eq!(
+            runtime_wallet_status_target(Some("  hemp0x-vault-main  ".to_string())),
+            Some("hemp0x-vault-main".to_string())
+        );
+        assert_eq!(runtime_wallet_status_target(Some("   ".to_string())), None);
     }
 
     fn save_vault_with_payload(passphrase: &str, payload: VaultPayload) {

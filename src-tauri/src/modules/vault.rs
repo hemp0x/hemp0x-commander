@@ -7591,18 +7591,11 @@ fn refill_named_wallet_keypool_if_needed(
 }
 
 #[tauri::command]
-pub fn vault_start_wallet_history_recovery(
+pub async fn vault_start_wallet_history_recovery(
     wallet_name: String,
     from_block: Option<i64>,
     keypool_size: Option<i64>,
 ) -> Result<serde_json::Value, String> {
-    let state = describe_named_wallet_state(&wallet_name);
-    if !state.named_wallet_loaded {
-        return Err(format!(
-            "Wallet '{}' is not loaded. Load or restart Core with this wallet first.",
-            wallet_name
-        ));
-    }
     let start_block = from_block.unwrap_or(0);
     if start_block < 0 {
         return Err("from_block cannot be negative".to_string());
@@ -7611,7 +7604,13 @@ pub fn vault_start_wallet_history_recovery(
         .unwrap_or(VAULT_KEYPOOL_HINT_CEILING)
         .max(VAULT_CORE_KEYPOOL_REFILL_FLOOR)
         .min(VAULT_KEYPOOL_HINT_CEILING);
-    let keypool_refill = refill_named_wallet_keypool_if_needed(&wallet_name, refill_target)?;
+    let preflight_wallet_name = wallet_name.clone();
+    let keypool_refill = tauri::async_runtime::spawn_blocking(move || {
+        refill_named_wallet_keypool_if_needed(&preflight_wallet_name, refill_target)
+    })
+    .await
+    .map_err(|e| format!("History recovery preflight task failed: {e}"))??;
+
     let wn = wallet_name.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(err) = recover_wallet_history_blocking(&wn, Some(start_block)) {

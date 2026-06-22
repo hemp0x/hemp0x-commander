@@ -1717,6 +1717,14 @@
         return !!walletName && walletStatus?.walletname === walletName;
     }
 
+    function runtimeWalletConnectedToVault() {
+        const runtimeName = loadedRuntimeWalletName();
+        if (isDefaultRuntimeWalletName(runtimeName)) return false;
+        return runtimeName === activeVaultWalletName
+            || runtimeName === alignedVaultWalletName()
+            || runtimeName === alignmentStatus?.core_wallet_name;
+    }
+
     function activeRuntimeWalletLabel() {
         if (walletStatus?.walletname && walletStatus.walletname !== "default") return walletStatus.walletname;
         if (activeVaultWalletName) return `${activeVaultWalletName} (selected for restart)`;
@@ -3790,9 +3798,13 @@
                 <!-- SECTION 2: Runtime Wallet Status -->
                 <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
                     <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem; letter-spacing:0.5px;">RUNTIME WALLET</h4>
-                    {#if !activeVaultWalletName}
+                    {#if !runtimeWalletConnectedToVault()}
                         <div style="background:rgba(255,170,0,0.08); border:1px solid rgba(255,170,0,0.2); border-radius:4px; padding:0.35rem 0.6rem; margin-bottom:0.5rem; font-size:0.6rem; color:#ffaa00;">
                             <strong>Mode: Legacy Core wallet</strong> — Commander is using the default wallet.dat, not a connected vault wallet.
+                        </div>
+                    {:else}
+                        <div style="background:rgba(0,255,102,0.06); border:1px solid rgba(0,255,102,0.18); border-radius:4px; padding:0.35rem 0.6rem; margin-bottom:0.5rem; font-size:0.6rem; color:var(--color-primary);">
+                            <strong>Mode: Hemp0x Vault wallet</strong> — Commander is using the portable vault runtime wallet.
                         </div>
                     {/if}
                     {#if walletStatusError}

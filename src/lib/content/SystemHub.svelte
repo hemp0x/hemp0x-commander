@@ -786,6 +786,11 @@
   }
 
   async function cancelPendingRepair() {
+    const confirmed = await ask(
+      "Clear Commander's pending repair flag? This does not stop Core or repair chain data. Use this only if you restored a snapshot, restored a backup, or intentionally want the next Core start to run without the repair flag.",
+      { title: "Clear Repair Flag", kind: "warning" },
+    );
+    if (!confirmed) return;
     try {
       await core.invoke("clear_daemon_repair_mode");
       repairMode = "none";
@@ -1541,9 +1546,11 @@
                         Repair process started successfully. Node is rebuilding/syncing. You can monitor progress here.
                       </div>
                     {/if}
-                    {#if !repairStatus.active && !repairStatus.rpc_online && repairStatus.mode}
+                    {#if repairStatus.mode}
                       <div class="sh-action-row wrap" style="margin-top: 0.5rem;">
-                        <button class="sh-btn sh-btn-ghost sh-btn-sm" on:click={cancelPendingRepair}>CANCEL PENDING REPAIR</button>
+                        <button class="sh-btn sh-btn-ghost sh-btn-sm" on:click={cancelPendingRepair}>
+                          {!repairStatus.active && !repairStatus.rpc_online ? "CANCEL PENDING REPAIR" : "CLEAR REPAIR FLAG"}
+                        </button>
                       </div>
                     {/if}
                   </div>

@@ -125,6 +125,9 @@ button:active {
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: none;
+  backdrop-filter: none;
   color: var(--color-muted);
   padding: 0.85rem 1.25rem;
   font-size: 0.85rem;
@@ -133,13 +136,20 @@ button:active {
 
 .tab-btn:hover {
   color: var(--color-primary);
+  transform: none;
+  box-shadow: none;
   text-shadow: 0 0 6px rgba(0, 255, 65, 0.3);
 }
 
 .tab-btn.active {
   color: var(--color-primary);
   border-bottom-color: var(--color-primary);
+  box-shadow: none;
   background: linear-gradient(to top, rgba(0, 255, 65, 0.08), transparent);
+}
+
+.tab-btn:active {
+  transform: none;
 }
 
 /* INPUT GLASS UTILITY */

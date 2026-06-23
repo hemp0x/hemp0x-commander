@@ -78,6 +78,37 @@
   let snapshotInstalling = false;
   let snapshotModalOpen = false;
   let snapshotFilePath = "";
+  let snapshotInstallStartedAt = null;
+  let snapshotProgressTimer = null;
+  let snapshotProgressMessage = "";
+
+  function formatElapsed(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes <= 0) return `${seconds}s`;
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  }
+
+  function stopSnapshotProgressTimer() {
+    if (snapshotProgressTimer) {
+      clearInterval(snapshotProgressTimer);
+      snapshotProgressTimer = null;
+    }
+  }
+
+  function startSnapshotProgressTimer() {
+    stopSnapshotProgressTimer();
+    snapshotInstallStartedAt = Date.now();
+    snapshotProgressMessage = "Preparing snapshot install...";
+    snapshotProgressTimer = setInterval(() => {
+      const elapsed = formatElapsed(Date.now() - snapshotInstallStartedAt);
+      snapshotProgressMessage = `Installing snapshot (${elapsed}). Keep Commander open.`;
+      if (processingMessage.startsWith("Extracting snapshot")) {
+        processingMessage = `Extracting snapshot (${elapsed}). Large archives can take several minutes.`;
+      }
+    }, 1000);
+  }
 
   async function installSnapshot() {
     if (snapshotInstalling) return;
@@ -95,6 +126,7 @@
     snapshotModalOpen = false;
     snapshotInstalling = true;
     isProcessing = true;
+    startSnapshotProgressTimer();
     try {
       processingMessage = "Stopping node...";
       try {
@@ -110,11 +142,13 @@
         }
         await new Promise((r) => setTimeout(r, 1000));
       } catch {}
-      processingMessage = "Extracting snapshot... this may take a few minutes";
+      processingMessage = "Extracting snapshot (0s). Large archives can take several minutes.";
+      snapshotProgressMessage = "Extracting snapshot. Keep Commander open.";
       const result = await core.invoke("extract_snapshot", { archivePath: snapshotFilePath });
       dispatchToast(result, "success");
       loadDataInfo();
       processingMessage = "Restarting node...";
+      snapshotProgressMessage = "Snapshot installed. Restarting Core.";
       try {
         await core.invoke("start_node");
       } catch {
@@ -123,6 +157,9 @@
     } catch (err) {
       dispatchToast(`Snapshot failed: ${err}`, "error");
     }
+    stopSnapshotProgressTimer();
+    snapshotInstallStartedAt = null;
+    snapshotProgressMessage = "";
     snapshotInstalling = false;
     isProcessing = false;
   }
@@ -1614,7 +1651,16 @@
     <div class="modal-frame" style="text-align:center; max-width: 400px;">
       <h3 class="neon-text" style="color:var(--color-primary); margin:0 0 1rem 0;">PLEASE WAIT</h3>
       <p style="color:#aaa; margin:0;">{processingMessage}</p>
-      <p style="color:#666; font-size:0.75rem; margin-top:1.5rem; line-height:1.4;">App will respond once the command is done.</p>
+      {#if snapshotInstalling}
+        <p style="color:#888; font-size:0.75rem; margin-top:1rem; line-height:1.45;">
+          {snapshotProgressMessage || "Installing snapshot. Keep Commander open."}
+        </p>
+        <p style="color:#666; font-size:0.7rem; margin-top:0.75rem; line-height:1.4;">
+          Snapshot extraction can be slow on large archives. Commander will continue when the install finishes.
+        </p>
+      {:else}
+        <p style="color:#666; font-size:0.75rem; margin-top:1.5rem; line-height:1.4;">App will respond once the command is done.</p>
+      {/if}
     </div>
   </div>
 {/if}

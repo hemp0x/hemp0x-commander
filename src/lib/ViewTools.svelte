@@ -362,6 +362,9 @@
     min-width: max-content;
     background: transparent;
     border: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    box-shadow: none;
+    backdrop-filter: none;
     color: var(--color-muted);
     padding: 0.85rem clamp(0.7rem, 1.6vw, 1.25rem);
     font-size: 0.78rem;
@@ -373,15 +376,21 @@
   .sub-tab-btn:hover {
     color: #fff;
     background: rgba(255, 255, 255, 0.02);
+    box-shadow: none;
+    transform: none;
   }
   .sub-tab-btn.active {
     color: var(--color-primary);
     border-bottom-color: var(--color-primary);
+    box-shadow: none;
     background: linear-gradient(
       180deg,
       rgba(0, 0, 0, 0) 0%,
       rgba(0, 255, 65, 0.06) 100%
     );
+  }
+  .sub-tab-btn:active {
+    transform: none;
   }
   .header-status {
     flex: 0 0 auto;

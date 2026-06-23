@@ -147,6 +147,15 @@
       const result = await core.invoke("extract_snapshot", { archivePath: snapshotFilePath });
       dispatchToast(result, "success");
       loadDataInfo();
+      processingMessage = "Clearing pending repair mode...";
+      try {
+        await core.invoke("clear_daemon_repair_mode");
+        repairMode = "none";
+        repairActive = false;
+        repairStatus = null;
+      } catch (err) {
+        dispatchToast(`Snapshot installed, but repair flag cleanup failed: ${err}`, "warning");
+      }
       processingMessage = "Restarting node...";
       snapshotProgressMessage = "Snapshot installed. Restarting Core.";
       try {

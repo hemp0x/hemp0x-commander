@@ -220,7 +220,7 @@
       chooseDataDirInProgress = true;
       try {
         dataFolderInfo = await core.invoke("set_core_data_dir", { path: target });
-        dispatchToast("Core data directory set to new empty folder.", "success");
+        dispatchToast("Core data directory set to selected folder.", "success");
       } catch (err) {
         dispatchToast(`Failed: ${err}`, "error");
       }
@@ -1622,12 +1622,12 @@
         </div>
         <div class="sh-action-row wrap" style="justify-content: center;">
           <button class="sh-btn" on:click={() => dataDirAction("copy")}>COPY DATA HERE</button>
-          <button class="sh-btn sh-btn-ghost" on:click={() => dataDirAction("point")}>START FRESH</button>
+          <button class="sh-btn sh-btn-ghost" on:click={() => dataDirAction("point")}>USE SELECTED FOLDER</button>
           <button class="sh-btn sh-btn-ghost" on:click={cancelDataDirModal}>CANCEL</button>
         </div>
         <p class="sh-help-text" style="margin-top: 0.75rem; font-size: 0.7rem; color: #666;">
-          <strong>Copy</strong> will stop the daemon, copy all files, then activate the new folder and restart.<br>
-          <strong>Start fresh</strong> only points Commander to the new empty folder. Existing data is left untouched.
+          <strong>Copy data here</strong> stops Core, copies your current data into the selected folder, then activates it.<br>
+          <strong>Use selected folder</strong> points Commander at that folder without copying. If it already contains Hemp0x Core data, Core will use it; if it is empty, Core starts there as a fresh data directory.
         </p>
       </div>
     </div>

@@ -1,5 +1,4 @@
 use serde::Serialize;
-// use std::collections::HashMap; // Unused
 
 #[derive(Serialize)]
 pub struct NodeInfo {
@@ -507,4 +506,37 @@ pub struct AssetAnnouncementPreview {
     pub warnings: Vec<String>,
     pub summary: String,
     pub validated: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ConfigChange {
+    pub key: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub action: String, // "added", "changed", "removed"
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ConfigPreview {
+    pub changes: Vec<ConfigChange>,
+    pub validation_warnings: Vec<String>,
+    pub validation_errors: Vec<String>,
+    pub reindex_required: Vec<String>,
+    pub reindex_chainstate_required: Vec<String>,
+    pub restart_required: bool,
+    pub preview_token: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ConfigHelpSection {
+    pub title: String,
+    pub entries: Vec<ConfigHelpEntry>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ConfigHelpEntry {
+    pub key: String,
+    pub description: String,
+    pub default_value: String,
+    pub commander_relevance: String,
 }

@@ -234,6 +234,9 @@
   async function loadConfig(silent = false) {
     try {
       configText = await core.invoke("read_config");
+      await hydrateGuidedControls();
+      guidedPreview = null;
+      previewToken = null;
       if (!silent) dispatchToast("Configuration Loaded", "success");
     } catch (err) {
       if (!silent) dispatchToast("Config missing or empty", "info");
@@ -259,6 +262,234 @@
   }
   let showConfHelp = false;
   function toggleConfHelp() { showConfHelp = !showConfHelp; }
+
+  let configHelpSections = [];
+  let configHelpLoading = false;
+  async function loadConfigHelp() {
+    if (configHelpLoading || configHelpSections.length > 0) return;
+    configHelpLoading = true;
+    try {
+      configHelpSections = await core.invoke("get_config_help_reference");
+    } catch {}
+    configHelpLoading = false;
+  }
+
+  // Guided configuration state
+  let guidedPreset = "custom";
+  let guidedControls = {
+    server: true,
+    listen: true,
+    daemon: false,
+    dbcache: 4096,
+    maxconnections: 125,
+    prune: 0,
+    txindex: false,
+    addressindex: false,
+    assetindex: false,
+    timestampindex: false,
+    spentindex: false,
+    zmqpubrawtx: "",
+    addnodeEntry: "",
+    addnodeList: [],
+  };
+
+  let guidedPreview = null;
+  let previewToken = null;
+  let previewChanges = null;
+  let guidedPreviewLoading = false;
+  let guidedApplyLoading = false;
+  let guidedDirtyKeys = new Set();
+
+  const CORE_DEFAULTS = {
+    server: true, listen: true, daemon: false,
+    dbcache: 450, maxconnections: 125, prune: 0,
+    txindex: false, addressindex: false, assetindex: false,
+    timestampindex: false, spentindex: false,
+  };
+
+  async function hydrateGuidedControls() {
+    try {
+      const parsed = await core.invoke("parse_current_config");
+      guidedControls.server = parseBoolConfig(parsed, "server", CORE_DEFAULTS.server);
+      guidedControls.listen = parseBoolConfig(parsed, "listen", CORE_DEFAULTS.listen);
+      guidedControls.daemon = parseBoolConfig(parsed, "daemon", CORE_DEFAULTS.daemon);
+      guidedControls.dbcache = parseIntConfig(parsed, "dbcache", CORE_DEFAULTS.dbcache);
+      guidedControls.maxconnections = parseIntConfig(parsed, "maxconnections", CORE_DEFAULTS.maxconnections);
+      guidedControls.prune = parseIntConfig(parsed, "prune", CORE_DEFAULTS.prune);
+      guidedControls.txindex = parseBoolConfig(parsed, "txindex", CORE_DEFAULTS.txindex);
+      guidedControls.addressindex = parseBoolConfig(parsed, "addressindex", CORE_DEFAULTS.addressindex);
+      guidedControls.assetindex = parseBoolConfig(parsed, "assetindex", CORE_DEFAULTS.assetindex);
+      guidedControls.timestampindex = parseBoolConfig(parsed, "timestampindex", CORE_DEFAULTS.timestampindex);
+      guidedControls.spentindex = parseBoolConfig(parsed, "spentindex", CORE_DEFAULTS.spentindex);
+      guidedControls.zmqpubrawtx = parsed["zmqpubrawtx"] || "";
+
+      // Extract addnode entries from the raw config text
+      const nodes = [];
+      for (const line of configText.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("addnode=")) {
+          const val = trimmed.substring(8).trim();
+          if (val && !nodes.includes(val)) nodes.push(val);
+        }
+      }
+      guidedControls.addnodeList = nodes;
+      guidedControls.addnodeEntry = "";
+      guidedDirtyKeys = new Set();
+    } catch {
+      // Keep defaults
+    }
+  }
+
+  function parseBoolConfig(parsed, key, def) {
+    const v = parsed[key];
+    if (v === undefined || v === null || v === "") return def;
+    return v === "1" || v === "true" || v === "yes";
+  }
+
+  function parseIntConfig(parsed, key, def) {
+    const v = parsed[key];
+    if (v === undefined || v === null || v === "") return def;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? def : n;
+  }
+
+  function invalidatePreview({ resetPreset = true } = {}) {
+    guidedPreview = null;
+    previewToken = null;
+    previewChanges = null;
+    if (resetPreset) guidedPreset = "custom";
+  }
+
+  function markGuidedDirty(key) {
+    guidedDirtyKeys = new Set([...guidedDirtyKeys, key]);
+    invalidatePreview();
+  }
+
+  function applyPreset(preset) {
+    guidedPreset = preset;
+    if (preset === "full") {
+      guidedControls = {
+        ...guidedControls,
+        server: true,
+        listen: true,
+        daemon: false,
+        dbcache: 4096,
+        maxconnections: 125,
+        prune: 0,
+        txindex: true,
+        addressindex: true,
+        assetindex: true,
+        timestampindex: true,
+        spentindex: true,
+        zmqpubrawtx: "",
+      };
+    } else if (preset === "pruned") {
+      guidedControls = {
+        ...guidedControls,
+        server: true,
+        listen: true,
+        daemon: false,
+        dbcache: 1024,
+        maxconnections: 40,
+        prune: 2048,
+        txindex: false,
+        addressindex: false,
+        assetindex: false,
+        timestampindex: false,
+        spentindex: false,
+        zmqpubrawtx: "",
+      };
+    }
+    guidedDirtyKeys = new Set();
+    invalidatePreview({ resetPreset: false });
+  }
+
+  function buildChangesMap() {
+    const changes = {};
+    const include = (key) => guidedPreset !== "custom" || guidedDirtyKeys.has(key);
+    if (include("server")) changes.server = guidedControls.server ? "1" : "0";
+    if (include("listen")) changes.listen = guidedControls.listen ? "1" : "0";
+    if (include("daemon")) changes.daemon = guidedControls.daemon ? "1" : "0";
+    if (include("dbcache")) changes.dbcache = String(guidedControls.dbcache);
+    if (include("maxconnections")) changes.maxconnections = String(guidedControls.maxconnections);
+    if (include("prune")) changes.prune = String(guidedControls.prune);
+    if (include("txindex") || (include("prune") && guidedControls.prune > 0)) {
+      changes.txindex = guidedControls.prune > 0 ? "0" : (guidedControls.txindex ? "1" : "0");
+    }
+    if (include("addressindex")) changes.addressindex = guidedControls.addressindex ? "1" : "0";
+    if (include("assetindex")) changes.assetindex = guidedControls.assetindex ? "1" : "0";
+    if (include("timestampindex")) changes.timestampindex = guidedControls.timestampindex ? "1" : "0";
+    if (include("spentindex")) changes.spentindex = guidedControls.spentindex ? "1" : "0";
+    if (include("zmqpubrawtx")) {
+      changes.zmqpubrawtx = guidedControls.zmqpubrawtx.trim() || null;
+    }
+    if (include("addnode")) changes.addnode = guidedControls.addnodeList.join(",");
+    return changes;
+  }
+
+  async function previewGuidedChanges() {
+    guidedPreviewLoading = true;
+    const changes = buildChangesMap();
+    try {
+      guidedPreview = await core.invoke("preview_config_changes", { changes });
+      previewToken = guidedPreview.preview_token;
+      previewChanges = changes;
+    } catch (err) {
+      dispatchToast(`Preview failed: ${err}`, "error");
+      guidedPreview = null;
+      previewToken = null;
+      previewChanges = null;
+    }
+    guidedPreviewLoading = false;
+  }
+
+  async function applyGuidedConfig() {
+    if (guidedApplyLoading) return;
+    if (!previewToken || !previewChanges) return;
+    guidedApplyLoading = true;
+    isProcessing = true;
+    processingMessage = "Backing up and applying configuration...";
+    try {
+      const result = await core.invoke("apply_guided_config", {
+        changes: previewChanges,
+        previewToken,
+      });
+      dispatchToast("Configuration applied. Backup created.", "success");
+      await loadConfig(true);
+      guidedPreview = result;
+      previewToken = result.preview_token;
+      if (result.changes && result.changes.length === 0) {
+        dispatchToast("No changes to apply.", "info");
+      }
+      if (result.reindex_required && result.reindex_required.length > 0) {
+        dispatchToast("Reindex required for index changes. Use Repair tab.", "warning");
+      }
+      if (result.reindex_chainstate_required && result.reindex_chainstate_required.length > 0) {
+        dispatchToast("Reindex-chainstate required. Use Repair tab.", "warning");
+      }
+    } catch (err) {
+      dispatchToast(`Apply failed: ${err}`, "error");
+    }
+    isProcessing = false;
+    guidedApplyLoading = false;
+    previewToken = null;
+    guidedPreview = null;
+  }
+
+  function addAddnode() {
+    const entry = guidedControls.addnodeEntry.trim();
+    if (!entry) return;
+    if (!guidedControls.addnodeList.includes(entry)) {
+      guidedControls.addnodeList = [...guidedControls.addnodeList, entry];
+    }
+    guidedControls.addnodeEntry = "";
+    markGuidedDirty("addnode");
+  }
+
+  function removeAddnode(entry) {
+    guidedControls.addnodeList = guidedControls.addnodeList.filter(e => e !== entry);
+    markGuidedDirty("addnode");
+  }
 
   // Logs
   let logText = "";
@@ -822,12 +1053,258 @@
           </div>
 
         {:else if activeSection === "config"}
-          <div class="sh-flex-col fill">
-            <div class="sh-editor-wrap">
-              <textarea class="sh-editor sh-mono" bind:value={configText}></textarea>
+          <div class="sh-flex-col fill" style="gap: 0.75rem; overflow-y: auto; padding-right: 4px;">
+            <!-- Guided Configuration Section -->
+            <div class="sh-guided-config">
+              <div class="sh-guided-header">
+                <h3 class="sh-guided-title">NODE PRESET</h3>
+                <span class="sh-guided-subtitle">Select a preset or customize individual settings below</span>
+              </div>
+
+              <div class="sh-preset-cards">
+                <button
+                  class="sh-preset-card"
+                  class:sh-preset-active={guidedPreset === "full"}
+                  on:click={() => applyPreset("full")}
+                >
+                  <div class="sh-preset-icon">FULL</div>
+                  <div class="sh-preset-label">Full Feature Node</div>
+                  <div class="sh-preset-desc">All Commander features: wallet, explorer, assets, snapshots, recovery</div>
+                  <div class="sh-preset-tags">
+                    <span class="sh-preset-tag sh-tag-ok">all indexes</span>
+                    <span class="sh-preset-tag sh-tag-ok">full history</span>
+                  </div>
+                </button>
+
+                <button
+                  class="sh-preset-card"
+                  class:sh-preset-active={guidedPreset === "pruned"}
+                  on:click={() => applyPreset("pruned")}
+                >
+                  <div class="sh-preset-icon">SAVE</div>
+                  <div class="sh-preset-label">Storage Saver</div>
+                  <div class="sh-preset-desc">Lower disk use. No historical rescans. Reduced explorer detail.</div>
+                  <div class="sh-preset-tags">
+                    <span class="sh-preset-tag sh-tag-warn">pruned</span>
+                    <span class="sh-preset-tag sh-tag-warn">no txindex</span>
+                  </div>
+                </button>
+
+                <button
+                  class="sh-preset-card"
+                  class:sh-preset-active={guidedPreset === "custom"}
+                  on:click={() => { guidedPreset = "custom"; invalidatePreview(); }}
+                >
+                  <div class="sh-preset-icon">CUSTOM</div>
+                  <div class="sh-preset-label">Custom</div>
+                  <div class="sh-preset-desc">Raw editor is the source of truth. Controls show a snapshot from last load.</div>
+                  <div class="sh-preset-tags">
+                    <span class="sh-preset-tag">raw editor</span>
+                  </div>
+                </button>
+              </div>
+
+              <!-- Guided Controls -->
+              <div class="sh-guided-controls">
+                <div class="sh-guided-section">
+                  <h4 class="sh-guided-section-title">ESSENTIAL</h4>
+                  <div class="sh-controls-grid">
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.server} on:change={() => markGuidedDirty("server")} />
+                      <span class="sh-toggle-label">Server (RPC)</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.listen} on:change={() => markGuidedDirty("listen")} />
+                      <span class="sh-toggle-label">Listen</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.daemon} on:change={() => markGuidedDirty("daemon")} />
+                      <span class="sh-toggle-label">Daemon Mode</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="sh-guided-section">
+                  <h4 class="sh-guided-section-title">INDEXES</h4>
+                  <div class="sh-controls-grid">
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.txindex} disabled={guidedControls.prune > 0} on:change={() => markGuidedDirty("txindex")} />
+                      <span class="sh-toggle-label">txindex</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.addressindex} on:change={() => markGuidedDirty("addressindex")} />
+                      <span class="sh-toggle-label">addressindex</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.assetindex} on:change={() => markGuidedDirty("assetindex")} />
+                      <span class="sh-toggle-label">assetindex</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.timestampindex} on:change={() => markGuidedDirty("timestampindex")} />
+                      <span class="sh-toggle-label">timestampindex</span>
+                    </label>
+                    <label class="sh-toggle-row">
+                      <input type="checkbox" bind:checked={guidedControls.spentindex} on:change={() => markGuidedDirty("spentindex")} />
+                      <span class="sh-toggle-label">spentindex</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="sh-guided-section">
+                  <h4 class="sh-guided-section-title">PERFORMANCE</h4>
+                  <div class="sh-controls-grid">
+                    <label class="sh-input-row">
+                      <span class="sh-input-label">dbcache (MB)</span>
+                      <input type="number" min="4" max="32768" step="128" bind:value={guidedControls.dbcache} on:change={() => markGuidedDirty("dbcache")} class="sh-num-input" />
+                    </label>
+                    <label class="sh-input-row">
+                      <span class="sh-input-label">Max Connections</span>
+                      <input type="number" min="1" max="1000" bind:value={guidedControls.maxconnections} on:change={() => markGuidedDirty("maxconnections")} class="sh-num-input" />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="sh-guided-section">
+                  <h4 class="sh-guided-section-title">PRUNE</h4>
+                  <div class="sh-controls-grid">
+                    <label class="sh-input-row">
+                      <span class="sh-input-label">Prune Target (MiB)</span>
+                      <input type="number" min="0" max="1048576" step="100" bind:value={guidedControls.prune} on:change={() => markGuidedDirty("prune")} class="sh-num-input" />
+                    </label>
+                  </div>
+                  {#if guidedControls.prune > 0}
+                    <div class="sh-guided-note sh-note-warn">
+                      <strong>Prune mode</strong> is incompatible with txindex. Rescans cannot recover history outside retained blocks. Returning to a full node requires re-downloading the blockchain.
+                    </div>
+                  {/if}
+                </div>
+
+                <div class="sh-guided-section">
+                  <h4 class="sh-guided-section-title">
+                    ADVANCED
+                  </h4>
+                  <div class="sh-controls-grid">
+                    <label class="sh-input-row">
+                      <span class="sh-input-label">ZMQ Raw TX</span>
+                      <input type="text" placeholder="tcp://127.0.0.1:28332" bind:value={guidedControls.zmqpubrawtx} on:input={() => markGuidedDirty("zmqpubrawtx")} class="sh-text-input" />
+                    </label>
+                  </div>
+                  <div class="sh-addnode-section">
+                    <div class="sh-input-row" style="flex: 1;">
+                      <span class="sh-input-label">addnode</span>
+                      <input type="text" placeholder="IP:port" bind:value={guidedControls.addnodeEntry} class="sh-text-input" style="flex: 1;" on:keydown={(e) => e.key === "Enter" && addAddnode()} />
+                    </div>
+                    <button class="sh-btn sh-btn-sm" on:click={addAddnode}>ADD</button>
+                  </div>
+                  {#if guidedControls.addnodeList.length > 0}
+                    <div class="sh-addnode-list">
+                      {#each guidedControls.addnodeList as node, i}
+                        <div class="sh-addnode-tag">
+                          <span class="sh-mono" style="font-size: 0.7rem;">{node}</span>
+                          <button class="sh-addnode-remove" on:click={() => removeAddnode(node)}>&times;</button>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <!-- Validation & Pre-Apply Info -->
+              {#if guidedPreview}
+                <div class="sh-preview-panel">
+                  {#if guidedPreview.validation_warnings && guidedPreview.validation_warnings.length > 0}
+                    <div class="sh-preview-section sh-preview-warnings">
+                      <h4 class="sh-preview-label">WARNINGS</h4>
+                      {#each guidedPreview.validation_warnings as w}
+                        <div class="sh-preview-warn-item">{w}</div>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if guidedPreview.validation_errors && guidedPreview.validation_errors.length > 0}
+                    <div class="sh-preview-section sh-preview-errors">
+                      <h4 class="sh-preview-label">ERRORS</h4>
+                      {#each guidedPreview.validation_errors as e}
+                        <div class="sh-preview-error-item">{e}</div>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if guidedPreview.changes && guidedPreview.changes.length > 0}
+                    <div class="sh-preview-section">
+                      <h4 class="sh-preview-label">CHANGES ({guidedPreview.changes.length})</h4>
+                      <div class="sh-changes-list">
+                        {#each guidedPreview.changes as change}
+                          <div class="sh-change-item">
+                            <span class="sh-change-key">{change.key}</span>
+                            {#if change.action === "changed"}
+                              <span class="sh-change-old">{change.old_value}</span>
+                              <span class="sh-change-arrow">&rarr;</span>
+                              <span class="sh-change-new">{change.new_value}</span>
+                            {:else if change.action === "added"}
+                              <span class="sh-change-action sh-change-added">+{change.new_value}</span>
+                            {:else if change.action === "removed"}
+                              <span class="sh-change-action sh-change-removed">-{change.old_value} (removed)</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="sh-preview-section">
+                      <span class="sh-preview-label" style="color: #888;">No changes to apply</span>
+                    </div>
+                  {/if}
+                  {#if guidedPreview.reindex_required && guidedPreview.reindex_required.length > 0}
+                    <div class="sh-preview-section sh-preview-reindex">
+                      <h4 class="sh-preview-label">REINDEX REQUIRED</h4>
+                      {#each guidedPreview.reindex_required as r}
+                        <div class="sh-preview-reindex-item">{r}</div>
+                      {/each}
+                      <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">Use System > Repair to schedule a reindex after applying. Back up wallet.dat first.</p>
+                    </div>
+                  {/if}
+                  {#if guidedPreview.reindex_chainstate_required && guidedPreview.reindex_chainstate_required.length > 0}
+                    <div class="sh-preview-section sh-preview-chainstate">
+                      <h4 class="sh-preview-label">REINDEX-CHAINSTATE REQUIRED</h4>
+                      {#each guidedPreview.reindex_chainstate_required as r}
+                        <div class="sh-preview-chainstate-item">{r}</div>
+                      {/each}
+                      <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">Use System > Repair to schedule a reindex-chainstate. Faster than full reindex.</p>
+                    </div>
+                  {/if}
+                  {#if guidedPreview.restart_required}
+                    <div class="sh-preview-section sh-preview-restart">
+                      <span class="sh-preview-label">RESTART REQUIRED</span>
+                      <span class="sh-help-text" style="font-size: 0.7rem;">Changes require a daemon restart to take effect.</span>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Action Buttons -->
+              <div class="sh-guided-actions">
+                <button class="sh-btn" on:click={previewGuidedChanges} disabled={guidedPreviewLoading}>
+                  {guidedPreviewLoading ? "PREVIEWING..." : "PREVIEW CHANGES"}
+                </button>
+                <button
+                  class="sh-btn sh-btn-primary"
+                  on:click={applyGuidedConfig}
+                  disabled={guidedApplyLoading || !previewToken || (guidedPreview && guidedPreview.validation_errors && guidedPreview.validation_errors.length > 0)}
+                >
+                  {guidedApplyLoading ? "APPLYING..." : "APPLY CONFIGURATION"}
+                </button>
+              </div>
+            </div>
+
+            <!-- Raw Editor -->
+            <div class="sh-guided-header">
+              <h3 class="sh-guided-title">RAW EDITOR</h3>
+              <span class="sh-guided-subtitle">Advanced users: edit hemp.conf directly. Custom preset selected automatically.</span>
+            </div>
+            <div class="sh-editor-wrap config-editor-wrap">
+              <textarea class="sh-editor sh-mono" bind:value={configText} on:input={invalidatePreview}></textarea>
             </div>
             <div class="sh-action-row right">
-              <button class="sh-btn sh-btn-ghost" on:click={toggleConfHelp}>HELP</button>
+              <button class="sh-btn sh-btn-ghost" on:click={() => { toggleConfHelp(); loadConfigHelp(); }}>HELP</button>
               <button class="sh-btn sh-btn-ghost" on:click={createDefaultConfig}>CREATE DEFAULT</button>
               <button class="sh-btn sh-btn-ghost" on:click={() => loadConfig(false)}>RELOAD</button>
               <button class="sh-btn" on:click={saveConfig}>SAVE CONFIG</button>
@@ -1036,86 +1513,38 @@
   <div class="modal-overlay" role="button" tabindex="0" on:click|self={toggleConfHelp} on:keydown={(e) => e.key === "Escape" && toggleConfHelp()}>
     <div class="modal-staged wide">
       <div class="modal-header">
-        <h3>CONFIGURATION GUIDE</h3>
+        <h3>CONFIGURATION REFERENCE</h3>
         <button class="btn-close-x" on:click={toggleConfHelp}>X</button>
       </div>
-      <div class="modal-body">
-        <div class="conf-help-text">
-          <p class="highlight-warning"><strong>CRITICAL FOR WINDOWS:</strong> Set <code>daemon=0</code>. Setting <code>daemon=1</code> is for headless Linux/VPS only and will prevent the GUI from connecting to the node.</p>
-          <h4 style="color:var(--color-primary); margin-top:1rem;">hemp.conf Reference</h4>
-          <p style="font-size:0.8rem; margin-bottom:0.5rem; color:#888;">Complete reference for <code>hemp.conf</code>. Copy options as needed.</p>
-          <pre class="selectable">
-# ==============================================================================
-#                      HEMP0x CORE CONFIGURATION TEMPLATE
-# ==============================================================================
-
-# --- ESSENTIAL SETTINGS ---
-# server=1: Tells the node to accept JSON-RPC commands.
-# REQUIRED for Hemp0x Commander to control the node.
-server=1
-
-# listen=1: Listens for connections from outside peers.
-# 1 = Run as a full node (Help the network).
-# 0 = Don't accept incoming connections (Stealth/Leech mode).
-listen=1
-
-# daemon=?: Run in background?
-# 0 = Run interactively/controlled by GUI (REQUIRED FOR WINDOWS APP).
-# 1 = Run headless in background (Linux/VPS only).
-daemon=0
-
-# --- PERFORMANCE & STORAGE ---
-# dbcache=N: Database cache size in Megabytes.
-# Higher = Faster Sync, uses more RAM.
-# 450 = Default (Low RAM).
-# 4096 = 4GB (Recommended for fast sync if you have RAM).
-dbcache=4096
-
-# prune=N: Prune block storage to N Megabytes?
-# 0 = Disable pruning (Keep full history - Required for some features).
-# 550 = Minimum size (Saves disk space, but disables Wallet scans on old keys).
-prune=0
-
-# maxconnections=N: Maximum number of peer connections.
-# Default is 125. Lower if you have limited bandwidth.
-# maxconnections=40
-
-# --- INDEXES (Advanced Features) ---
-# Enable these if you use the "Assets" or "Tools" tabs heavily.
-# note: Changing these requires a -reindex (takes time).
-
-# Required for 'getrawtransaction' (Detailed TX lookup)
-txindex=1
-# Required for 'getaddress*' calls (Balance lookups API)
-addressindex=1
-# Required for Asset features
-assetindex=1
-# Records block timestamps
-timestampindex=1
-# Tracks spent outputs
-spentindex=1
-
-# --- RPC Authentication ---
-# Core Next uses cookie auth by default (auto-generated .cookie file).
-# No manual credentials needed. Commander detects and uses cookie auth
-# automatically when available.
-
-# --- Legacy RPC (username/password fallback) ---
-# Only needed if you are not using Core Next cookie auth.
-# Uncomment and change these if you cannot use cookie auth:
-# rpcuser=hemp0xuser
-# rpcpassword=CHANGE_THIS_TO_SECURE_PASSWORD
-
-# rpcallowip=IP: Who can issue commands?
-# 127.0.0.1 = Localhost only (Most Secure).
-# 192.168.1.* = Local Network (Less Secure).
-rpcallowip=127.0.0.1
-
-# rpcport=N: Custom port for RPC interactions.
-# Default Mainnet: 8818
-# rpcport=8818
-</pre>
-        </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <p class="highlight-warning"><strong>CRITICAL FOR WINDOWS:</strong> Set <code>daemon=0</code>. Setting <code>daemon=1</code> is for headless Linux/VPS only and will prevent the GUI from connecting to the node.</p>
+        {#if configHelpLoading}
+          <p style="color:#888; text-align:center; padding:1rem;">Loading reference...</p>
+        {:else if configHelpSections.length > 0}
+          {#each configHelpSections as section}
+            <div class="conf-help-section">
+              <h4 class="conf-help-section-title">{section.title}</h4>
+              {#each section.entries as entry}
+                <div class="conf-help-entry">
+                  <div class="conf-help-entry-header">
+                    <code class="conf-help-key">{entry.key}</code>
+                    <span class="conf-help-default">Default: {entry.default_value}</span>
+                  </div>
+                  <p class="conf-help-desc">{entry.description}</p>
+                  <p class="conf-help-relevance"><strong>Commander:</strong> {entry.commander_relevance}</p>
+                </div>
+              {/each}
+            </div>
+          {/each}
+          <div class="sh-divider"></div>
+          <p class="sh-help-text" style="font-size:0.7rem; color:#777; text-align:center;">
+            This reference covers the common node, wallet, network, index, storage, RPC, logging, and integration settings used with Commander. Advanced operators can still use the raw editor for uncommon Core options.
+          </p>
+        {:else}
+          <p style="color:#888; text-align:center; padding:1rem;">
+            Configuration reference is unavailable. Close and reopen this window to retry.
+          </p>
+        {/if}
       </div>
     </div>
   </div>
@@ -1712,7 +2141,6 @@ rpcallowip=127.0.0.1
 
   /* === MODAL OVERRIDES === */
   .snapshot-modal { max-width: 450px; }
-  .conf-help-text { text-align: left; font-size: 0.95rem; line-height: 1.5; }
   .highlight-warning {
     color: #ff5555;
     background: rgba(255, 68, 68, 0.1);
@@ -1722,19 +2150,446 @@ rpcallowip=127.0.0.1
     margin-bottom: 1rem;
     font-size: 0.9rem;
   }
-  .selectable {
-    user-select: text;
-    -webkit-user-select: text;
-    cursor: text;
-    background: #000;
-    padding: 1rem;
+  /* === GUIDED CONFIG STYLES === */
+  .sh-guided-config {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(0, 255, 65, 0.15);
+    border-radius: 8px;
+    padding: 0.85rem;
+    flex-shrink: 0;
+  }
+  .sh-guided-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.6rem;
+  }
+  .sh-guided-title {
+    font-size: 0.85rem;
+    color: var(--color-primary);
+    margin: 0;
+    letter-spacing: 2px;
+    font-weight: 700;
+  }
+  .sh-guided-subtitle {
+    font-size: 0.65rem;
+    color: #666;
+    letter-spacing: 0.5px;
+  }
+
+  /* PRESET CARDS */
+  .sh-preset-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
+  }
+  .sh-preset-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 6px;
-    border: 1px solid #333;
-    color: #aaffaa;
-    overflow-x: auto;
-    font-family: "Consolas", monospace;
-    white-space: pre-wrap;
-    font-size: 0.92rem;
+    color: #888;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .sh-preset-card:hover {
+    border-color: rgba(0, 255, 65, 0.2);
+    background: rgba(0, 255, 65, 0.03);
+    color: #aaa;
+  }
+  .sh-preset-active {
+    border-color: rgba(0, 255, 65, 0.35);
+    background: rgba(0, 255, 65, 0.06);
+    color: #fff;
+  }
+  .sh-preset-active .sh-preset-label {
+    color: var(--color-primary);
+  }
+  .sh-preset-icon {
+    width: fit-content;
+    padding: 0.12rem 0.35rem;
+    border: 1px solid rgba(0, 255, 65, 0.18);
+    border-radius: 3px;
+    color: var(--color-primary);
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+  .sh-preset-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .sh-preset-desc {
+    font-size: 0.67rem;
+    color: #666;
     line-height: 1.4;
+  }
+  .sh-preset-active .sh-preset-desc {
+    color: #999;
+  }
+  .sh-preset-tags {
+    display: flex;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+    margin-top: 0.2rem;
+  }
+  .sh-preset-tag {
+    font-size: 0.55rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .sh-tag-ok {
+    background: rgba(0, 255, 65, 0.12);
+    color: var(--color-primary);
+    border: 1px solid rgba(0, 255, 65, 0.2);
+  }
+  .sh-tag-warn {
+    background: rgba(255, 165, 0, 0.1);
+    color: #ffa500;
+    border: 1px solid rgba(255, 165, 0, 0.2);
+  }
+
+  /* GUIDED CONTROLS */
+  .sh-guided-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+  .sh-guided-section {
+    padding: 0.5rem 0.6rem;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 5px;
+  }
+  .sh-guided-section-title {
+    color: #555;
+    font-size: 0.62rem;
+    letter-spacing: 1.5px;
+    margin: 0 0 0.4rem 0;
+    text-transform: uppercase;
+  }
+  .sh-controls-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.4rem;
+  }
+
+  /* TOGGLE ROW */
+  .sh-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0.35rem 0.5rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 4px;
+    cursor: pointer;
+    gap: 0.5rem;
+  }
+  .sh-toggle-label {
+    color: #aaa;
+    font-size: 0.72rem;
+    font-family: var(--font-mono, monospace);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sh-toggle-row input[type="checkbox"] {
+    width: 13px;
+    height: 13px;
+    accent-color: var(--color-primary);
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .config-editor-wrap {
+    min-height: clamp(320px, 50vh, 680px);
+    flex: 0 0 auto;
+  }
+  .config-editor-wrap .sh-editor {
+    min-height: inherit;
+    resize: vertical;
+  }
+  .sh-toggle-row input[type="checkbox"]:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .sh-toggle-row:hover {
+    background: rgba(0, 255, 65, 0.03);
+  }
+
+  /* INPUT ROW */
+  .sh-input-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.5rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 4px;
+    gap: 0.5rem;
+  }
+  .sh-input-label {
+    color: #aaa;
+    font-size: 0.72rem;
+    font-family: var(--font-mono, monospace);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .sh-num-input {
+    width: 80px;
+    padding: 0.25rem 0.4rem;
+    background: #111;
+    border: 1px solid rgba(0, 255, 65, 0.15);
+    border-radius: 3px;
+    color: var(--color-primary);
+    font-size: 0.75rem;
+    font-family: var(--font-mono, monospace);
+    text-align: right;
+    outline: none;
+  }
+  .sh-num-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 4px rgba(0, 255, 65, 0.15);
+  }
+  .sh-text-input {
+    width: 180px;
+    padding: 0.25rem 0.4rem;
+    background: #111;
+    border: 1px solid rgba(0, 255, 65, 0.15);
+    border-radius: 3px;
+    color: #aaa;
+    font-size: 0.72rem;
+    font-family: var(--font-mono, monospace);
+    outline: none;
+  }
+  .sh-text-input:focus {
+    border-color: var(--color-primary);
+    color: #fff;
+  }
+  .sh-text-input::placeholder {
+    color: #444;
+  }
+
+  /* NOTES */
+  .sh-guided-note {
+    margin-top: 0.4rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    line-height: 1.4;
+    color: #ccc;
+  }
+  .sh-note-warn {
+    background: rgba(255, 165, 0, 0.06);
+    border: 1px solid rgba(255, 165, 0, 0.15);
+    color: #ddb060;
+  }
+  .sh-note-warn strong {
+    color: #ffa500;
+  }
+
+  /* ADDNODE */
+  .sh-addnode-section {
+    display: flex;
+    gap: 0.4rem;
+    align-items: flex-end;
+    margin-top: 0.4rem;
+  }
+  .sh-addnode-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.4rem;
+  }
+  .sh-addnode-tag {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.4rem;
+    background: rgba(0, 255, 65, 0.06);
+    border: 1px solid rgba(0, 255, 65, 0.12);
+    border-radius: 4px;
+    color: #999;
+    font-size: 0.7rem;
+  }
+  .sh-addnode-remove {
+    background: none;
+    border: none;
+    color: #ff6666;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0;
+  }
+
+  /* PREVIEW PANEL */
+  .sh-preview-panel {
+    margin-bottom: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .sh-preview-section {
+    padding: 0.5rem 0.6rem;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+  }
+  .sh-preview-warnings {
+    border-color: rgba(255, 165, 0, 0.2);
+    background: rgba(255, 165, 0, 0.04);
+  }
+  .sh-preview-errors {
+    border-color: rgba(255, 68, 68, 0.25);
+    background: rgba(255, 68, 68, 0.05);
+  }
+  .sh-preview-reindex {
+    border-color: rgba(255, 165, 0, 0.2);
+    background: rgba(255, 165, 0, 0.04);
+  }
+  .sh-preview-chainstate {
+    border-color: rgba(0, 255, 65, 0.15);
+    background: rgba(0, 255, 65, 0.03);
+  }
+  .sh-preview-restart {
+    border-color: rgba(0, 255, 65, 0.15);
+    background: rgba(0, 255, 65, 0.03);
+  }
+  .sh-preview-label {
+    color: var(--color-primary);
+    font-size: 0.65rem;
+    letter-spacing: 1px;
+    font-weight: 700;
+    margin: 0 0 0.3rem 0;
+  }
+  .sh-preview-warnings .sh-preview-label { color: #ffa500; }
+  .sh-preview-errors .sh-preview-label { color: #ff6666; }
+  .sh-preview-reindex .sh-preview-label { color: #ffa500; }
+  .sh-preview-chainstate .sh-preview-label { color: var(--color-primary); }
+  .sh-preview-restart .sh-preview-label { color: var(--color-primary); }
+
+  .sh-preview-warn-item, .sh-preview-error-item {
+    font-size: 0.7rem;
+    color: #ddb060;
+    padding: 0.2rem 0;
+    line-height: 1.4;
+  }
+  .sh-preview-error-item { color: #ff8888; }
+  .sh-preview-reindex-item, .sh-preview-chainstate-item {
+    font-size: 0.7rem;
+    color: #999;
+    font-family: var(--font-mono, monospace);
+    padding: 0.15rem 0;
+  }
+
+  /* CHANGES LIST */
+  .sh-changes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 0.4rem;
+  }
+  .sh-change-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.4rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-family: var(--font-mono, monospace);
+  }
+  .sh-change-key {
+    color: #aaa;
+    font-weight: 600;
+    min-width: 100px;
+  }
+  .sh-change-old {
+    color: #ff8888;
+    text-decoration: line-through;
+  }
+  .sh-change-arrow {
+    color: #666;
+  }
+  .sh-change-new {
+    color: var(--color-primary);
+    font-weight: 600;
+  }
+  .sh-change-action {
+    font-weight: 600;
+  }
+  .sh-change-added {
+    color: var(--color-primary);
+  }
+  .sh-change-removed {
+    color: #ff8888;
+  }
+
+  /* GUIDED ACTIONS */
+  .sh-guided-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
+  }
+
+  /* CONFIG HELP MODAL UPDATES */
+  .conf-help-section {
+    margin-bottom: 0.75rem;
+  }
+  .conf-help-section-title {
+    color: var(--color-primary);
+    font-size: 0.82rem;
+    margin: 0 0 0.35rem 0;
+    letter-spacing: 1px;
+    border-bottom: 1px solid rgba(0, 255, 65, 0.15);
+    padding-bottom: 0.25rem;
+  }
+  .conf-help-entry {
+    margin-bottom: 0.5rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .conf-help-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.2rem;
+  }
+  .conf-help-key {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    color: #aaffaa;
+    background: rgba(0, 255, 65, 0.06);
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+  }
+  .conf-help-default {
+    font-size: 0.62rem;
+    color: #555;
+    font-style: italic;
+  }
+  .conf-help-desc {
+    font-size: 0.72rem;
+    color: #aaa;
+    margin: 0.15rem 0;
+    line-height: 1.5;
+  }
+  .conf-help-relevance {
+    font-size: 0.65rem;
+    color: #777;
+    margin: 0.15rem 0;
+    line-height: 1.4;
+  }
+  .conf-help-relevance strong {
+    color: #999;
   }
 </style>

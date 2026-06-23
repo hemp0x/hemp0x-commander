@@ -1,7 +1,7 @@
 use chrono::Local;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::AppHandle;
@@ -12,8 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 
 // Import local modules
 use crate::modules::models::{
-    AddressBookEntry, AppSettings, BinaryStatus, ConfigPaths, DataFolderInfo, DataMovePreview,
-    DataMoveResult, RepairStatus,
+    AddressBookEntry, AppSettings, BinaryStatus, ConfigChange, ConfigHelpEntry, ConfigHelpSection,
+    ConfigPaths, ConfigPreview, DataFolderInfo, DataMovePreview, DataMoveResult, RepairStatus,
 };
 use crate::modules::utils::{
     bin_name, calculate_dir_size, format_size, resolve_bin, resolve_bin_with_override,
@@ -277,6 +277,10 @@ pub fn ensure_config() -> Result<PathBuf, String> {
 
 pub fn parse_config(path: &Path) -> Result<HashMap<String, String>, String> {
     let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    parse_config_from_str(&content)
+}
+
+fn parse_config_from_str(content: &str) -> Result<HashMap<String, String>, String> {
     let mut map = HashMap::new();
     for line in content.lines() {
         let line = line.trim();
@@ -284,10 +288,1310 @@ pub fn parse_config(path: &Path) -> Result<HashMap<String, String>, String> {
             continue;
         }
         if let Some((k, v)) = line.split_once('=') {
-            map.insert(k.trim().to_string(), v.trim().to_string());
+            map.insert(
+                k.trim().to_string(),
+                config_value_without_inline_comment(v).to_string(),
+            );
         }
     }
     Ok(map)
+}
+
+fn parse_config_multi(content: &str) -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            map.entry(k.trim().to_string())
+                .or_default()
+                .push(config_value_without_inline_comment(v).to_string());
+        }
+    }
+    map
+}
+
+const SECRET_KEYS: &[&str] = &["rpcpassword", "rpcuser", "rpcauth"];
+const SINGLETON_KEYS: &[&str] = &[
+    "server",
+    "listen",
+    "daemon",
+    "dbcache",
+    "maxconnections",
+    "prune",
+    "txindex",
+    "addressindex",
+    "assetindex",
+    "timestampindex",
+    "spentindex",
+    "zmqpubrawtx",
+    "zmqpubhashblock",
+    "zmqpubhashtx",
+    "zmqpubrawblock",
+    "rpcport",
+    "port",
+    "rpcallowip",
+    "proxy",
+];
+const MULTI_KEYS: &[&str] = &["addnode", "connect", "seednode"];
+
+fn is_secret_key(key: &str) -> bool {
+    let k = key.to_lowercase();
+    SECRET_KEYS.iter().any(|&s| k == s)
+}
+
+fn is_singleton(key: &str) -> bool {
+    let k = key.to_lowercase();
+    SINGLETON_KEYS.iter().any(|&s| k == s)
+}
+
+fn is_multi(key: &str) -> bool {
+    let k = key.to_lowercase();
+    MULTI_KEYS.iter().any(|&s| k == s)
+}
+
+fn config_value_without_inline_comment(value: &str) -> &str {
+    let trimmed = value.trim();
+    let comment_index = trimmed
+        .char_indices()
+        .find(|(index, ch)| {
+            *ch == '#'
+                && (*index == 0
+                    || trimmed[..*index]
+                        .chars()
+                        .last()
+                        .map(char::is_whitespace)
+                        .unwrap_or(false))
+        })
+        .map(|(index, _)| index);
+    comment_index
+        .map(|index| trimmed[..index].trim_end())
+        .unwrap_or(trimmed)
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum ConfigLine {
+    Comment {
+        raw: String,
+        ending: String,
+    },
+    Blank {
+        raw: String,
+        ending: String,
+    },
+    Option {
+        key: String,
+        value: String,
+        raw: String,
+        ending: String,
+    },
+    Unknown {
+        raw: String,
+        ending: String,
+    },
+}
+
+fn detect_newline(content: &[u8]) -> &str {
+    if content.windows(2).any(|w| w == b"\r\n") {
+        return "\r\n";
+    }
+    "\n"
+}
+
+fn tokenize_config(content: &str) -> Vec<ConfigLine> {
+    let nl = detect_newline(content.as_bytes());
+    let has_trailing_nl = content.ends_with(nl);
+    let content_no_trailing = if has_trailing_nl {
+        &content[..content.len() - nl.len()]
+    } else {
+        content
+    };
+
+    let lines: Vec<&str> = if content_no_trailing.is_empty() {
+        vec![]
+    } else {
+        content_no_trailing.split(nl).collect()
+    };
+
+    let total = lines.len();
+    let mut result = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let is_last = i + 1 == total;
+        let ending = if is_last {
+            if has_trailing_nl {
+                nl
+            } else {
+                ""
+            }
+        } else {
+            nl
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            result.push(ConfigLine::Blank {
+                raw: (*line).to_string(),
+                ending: ending.to_string(),
+            });
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            result.push(ConfigLine::Comment {
+                raw: (*line).to_string(),
+                ending: ending.to_string(),
+            });
+            continue;
+        }
+        if let Some((k, v)) = line.trim_start().split_once('=') {
+            result.push(ConfigLine::Option {
+                key: k.trim().to_string(),
+                value: config_value_without_inline_comment(v).to_string(),
+                raw: (*line).to_string(),
+                ending: ending.to_string(),
+            });
+        } else {
+            result.push(ConfigLine::Unknown {
+                raw: (*line).to_string(),
+                ending: ending.to_string(),
+            });
+        }
+    }
+
+    if result.is_empty() && has_trailing_nl {
+        result.push(ConfigLine::Blank {
+            raw: String::new(),
+            ending: String::new(),
+        });
+    }
+    result
+}
+
+fn reconstruct_config(lines: &[ConfigLine]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        match line {
+            ConfigLine::Comment { raw, ending }
+            | ConfigLine::Blank { raw, ending }
+            | ConfigLine::Unknown { raw, ending } => {
+                out.push_str(raw);
+                out.push_str(ending);
+            }
+            ConfigLine::Option { raw, ending, .. } => {
+                out.push_str(raw);
+                out.push_str(ending);
+            }
+        }
+    }
+    out
+}
+
+fn replace_option_value(raw: &str, new_value: &str) -> String {
+    let Some(eq_index) = raw.find('=') else {
+        return raw.to_string();
+    };
+    let value_start = eq_index + 1;
+    let after_equals = &raw[value_start..];
+    let leading_value_ws_len = after_equals.len() - after_equals.trim_start().len();
+    let value_and_comment = &after_equals[leading_value_ws_len..];
+    let comment_index = value_and_comment
+        .char_indices()
+        .find(|(index, ch)| {
+            *ch == '#'
+                && (*index == 0
+                    || value_and_comment[..*index]
+                        .chars()
+                        .last()
+                        .map(char::is_whitespace)
+                        .unwrap_or(false))
+        })
+        .map(|(index, _)| index);
+    let comment_suffix = comment_index
+        .map(|index| {
+            let value_part = &value_and_comment[..index];
+            let trailing_ws_len = value_part.len() - value_part.trim_end().len();
+            format!(
+                "{}{}",
+                &value_part[value_part.len() - trailing_ws_len..],
+                &value_and_comment[index..]
+            )
+        })
+        .unwrap_or_default();
+
+    format!(
+        "{}{}{}{}",
+        &raw[..value_start],
+        &after_equals[..leading_value_ws_len],
+        new_value,
+        comment_suffix
+    )
+}
+
+fn apply_config_changes(original: &str, changes: &HashMap<String, Option<String>>) -> String {
+    let mut lines = tokenize_config(original);
+
+    lines.retain(|line| {
+        !matches!(
+            line,
+            ConfigLine::Option { key, .. }
+                if !is_multi(key) && matches!(changes.get(key), Some(None))
+        )
+    });
+
+    for line in lines.iter_mut() {
+        if let ConfigLine::Option {
+            key, value, raw, ..
+        } = line
+        {
+            if let Some(new_opt) = changes.get(key) {
+                if is_multi(key) {
+                    continue; // Handled separately
+                }
+                if let Some(new_val) = new_opt {
+                    if *value == *new_val {
+                        continue;
+                    }
+                    *raw = replace_option_value(raw, new_val);
+                    *value = new_val.clone();
+                }
+            }
+        }
+    }
+
+    // Add new singleton keys that weren't present
+    let existing_keys: Vec<String> = lines
+        .iter()
+        .filter_map(|l| {
+            if let ConfigLine::Option { key, .. } = l {
+                Some(key.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let nls: Vec<String> = changes
+        .iter()
+        .filter(|(k, v)| !existing_keys.contains(k) && is_singleton(k) && v.is_some())
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    if !nls.is_empty() {
+        let nl = detect_newline(original.as_bytes()).to_string();
+        if !lines.is_empty() {
+            let last_ending = match &lines[lines.len() - 1] {
+                ConfigLine::Comment { ending, .. }
+                | ConfigLine::Blank { ending, .. }
+                | ConfigLine::Option { ending, .. }
+                | ConfigLine::Unknown { ending, .. } => ending.clone(),
+            };
+            if last_ending.is_empty() {
+                lines.push(ConfigLine::Blank {
+                    raw: String::new(),
+                    ending: nl.clone(),
+                });
+            }
+        }
+        for key in &nls {
+            if let Some(Some(val)) = changes.get(key) {
+                let raw = format!("{}={}", key, val);
+                lines.push(ConfigLine::Option {
+                    key: key.clone(),
+                    value: val.clone(),
+                    raw,
+                    ending: nl.clone(),
+                });
+            }
+        }
+    }
+
+    // Handle addnode changes
+    if let Some(Some(addnode_val)) = changes.get("addnode") {
+        // Remove all existing addnode lines
+        lines.retain(|l| !matches!(l, ConfigLine::Option { key, .. } if key == "addnode"));
+
+        // Write fresh addnode entries, one per line
+        let nl = detect_newline(original.as_bytes()).to_string();
+        for entry in addnode_val.split(',') {
+            let entry = entry.trim();
+            if !entry.is_empty() {
+                let raw = format!("addnode={}", entry);
+                lines.push(ConfigLine::Option {
+                    key: "addnode".to_string(),
+                    value: entry.to_string(),
+                    raw,
+                    ending: nl.clone(),
+                });
+            }
+        }
+    }
+
+    reconstruct_config(&lines)
+}
+
+fn addnode_entry_in_list(entries: &[String], hostport: &str) -> bool {
+    let hostport = hostport.trim();
+    entries.iter().any(|e| e.trim() == hostport)
+}
+
+fn detect_config_changes(
+    old_content: &str,
+    changes: &HashMap<String, Option<String>>,
+) -> Vec<ConfigChange> {
+    let old_map = parse_config_from_str(old_content).unwrap_or_default();
+    let old_multi = parse_config_multi(old_content);
+    let mut result = Vec::new();
+    for (key, new_val_opt) in changes {
+        if is_multi(key) {
+            let old_entries = old_multi.get(key).cloned().unwrap_or_default();
+            let new_str = match new_val_opt {
+                Some(v) => v.clone(),
+                None => String::new(),
+            };
+            let new_entries: Vec<String> = if new_str.is_empty() {
+                Vec::new()
+            } else {
+                new_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
+            let added: Vec<_> = new_entries
+                .iter()
+                .filter(|e| !addnode_entry_in_list(&old_entries, e))
+                .cloned()
+                .collect();
+            let removed: Vec<_> = old_entries
+                .iter()
+                .filter(|e| !addnode_entry_in_list(&new_entries, e))
+                .cloned()
+                .collect();
+            if !added.is_empty() || !removed.is_empty() {
+                result.push(ConfigChange {
+                    key: key.clone(),
+                    old_value: if old_entries.is_empty() {
+                        None
+                    } else {
+                        Some(old_entries.join(", "))
+                    },
+                    new_value: if new_entries.is_empty() {
+                        None
+                    } else {
+                        Some(new_entries.join(", "))
+                    },
+                    action: if removed.is_empty() {
+                        "added".to_string()
+                    } else if added.is_empty() {
+                        "removed".to_string()
+                    } else {
+                        "changed".to_string()
+                    },
+                });
+            }
+            continue;
+        }
+        let old_val = old_map.get(key).cloned();
+        match (old_val, new_val_opt) {
+            (None, Some(new)) => {
+                result.push(ConfigChange {
+                    key: key.clone(),
+                    old_value: None,
+                    new_value: Some(new.clone()),
+                    action: "added".to_string(),
+                });
+            }
+            (Some(old), None) => {
+                result.push(ConfigChange {
+                    key: key.clone(),
+                    old_value: Some(old),
+                    new_value: None,
+                    action: "removed".to_string(),
+                });
+            }
+            (Some(old), Some(new)) if old != *new => {
+                result.push(ConfigChange {
+                    key: key.clone(),
+                    old_value: Some(old),
+                    new_value: Some(new.clone()),
+                    action: "changed".to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "1" | "true" | "yes" => Some(true),
+        "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn validate_addnode_entry(entry: &str) -> Result<String, String> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return Err("empty addnode entry".to_string());
+    }
+    // Handle bracketed IPv6: [::1]:port
+    if entry.starts_with('[') {
+        if let Some(bracket_end) = entry.find(']') {
+            let ip_part = &entry[1..bracket_end];
+            let rest = entry[bracket_end + 1..].trim();
+            if rest.is_empty() || !rest.starts_with(':') {
+                return Err(format!(
+                    "malformed addnode entry: missing port in '{}'",
+                    entry
+                ));
+            }
+            let port_str = &rest[1..];
+            if port_str.parse::<u16>().is_err() {
+                return Err(format!(
+                    "malformed addnode entry: invalid port in '{}'",
+                    entry
+                ));
+            }
+            if ip_part.is_empty() {
+                return Err(format!(
+                    "malformed addnode entry: empty IPv6 in '{}'",
+                    entry
+                ));
+            }
+            return Ok(format!("{}:{}", ip_part, port_str));
+        }
+        return Err(format!(
+            "malformed addnode entry: unmatched '[' in '{}'",
+            entry
+        ));
+    }
+    // host:port or ip:port
+    let parts: Vec<&str> = entry.rsplitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "malformed addnode entry: missing port in '{}'",
+            entry
+        ));
+    }
+    let host = parts[1].trim();
+    let port_str = parts[0].trim();
+    if host.is_empty() {
+        return Err(format!(
+            "malformed addnode entry: empty host in '{}'",
+            entry
+        ));
+    }
+    if port_str.parse::<u16>().is_err() {
+        return Err(format!(
+            "malformed addnode entry: invalid port in '{}'",
+            entry
+        ));
+    }
+    Ok(entry.to_string())
+}
+
+fn validate_zmq_endpoint(endpoint: &str) -> Result<(), String> {
+    let e = endpoint.trim();
+    if e.is_empty() {
+        return Ok(());
+    }
+    let lower = e.to_lowercase();
+    for prefix in ["tcp://127.0.0.1:", "tcp://localhost:", "tcp://[::1]:"] {
+        if let Some(port) = lower.strip_prefix(prefix) {
+            return match port.parse::<u16>() {
+                Ok(port) if port > 0 => Ok(()),
+                _ => Err(format!(
+                    "ZMQ endpoint '{}' must use a valid localhost TCP port.",
+                    e
+                )),
+            };
+        }
+    }
+    if let Some(path) = e.strip_prefix("ipc://") {
+        return if path.trim().is_empty() {
+            Err("ZMQ IPC endpoint must include a local path.".to_string())
+        } else {
+            Ok(())
+        };
+    }
+    Err(format!(
+        "ZMQ endpoint '{}' is not local. Commander's guided config only supports localhost TCP or local IPC endpoints.",
+        e
+    ))
+}
+
+fn validate_config_settings(settings: &HashMap<String, String>) -> (Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    let prune_val = settings.get("prune").and_then(|v| v.parse::<u64>().ok());
+    let txindex = settings.get("txindex").and_then(|v| parse_bool(v));
+
+    if let (Some(prune), Some(true)) = (prune_val, txindex) {
+        if prune > 0 {
+            errors.push(
+                "prune > 0 is incompatible with txindex=1. Core will refuse to start. Either set prune=0 or txindex=0.".to_string(),
+            );
+        }
+    }
+
+    if let Some(prune) = prune_val {
+        if prune > 1 && prune < 550 {
+            errors.push(format!(
+                "prune={} is below the Core minimum of 550 MiB. Node startup will fail. Use 0 (off), 1 (manual), or >=550 (auto).",
+                prune
+            ));
+        }
+    }
+
+    if let Some(v) = settings.get("dbcache") {
+        match v.parse::<u64>() {
+            Ok(n) => {
+                if n < 4 {
+                    errors.push(format!("dbcache={} is below the minimum of 4 MB.", n));
+                }
+            }
+            Err(_) => {
+                errors.push(format!("dbcache='{}' is not a valid number.", v));
+            }
+        }
+    }
+
+    if let Some(v) = settings.get("maxconnections") {
+        match v.parse::<u64>() {
+            Ok(n) => {
+                if n == 0 {
+                    errors.push("maxconnections cannot be 0.".to_string());
+                }
+            }
+            Err(_) => {
+                errors.push(format!("maxconnections='{}' is not a valid number.", v));
+            }
+        }
+    }
+
+    // Validate addnode entries (now stored individually in multi-valued parse)
+    if let Some(addnode_vals) = settings.get("addnode") {
+        for entry in addnode_vals.split(',') {
+            let entry = entry.trim();
+            if !entry.is_empty() {
+                if let Err(e) = validate_addnode_entry(entry) {
+                    errors.push(e);
+                }
+            }
+        }
+    }
+
+    if let Some(zmq) = settings.get("zmqpubrawtx") {
+        if let Err(error) = validate_zmq_endpoint(zmq) {
+            errors.push(error);
+        }
+    }
+
+    // Detect conflicting duplicate singletons
+    // This is checked in the parsed map — HashMap inherently deduplicates,
+    // so if there were duplicates in the file, only the last survives.
+    // We warn if server=0 is set in a Commander-managed context.
+    if let Some(v) = settings.get("server") {
+        if parse_bool(v) == Some(false) {
+            warnings.push(
+                "server=0 disables JSON-RPC. Commander requires server=1 for node control. The Full Feature and Storage Saver presets set server=1.".to_string(),
+            );
+        }
+    }
+
+    (errors, warnings)
+}
+
+fn duplicate_singleton_errors(content: &str) -> Vec<String> {
+    parse_config_multi(content)
+        .into_iter()
+        .filter(|(key, values)| is_singleton(key) && values.len() > 1)
+        .filter_map(|(key, values)| {
+            let unique: std::collections::HashSet<_> =
+                values.iter().map(|value| value.trim()).collect();
+            (unique.len() > 1).then(|| {
+                format!(
+                    "Conflicting duplicate '{}' settings are active. Resolve them in the raw editor before applying guided changes.",
+                    key
+                )
+            })
+        })
+        .collect()
+}
+
+fn sectioned_config_error(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        (trimmed.starts_with('[') && trimmed.ends_with(']')).then(|| {
+            "Guided configuration cannot safely edit a hemp.conf that uses network sections. Use the raw editor so section-specific settings remain unchanged.".to_string()
+        })
+    })
+}
+
+fn validate_config_content(content: &str) -> (Vec<String>, Vec<String>) {
+    let parsed = parse_config_from_str(content).unwrap_or_default();
+    let (mut errors, warnings) = validate_config_settings(&parsed);
+    if let Some(error) = sectioned_config_error(content) {
+        errors.push(error);
+    }
+    errors.extend(duplicate_singleton_errors(content));
+    for entry in parse_config_multi(content)
+        .get("addnode")
+        .into_iter()
+        .flatten()
+    {
+        if let Err(error) = validate_addnode_entry(entry) {
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
+    }
+    (errors, warnings)
+}
+
+fn detect_reindex_requirements(
+    old_settings: &HashMap<String, String>,
+    new_settings: &HashMap<String, String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut full_reindex = Vec::new();
+    let mut chainstate_reindex = Vec::new();
+
+    let old_txindex = old_settings
+        .get("txindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    let new_txindex = new_settings
+        .get("txindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    if old_txindex != new_txindex {
+        full_reindex.push(format!(
+            "txindex changed: {} -> {} (requires -reindex)",
+            old_txindex, new_txindex
+        ));
+    }
+
+    let old_assetindex = old_settings
+        .get("assetindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    let new_assetindex = new_settings
+        .get("assetindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    if old_assetindex != new_assetindex {
+        full_reindex.push(format!(
+            "assetindex changed: {} -> {} (requires -reindex)",
+            old_assetindex, new_assetindex
+        ));
+    }
+
+    let old_addressindex = old_settings
+        .get("addressindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    let new_addressindex = new_settings
+        .get("addressindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    if old_addressindex != new_addressindex {
+        chainstate_reindex.push(format!(
+            "addressindex changed: {} -> {} (requires -reindex-chainstate)",
+            old_addressindex, new_addressindex
+        ));
+    }
+
+    let old_spentindex = old_settings
+        .get("spentindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    let new_spentindex = new_settings
+        .get("spentindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    if old_spentindex != new_spentindex {
+        chainstate_reindex.push(format!(
+            "spentindex changed: {} -> {} (requires -reindex-chainstate)",
+            old_spentindex, new_spentindex
+        ));
+    }
+
+    let old_timestampindex = old_settings
+        .get("timestampindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    let new_timestampindex = new_settings
+        .get("timestampindex")
+        .and_then(|v| parse_bool(v))
+        .unwrap_or(false);
+    if old_timestampindex != new_timestampindex {
+        chainstate_reindex.push(format!(
+            "timestampindex changed: {} -> {} (requires -reindex-chainstate)",
+            old_timestampindex, new_timestampindex
+        ));
+    }
+
+    (full_reindex, chainstate_reindex)
+}
+
+fn compute_preview_token(content: &str, changes: &HashMap<String, Option<String>>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let mut ordered: Vec<_> = changes.iter().collect();
+    ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (key, value) in ordered {
+        hasher.update([0]);
+        hasher.update(key.as_bytes());
+        hasher.update([0]);
+        match value {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update(value.as_bytes());
+            }
+            None => hasher.update([2]),
+        }
+    }
+    hex::encode(hasher.finalize())
+}
+
+#[tauri::command]
+pub fn parse_current_config() -> Result<HashMap<String, String>, String> {
+    let cfg = config_path()?;
+    if !cfg.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = fs::read_to_string(&cfg).map_err(|e| e.to_string())?;
+    let parsed = parse_config_from_str(&content)?;
+    Ok(parsed
+        .into_iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "server"
+                    | "listen"
+                    | "daemon"
+                    | "dbcache"
+                    | "maxconnections"
+                    | "prune"
+                    | "txindex"
+                    | "addressindex"
+                    | "assetindex"
+                    | "timestampindex"
+                    | "spentindex"
+                    | "zmqpubrawtx"
+            )
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn get_addnode_hosts() -> Result<Vec<String>, String> {
+    let cfg = config_path()?;
+    if !cfg.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&cfg).map_err(|e| e.to_string())?;
+    let multi = parse_config_multi(&content);
+    let addnodes = multi.get("addnode").cloned().unwrap_or_default();
+    let mut hosts = Vec::new();
+    for entry in &addnodes {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        // Extract host from host:port, handling bracketed IPv6
+        let host = if entry.starts_with('[') {
+            entry
+                .split(']')
+                .next()
+                .map(|s| &s[1..])
+                .unwrap_or(entry)
+                .to_string()
+        } else {
+            entry.rsplit(':').skip(1).collect::<Vec<&str>>().join(":")
+        };
+        let host = host.trim();
+        if !host.is_empty() {
+            hosts.push(host.to_string());
+        }
+    }
+    Ok(hosts)
+}
+
+#[tauri::command]
+pub fn preview_config_changes(
+    changes: HashMap<String, Option<String>>,
+) -> Result<ConfigPreview, String> {
+    let cfg = config_path()?;
+    let original = if cfg.exists() {
+        fs::read_to_string(&cfg).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+
+    let applied = apply_config_changes(&original, &changes);
+    let config_changes = detect_config_changes(&original, &changes);
+    let new_parsed = parse_config_from_str(&applied).unwrap_or_default();
+    let old_parsed = parse_config_from_str(&original).unwrap_or_default();
+
+    let (mut validation_errors, validation_warnings) = validate_config_content(&applied);
+
+    if applied.trim().is_empty() {
+        validation_errors.push("Resulting config would be empty. Refusing to apply.".to_string());
+    }
+
+    let (reindex, reindex_chainstate) = detect_reindex_requirements(&old_parsed, &new_parsed);
+    let restart_required = !config_changes.is_empty();
+    let preview_token = compute_preview_token(&original, &changes);
+
+    // Redact secret values in changes
+    let redacted_changes: Vec<ConfigChange> = config_changes
+        .iter()
+        .map(|c| {
+            let mut rc = c.clone();
+            if is_secret_key(&c.key) {
+                rc.old_value = c.old_value.as_ref().map(|_| "***REDACTED***".to_string());
+                rc.new_value = c.new_value.as_ref().map(|_| "***REDACTED***".to_string());
+            }
+            rc
+        })
+        .collect();
+
+    Ok(ConfigPreview {
+        changes: redacted_changes,
+        validation_warnings,
+        validation_errors,
+        reindex_required: reindex,
+        reindex_chainstate_required: reindex_chainstate,
+        restart_required,
+        preview_token,
+    })
+}
+
+fn atomic_write_config(content: &str) -> Result<(), String> {
+    let cfg = config_path()?;
+    let dir = cfg.parent().ok_or("Config path has no parent directory")?;
+    let now = chrono::Utc::now();
+    let timestamp = now.format("%Y%m%d-%H%M%S");
+    let nanos = now.timestamp_subsec_nanos();
+
+    // Create timestamped backup first
+    if cfg.exists() {
+        // Avoid same-second collisions by appending nanos
+        let backup_name = format!("hemp.conf.{}.{:09}.bak", timestamp, nanos);
+        let backup_path = dir.join(&backup_name);
+        fs::copy(&cfg, &backup_path)
+            .map_err(|e| format!("Failed to create config backup: {}", e))?;
+    }
+
+    // Write to temp file, then rename atomically
+    let temp_path = dir.join(format!(".hemp.conf.{}.{:09}.tmp", timestamp, nanos));
+    let mut temp_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|e| format!("Failed to create temporary config: {}", e))?;
+    temp_file
+        .write_all(content.as_bytes())
+        .and_then(|_| temp_file.sync_all())
+        .map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            format!("Failed to write config: {}", e)
+        })?;
+
+    // Preserve permissions if existing config has them
+    #[cfg(unix)]
+    {
+        if cfg.exists() {
+            if let Ok(meta) = fs::metadata(&cfg) {
+                let perms = meta.permissions();
+                let _ = fs::set_permissions(&temp_path, perms);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fs::rename(&temp_path, &cfg).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to atomically replace config: {}", e)
+    })?;
+
+    #[cfg(windows)]
+    {
+        let old_path = dir.join(format!(".hemp.conf.{}.{:09}.old", timestamp, nanos));
+        if cfg.exists() {
+            fs::rename(&cfg, &old_path)
+                .map_err(|e| format!("Failed to prepare config replacement: {}", e))?;
+        }
+        if let Err(error) = fs::rename(&temp_path, &cfg) {
+            let _ = fs::rename(&old_path, &cfg);
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("Failed to replace config: {}", error));
+        }
+        let _ = fs::remove_file(old_path);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn apply_guided_config(
+    changes: HashMap<String, Option<String>>,
+    preview_token: String,
+) -> Result<ConfigPreview, String> {
+    let cfg = config_path()?;
+    let original = if cfg.exists() {
+        fs::read_to_string(&cfg).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+
+    // TOCTOU guard: verify the config hasn't changed since preview
+    let expected_token = compute_preview_token(&original, &changes);
+    if expected_token != preview_token {
+        return Err(
+            "Config or guided changes were modified since preview. Reload and preview again before applying.".to_string(),
+        );
+    }
+
+    let applied = apply_config_changes(&original, &changes);
+    let new_parsed = parse_config_from_str(&applied).unwrap_or_default();
+    let (validation_errors, _) = validate_config_content(&applied);
+
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.join("; "));
+    }
+
+    let config_changes = detect_config_changes(&original, &changes);
+    if config_changes.is_empty() {
+        let old_parsed = parse_config_from_str(&original).unwrap_or_default();
+        let (reindex, reindex_chainstate) = detect_reindex_requirements(&old_parsed, &new_parsed);
+        return Ok(ConfigPreview {
+            changes: vec![],
+            validation_warnings: vec![],
+            validation_errors: vec![],
+            reindex_required: reindex,
+            reindex_chainstate_required: reindex_chainstate,
+            restart_required: false,
+            preview_token: expected_token,
+        });
+    }
+
+    atomic_write_config(&applied)?;
+
+    let old_parsed = parse_config_from_str(&original).unwrap_or_default();
+    let (reindex, reindex_chainstate) = detect_reindex_requirements(&old_parsed, &new_parsed);
+
+    let redacted_changes: Vec<ConfigChange> = config_changes
+        .iter()
+        .map(|c| {
+            let mut rc = c.clone();
+            if is_secret_key(&c.key) {
+                rc.old_value = c.old_value.as_ref().map(|_| "***REDACTED***".to_string());
+                rc.new_value = c.new_value.as_ref().map(|_| "***REDACTED***".to_string());
+            }
+            rc
+        })
+        .collect();
+
+    Ok(ConfigPreview {
+        changes: redacted_changes,
+        validation_warnings: vec![],
+        validation_errors: vec![],
+        reindex_required: reindex,
+        reindex_chainstate_required: reindex_chainstate,
+        restart_required: !config_changes.is_empty(),
+        preview_token: expected_token,
+    })
+}
+
+#[tauri::command]
+pub fn get_config_help_reference() -> Result<Vec<ConfigHelpSection>, String> {
+    Ok(vec![
+        ConfigHelpSection {
+            title: "Essential Settings".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "server".to_string(),
+                    description: "Accepts JSON-RPC commands. Required for Commander to control the node.".to_string(),
+                    default_value: "1".to_string(),
+                    commander_relevance: "Commander requires server=1 for all wallet, asset, and explorer features.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "daemon".to_string(),
+                    description: "Run in background (1) or interactively (0). Set to 0 on Windows and when using Commander.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Commander manages the daemon process. daemon=0 is required for Windows and recommended for Commander on all platforms.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "listen".to_string(),
+                    description: "Accept connections from outside peers. 1 = full node, 0 = leech mode.".to_string(),
+                    default_value: "1".to_string(),
+                    commander_relevance: "listen=1 helps the network. Set to 0 if you have limited bandwidth.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "rpcport".to_string(),
+                    description: "Local JSON-RPC port used by Core clients.".to_string(),
+                    default_value: "8766 (Core); 42068 (Commander template)".to_string(),
+                    commander_relevance: "Commander reads the active Core configuration. Keep RPC bound to localhost unless you have a secured remote-RPC design.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "port".to_string(),
+                    description: "Peer-to-peer network port used for incoming node connections.".to_string(),
+                    default_value: "42069 (mainnet)".to_string(),
+                    commander_relevance: "This is not the RPC port. Forward it only when you intentionally accept inbound peers.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Performance & Storage".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "dbcache".to_string(),
+                    description: "Database cache size in MB. Higher = more RAM, faster sync and rescans. Core minimum is 4.".to_string(),
+                    default_value: "450".to_string(),
+                    commander_relevance: "Commander's Full Feature preset uses 4096 for fast sync on systems with >=8GB RAM.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "prune".to_string(),
+                    description: "Reduce storage by deleting old blocks. 0=off, 1=manual (RPC only), >=550=auto-prune to target MiB. Incompatible with txindex and historical rescans. Reverting requires re-downloading the blockchain.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Full Commander features (explorer, wallet rescan, asset operations) require prune=0. Pruned nodes lose historical scan capability, explorer detail, and full wallet recovery. Setting prune>0 forces txindex=0 and disables historical address lookups.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "maxconnections".to_string(),
+                    description: "Maximum peer connections. Default 125. Lower if you have limited bandwidth.".to_string(),
+                    default_value: "125".to_string(),
+                    commander_relevance: "More peers = faster sync and better network health, but more bandwidth use.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "maxmempool".to_string(),
+                    description: "Maximum mempool memory in MB before lower-fee transactions are evicted.".to_string(),
+                    default_value: "Core default".to_string(),
+                    commander_relevance: "Increase only when the system has sufficient RAM and transaction volume requires it.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "mempoolexpiry / persistmempool".to_string(),
+                    description: "Control how long unconfirmed transactions remain and whether the mempool is saved across restarts.".to_string(),
+                    default_value: "Core defaults".to_string(),
+                    commander_relevance: "Normally leave these unchanged. Disabling persistence can make restart behavior less predictable.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Indexes".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "txindex".to_string(),
+                    description: "Full transaction index. Required for getrawtransaction. Changing requires -reindex. Incompatible with prune>0.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Used by Explorer TX detail, raw transaction tools, and consolidation tools.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "assetindex".to_string(),
+                    description: "Asset ownership index. Changing requires -reindex.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Used by Asset features, snapshot requests, reward distribution.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "addressindex".to_string(),
+                    description: "Full address index for balance, txid, and UTXO queries. Changing requires -reindex-chainstate.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Used by Address lookups, UTXO consolidation, and coin control.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "timestampindex".to_string(),
+                    description: "Timestamp index for block hashes. Changing requires -reindex-chainstate.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Used by Transaction history and explorer block lookups.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "spentindex".to_string(),
+                    description: "Spent output index. Changing requires -reindex-chainstate.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Used by UTXO management and consolidation tools.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "RPC & Authentication".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "rpcuser / rpcpassword".to_string(),
+                    description: "Legacy username/password RPC authentication. Core Next uses cookie auth by default (auto-generated .cookie file).".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Commander uses cookie auth automatically when available. Never expose rpcpassword in the UI or logs.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "rpcallowip".to_string(),
+                    description: "IP addresses allowed to issue RPC commands. 127.0.0.1 = localhost only (most secure).".to_string(),
+                    default_value: "127.0.0.1 (implicit)".to_string(),
+                    commander_relevance: "Only localhost RPC is needed for Commander. Do not expose RPC to remote IPs.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "rpcbind".to_string(),
+                    description: "Network interface and optional port on which the RPC server listens.".to_string(),
+                    default_value: "Loopback".to_string(),
+                    commander_relevance: "Keep RPC on loopback for a normal Commander installation. Remote binding requires firewalling and authentication.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "rpcthreads / rpcworkqueue".to_string(),
+                    description: "Set RPC worker concurrency and queued-request capacity.".to_string(),
+                    default_value: "Core defaults".to_string(),
+                    commander_relevance: "Advanced tuning only. Excessively low values can make Commander requests stall under load.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "rest".to_string(),
+                    description: "Enable the public REST interface provided by Core.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Commander does not require REST. Leave disabled unless another trusted local service needs it.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Peer Connections".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "addnode".to_string(),
+                    description: "Add a node to connect to. Format IP:port. Repeatable — one entry per line. Supports IPv4, hostname, and bracketed IPv6.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Commander can add bootstrap addnodes. Addnode peers are protected from automatic Peer Guard bans.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "connect".to_string(),
+                    description: "Connect only to specified node(s). connect=0 disables automatic connections.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Ordinarily not needed. Use addnode for reliable bootstrap peers.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "seednode".to_string(),
+                    description: "Connect to a node once to discover additional peers. Repeatable.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Useful for bootstrap recovery; addnode is better for peers that should remain preferred.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "bind / externalip".to_string(),
+                    description: "Choose local listening interfaces and advertise a reachable public address.".to_string(),
+                    default_value: "Automatic".to_string(),
+                    commander_relevance: "Advanced inbound-node settings. Incorrect values can prevent peer connectivity.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "discover / dnsseed".to_string(),
+                    description: "Control local-address discovery and DNS-based peer discovery.".to_string(),
+                    default_value: "1".to_string(),
+                    commander_relevance: "Leave enabled for normal network discovery unless operating a deliberately isolated node.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "onlynet / proxy / proxyrandomize".to_string(),
+                    description: "Restrict network types and route outbound connections through a proxy.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Use together for Tor or other privacy networks. Test connectivity after changing them.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "bantime / banscore".to_string(),
+                    description: "Control how long misbehaving peers remain banned and the score that triggers a ban.".to_string(),
+                    default_value: "Core defaults".to_string(),
+                    commander_relevance: "Peer Guard works with Core's ban system. Avoid aggressive values that can isolate the node.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "maxuploadtarget".to_string(),
+                    description: "Daily outbound historical-block serving limit in MiB. Zero disables the limit.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Set a limit when bandwidth is constrained; normal transaction relay continues.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Wallet Behavior".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "wallet".to_string(),
+                    description: "Select a named Core wallet to load at startup. May be specified more than once when Core supports multiple loaded wallets.".to_string(),
+                    default_value: "wallet.dat".to_string(),
+                    commander_relevance: "Commander manages this setting when switching between a portable vault wallet and legacy wallet.dat mode.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "disablewallet".to_string(),
+                    description: "Start Core without wallet functionality.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Must remain disabled for Commander wallet, send, receive, vault, and solo-mining workflows.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "walletbroadcast / walletnotify".to_string(),
+                    description: "Control wallet transaction broadcast and optionally run a command when wallet transactions change.".to_string(),
+                    default_value: "Core defaults".to_string(),
+                    commander_relevance: "Commander does not require walletnotify. Leave wallet broadcast enabled for normal sending.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "keypool / fallbackfee / paytxfee / walletrbf".to_string(),
+                    description: "Advanced wallet address-pool, fee, and transaction-replacement controls.".to_string(),
+                    default_value: "Core defaults".to_string(),
+                    commander_relevance: "Change only with a clear fee or wallet-management requirement; unsafe fee values can affect every send.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Optional: ZMQ Notifications".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "zmqpubrawtx".to_string(),
+                    description: "Publish each raw mempool transaction to local ZMQ subscribers. Example: tcp://127.0.0.1:28332.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Commander does not require it. WebCom ingesters and external indexers may use it. Keep the endpoint local because raw transaction data is exposed to subscribers.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "zmqpubhashtx / zmqpubhashblock".to_string(),
+                    description: "Publish transaction or block hashes when Core accepts new data.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Useful for lightweight local event consumers that do not need full serialized objects.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "zmqpubrawblock".to_string(),
+                    description: "Publish full serialized blocks to ZMQ subscribers.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "High-volume integration option. Enable only for a trusted local consumer that requires complete blocks.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Logging & Diagnostics".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "debug / debugexclude".to_string(),
+                    description: "Enable selected debug categories and suppress noisy categories.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Use temporarily when diagnosing a problem; broad debug logging can grow debug.log quickly.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "logtimestamps".to_string(),
+                    description: "Prefix debug log entries with timestamps.".to_string(),
+                    default_value: "1".to_string(),
+                    commander_relevance: "Keep enabled so Commander and Core events can be correlated during troubleshooting.".to_string(),
+                },
+            ],
+        },
+        ConfigHelpSection {
+            title: "Reindex Commands".to_string(),
+            entries: vec![
+                ConfigHelpEntry {
+                    key: "-reindex".to_string(),
+                    description: "Rebuild chain state and block index. Required when changing txindex, assetindex, or returning to unpruned mode. Can take hours.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Schedule via System > Repair. Back up wallet.dat first.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "-reindex-chainstate".to_string(),
+                    description: "Rebuild chain state from existing blocks. Required when changing addressindex, spentindex, or timestampindex. Faster than full reindex.".to_string(),
+                    default_value: "Not set".to_string(),
+                    commander_relevance: "Schedule via System > Repair. Should complete faster than full reindex.".to_string(),
+                },
+            ],
+        },
+    ])
 }
 
 fn address_book_path() -> Result<PathBuf, String> {
@@ -534,14 +1838,7 @@ pub fn write_config(contents: String) -> Result<(), String> {
     if contents.trim().is_empty() {
         return Err("Refusing to write an empty hemp.conf.".to_string());
     }
-    let cfg = config_path()?;
-    if cfg.exists() {
-        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-        let backup_path = cfg.with_extension(format!("conf.{}.bak", timestamp));
-        fs::copy(&cfg, &backup_path)
-            .map_err(|e| format!("Failed to create config backup: {}", e))?;
-    }
-    fs::write(&cfg, contents).map_err(|e| e.to_string())
+    atomic_write_config(&contents)
 }
 
 #[tauri::command]
@@ -1913,6 +3210,607 @@ mod tests {
         assert_eq!(
             after, original,
             "write_config must not mutate hemp.conf when rejecting"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn tokenize_config_preserves_comments() {
+        let content = "# top comment\nserver=1\n# inline comment\nport=42069\n# trailing comment";
+        let lines = tokenize_config(content);
+        assert_eq!(
+            lines.len(),
+            5,
+            "should preserve all lines including comments"
+        );
+        assert!(matches!(lines[0], ConfigLine::Comment { .. }));
+        assert!(matches!(lines[1], ConfigLine::Option { .. }));
+        assert!(matches!(lines[2], ConfigLine::Comment { .. }));
+        assert!(matches!(lines[3], ConfigLine::Option { .. }));
+        assert!(matches!(lines[4], ConfigLine::Comment { .. }));
+    }
+
+    #[test]
+    fn tokenize_config_preserves_blank_lines() {
+        let content = "server=1\n\n\nport=42069\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 4, "should preserve blank lines");
+        assert!(matches!(lines[1], ConfigLine::Blank { .. }));
+        assert!(matches!(lines[2], ConfigLine::Blank { .. }));
+    }
+
+    #[test]
+    fn tokenize_config_preserves_unknown_options() {
+        let content = "server=1\ncustom_option=custom_value\n# comment\nunknown_flag=42\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn tokenize_config_preserves_crlf() {
+        let content = "# header\r\nserver=1\r\ndaemon=0\r\n# footer\r\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn tokenize_config_preserves_lf_without_trailing_newline() {
+        let content = "# header\nserver=1\ndaemon=0";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 3);
+        let reconstructed = reconstruct_config(&lines);
+        assert!(
+            !reconstructed.ends_with('\n'),
+            "should not add trailing newline when absent"
+        );
+    }
+
+    #[test]
+    fn tokenize_config_preserves_leading_whitespace() {
+        let content = "  server=1\n\t# indented comment\n  \tunknown line\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn tokenize_config_preserves_inline_comments_on_option_lines() {
+        let content = "server=1  # RPC server\nport=42069  # main port\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 2);
+        // The raw line text should preserve the full line including inline comment
+        if let ConfigLine::Option { raw, .. } = &lines[0] {
+            assert!(
+                raw.contains("# RPC server"),
+                "should preserve inline comment"
+            );
+        } else {
+            panic!("expected option line");
+        }
+    }
+
+    #[test]
+    fn tokenize_config_handles_sectioned_config() {
+        let content = "# === NETWORK ===\nserver=1\nport=42069\n# === INDEXES ===\ntxindex=1\n";
+        let lines = tokenize_config(content);
+        assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn apply_changes_updates_existing_keys() {
+        let original = "# header\nserver=1\ndaemon=0\n# footer\n";
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(result.contains("server=0"), "should update server to 0");
+        assert!(result.contains("daemon=0"), "should preserve daemon");
+        assert!(
+            result.contains("# header"),
+            "should preserve header comment"
+        );
+        assert!(
+            result.contains("# footer"),
+            "should preserve footer comment"
+        );
+    }
+
+    #[test]
+    fn apply_changes_adds_absent_keys() {
+        let original = "# header\nserver=1\n";
+        let mut changes = HashMap::new();
+        changes.insert("txindex".to_string(), Some("1".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(result.contains("txindex=1"), "should add new key");
+        assert!(result.contains("server=1"), "should preserve existing key");
+        assert!(result.contains("# header"), "should preserve comment");
+    }
+
+    #[test]
+    fn apply_changes_does_not_duplicate_keys() {
+        let original = "server=1\ntxindex=0\n";
+        let mut changes = HashMap::new();
+        changes.insert("txindex".to_string(), Some("1".to_string()));
+        let result = apply_config_changes(original, &changes);
+        let txindex_count = result
+            .lines()
+            .filter(|l| l.trim().starts_with("txindex="))
+            .count();
+        assert_eq!(txindex_count, 1, "should not duplicate txindex line");
+    }
+
+    #[test]
+    fn apply_changes_preserves_line_endings_and_trailing_newline() {
+        let original = "server=1\n";
+        let mut changes = HashMap::new();
+        changes.insert("daemon".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(result.ends_with('\n'), "should preserve trailing newline");
+    }
+
+    #[test]
+    fn apply_changes_preserves_crlf_endings() {
+        let original = "# header\r\nserver=1\r\ndaemon=0\r\n";
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(
+            result.contains("server=0\r\n"),
+            "should preserve CRLF line endings"
+        );
+    }
+
+    #[test]
+    fn apply_changes_preserves_addnode_as_repeated_lines() {
+        let original = "# peers\naddnode=host1:42069\naddnode=host2:42069\nserver=1\n";
+        // Don't modify addnode — should preserve repeated entries
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        let count = result
+            .lines()
+            .filter(|l| l.trim().starts_with("addnode="))
+            .count();
+        assert_eq!(count, 2, "should preserve both addnode entries");
+    }
+
+    #[test]
+    fn apply_changes_addnode_add_and_remove() {
+        let original = "addnode=host1:42069\naddnode=host2:42069\nserver=1\n";
+        let mut changes = HashMap::new();
+        changes.insert(
+            "addnode".to_string(),
+            Some("host1:42069,host3:42069".to_string()),
+        );
+        let result = apply_config_changes(original, &changes);
+        assert!(
+            result.contains("addnode=host1:42069"),
+            "should preserve host1"
+        );
+        assert!(result.contains("addnode=host3:42069"), "should add host3");
+        assert!(!result.contains("host2:42069"), "should remove host2");
+        let count = result
+            .lines()
+            .filter(|l| l.trim().starts_with("addnode="))
+            .count();
+        assert_eq!(count, 2, "should have exactly 2 addnode lines");
+    }
+
+    #[test]
+    fn apply_changes_preserves_ipv6_addnode() {
+        let original = "addnode=[::1]:42069\nserver=1\n";
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(
+            result.contains("[::1]:42069"),
+            "should preserve IPv6 addnode"
+        );
+    }
+
+    #[test]
+    fn reconstruct_roundtrips_lf() {
+        let original = "# config\nserver=1\n\nport=42069\n# end\n";
+        let lines = tokenize_config(original);
+        let reconstructed = reconstruct_config(&lines);
+        assert_eq!(
+            reconstructed, original,
+            "LF roundtrip should match original"
+        );
+    }
+
+    #[test]
+    fn reconstruct_roundtrips_crlf() {
+        let original = "# config\r\nserver=1\r\nport=42069\r\n";
+        let lines = tokenize_config(original);
+        let reconstructed = reconstruct_config(&lines);
+        assert_eq!(
+            reconstructed, original,
+            "CRLF roundtrip should match original"
+        );
+    }
+
+    #[test]
+    fn apply_changes_preserves_secret_valued_lines() {
+        let original = "# do not edit\nrpcpassword=super_secret_value\nserver=1\n";
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(
+            result.contains("rpcpassword=super_secret_value"),
+            "must preserve rpcpassword unchanged"
+        );
+        assert!(result.contains("server=0"), "should still update server");
+    }
+
+    #[test]
+    fn apply_changes_preserves_inline_comment_on_changed_line() {
+        let original = "server = 1  # Commander RPC\n";
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        assert_eq!(
+            apply_config_changes(original, &changes),
+            "server = 0  # Commander RPC\n"
+        );
+    }
+
+    #[test]
+    fn config_parsing_ignores_inline_comments() {
+        let parsed = parse_config_from_str("server = 1  # Commander RPC\n").unwrap();
+        assert_eq!(parsed.get("server").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn apply_changes_removes_singleton_option() {
+        let original = "server=1\nzmqpubrawtx=tcp://127.0.0.1:28332\n";
+        let mut changes = HashMap::new();
+        changes.insert("zmqpubrawtx".to_string(), None);
+        assert_eq!(apply_config_changes(original, &changes), "server=1\n");
+    }
+
+    #[test]
+    fn duplicate_singleton_conflicts_are_rejected() {
+        let errors = duplicate_singleton_errors("server=1\nserver=0\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Conflicting duplicate 'server'"));
+    }
+
+    #[test]
+    fn sectioned_configs_are_rejected_by_guided_validation() {
+        let (errors, _) = validate_config_content("server=1\n[test]\nserver=0\n");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("network sections")));
+    }
+
+    #[test]
+    fn validate_rejects_prune_with_txindex_as_error() {
+        let mut settings = HashMap::new();
+        settings.insert("prune".to_string(), "1000".to_string());
+        settings.insert("txindex".to_string(), "1".to_string());
+        let (errors, _warnings) = validate_config_settings(&settings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("incompatible") && e.contains("txindex")),
+            "must error about prune+txindex conflict"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_prune_below_minimum_as_error() {
+        let mut settings = HashMap::new();
+        settings.insert("prune".to_string(), "100".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(
+            errors.iter().any(|e| e.contains("550")),
+            "must error about prune below 550 minimum"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_prune_1_as_valid() {
+        let mut settings = HashMap::new();
+        settings.insert("prune".to_string(), "1".to_string());
+        settings.insert("txindex".to_string(), "0".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(
+            errors.is_empty(),
+            "prune=1 should be valid manual-pruning mode"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_prune_alone() {
+        let mut settings = HashMap::new();
+        settings.insert("prune".to_string(), "2000".to_string());
+        settings.insert("txindex".to_string(), "0".to_string());
+        let (errors, _warnings) = validate_config_settings(&settings);
+        assert!(
+            errors.is_empty(),
+            "valid prune config should have no errors"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_full_node_config() {
+        let mut settings = HashMap::new();
+        settings.insert("prune".to_string(), "0".to_string());
+        settings.insert("txindex".to_string(), "1".to_string());
+        settings.insert("addressindex".to_string(), "1".to_string());
+        settings.insert("assetindex".to_string(), "1".to_string());
+        settings.insert("spentindex".to_string(), "1".to_string());
+        settings.insert("timestampindex".to_string(), "1".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(errors.is_empty(), "full node config should have no errors");
+    }
+
+    #[test]
+    fn validate_rejects_remote_or_malformed_zmq_endpoints() {
+        for endpoint in [
+            "tcp://192.168.1.10:28332",
+            "tcp://127.0.0.1:",
+            "tcp://localhost:0",
+            "ipc://",
+        ] {
+            let mut settings = HashMap::new();
+            settings.insert("zmqpubrawtx".to_string(), endpoint.to_string());
+            let (errors, _) = validate_config_settings(&settings);
+            assert!(
+                !errors.is_empty(),
+                "endpoint should be rejected by guided configuration: {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_local_zmq_endpoints() {
+        for endpoint in [
+            "tcp://127.0.0.1:28332",
+            "tcp://localhost:28332",
+            "tcp://[::1]:28332",
+            "ipc:///tmp/hemp0x-zmq",
+        ] {
+            let mut settings = HashMap::new();
+            settings.insert("zmqpubrawtx".to_string(), endpoint.to_string());
+            let (errors, _) = validate_config_settings(&settings);
+            assert!(
+                errors.is_empty(),
+                "endpoint should be accepted by guided configuration: {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_invalid_dbcache() {
+        let mut settings = HashMap::new();
+        settings.insert("dbcache".to_string(), "0".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(!errors.is_empty(), "dbcache=0 should be rejected");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_maxconnections() {
+        let mut settings = HashMap::new();
+        settings.insert("maxconnections".to_string(), "0".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(!errors.is_empty(), "maxconnections=0 should be rejected");
+    }
+
+    #[test]
+    fn validate_rejects_malformed_addnode() {
+        let mut settings = HashMap::new();
+        settings.insert("addnode".to_string(), "badhost".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(!errors.is_empty(), "malformed addnode should be rejected");
+    }
+
+    #[test]
+    fn validate_accepts_valid_hostname_addnode() {
+        let mut settings = HashMap::new();
+        settings.insert("addnode".to_string(), "seed.hemp0x.com:42069".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(errors.is_empty(), "hostname:port addnode should be valid");
+    }
+
+    #[test]
+    fn validate_accepts_valid_ipv6_addnode() {
+        let mut settings = HashMap::new();
+        settings.insert("addnode".to_string(), "[2001:db8::1]:42069".to_string());
+        let (errors, _) = validate_config_settings(&settings);
+        assert!(errors.is_empty(), "IPv6 addnode should be valid");
+    }
+
+    #[test]
+    fn detect_reindex_txindex_change() {
+        let mut old = HashMap::new();
+        old.insert("txindex".to_string(), "0".to_string());
+        let mut new = HashMap::new();
+        new.insert("txindex".to_string(), "1".to_string());
+        let (full, _chainstate) = detect_reindex_requirements(&old, &new);
+        assert!(!full.is_empty(), "txindex change requires full reindex");
+        assert!(
+            full.iter().any(|s| s.contains("-reindex")),
+            "should mention -reindex"
+        );
+    }
+
+    #[test]
+    fn detect_reindex_addressindex_change() {
+        let mut old = HashMap::new();
+        old.insert("addressindex".to_string(), "0".to_string());
+        let mut new = HashMap::new();
+        new.insert("addressindex".to_string(), "1".to_string());
+        let (_full, chainstate) = detect_reindex_requirements(&old, &new);
+        assert!(
+            !chainstate.is_empty(),
+            "addressindex change requires reindex-chainstate"
+        );
+        assert!(
+            chainstate.iter().any(|s| s.contains("-reindex-chainstate")),
+            "should mention -reindex-chainstate"
+        );
+    }
+
+    #[test]
+    fn detect_reindex_assetindex_change() {
+        let mut old = HashMap::new();
+        old.insert("assetindex".to_string(), "0".to_string());
+        let mut new = HashMap::new();
+        new.insert("assetindex".to_string(), "1".to_string());
+        let (full, _chainstate) = detect_reindex_requirements(&old, &new);
+        assert!(!full.is_empty(), "assetindex change requires full reindex");
+    }
+
+    #[test]
+    fn detect_no_reindex_for_non_index_changes() {
+        let mut old = HashMap::new();
+        old.insert("txindex".to_string(), "1".to_string());
+        old.insert("addressindex".to_string(), "1".to_string());
+        old.insert("server".to_string(), "0".to_string());
+        let mut new = HashMap::new();
+        new.insert("txindex".to_string(), "1".to_string());
+        new.insert("addressindex".to_string(), "1".to_string());
+        new.insert("server".to_string(), "1".to_string());
+        let (full, chainstate) = detect_reindex_requirements(&old, &new);
+        assert!(full.is_empty(), "no index change, no full reindex needed");
+        assert!(
+            chainstate.is_empty(),
+            "no index change, no chainstate reindex needed"
+        );
+    }
+
+    #[test]
+    fn preview_config_does_not_write() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        let original = "# test config\nserver=1\ndaemon=0\n";
+        fs::write(&cfg, original).unwrap();
+
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let preview = preview_config_changes(changes).unwrap();
+
+        assert!(!preview.changes.is_empty(), "should detect change");
+        assert!(preview.restart_required, "server change requires restart");
+        assert!(
+            !preview.preview_token.is_empty(),
+            "should have preview token"
+        );
+
+        let on_disk = fs::read_to_string(&cfg).unwrap();
+        assert_eq!(on_disk, original, "preview must not write to disk");
+        drop(guard);
+    }
+
+    #[test]
+    fn preview_does_not_return_unrelated_secret_values() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        let original = "# header\nserver=1\nrpcpassword=mysecret\nrpcuser=admin\n";
+        fs::write(&cfg, original).unwrap();
+
+        let mut changes = HashMap::new();
+        changes.insert("server".to_string(), Some("0".to_string()));
+        let preview = preview_config_changes(changes).unwrap();
+
+        let serialized = serde_json::to_string(&preview).unwrap();
+        assert!(!serialized.contains("mysecret"));
+        assert!(!serialized.contains("admin"));
+        drop(guard);
+    }
+
+    #[test]
+    fn apply_guided_config_rejects_changed_request_after_preview() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        fs::write(&cfg, "server=1\n").unwrap();
+
+        let mut preview_changes = HashMap::new();
+        preview_changes.insert("server".to_string(), Some("0".to_string()));
+        let preview = preview_config_changes(preview_changes).unwrap();
+
+        let mut different_changes = HashMap::new();
+        different_changes.insert("listen".to_string(), Some("0".to_string()));
+        let result = apply_guided_config(different_changes, preview.preview_token);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("guided changes were modified"));
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "server=1\n");
+        drop(guard);
+    }
+
+    #[test]
+    fn apply_guided_config_creates_backup() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        let original = "# test\nserver=1\n";
+        fs::write(&cfg, original).unwrap();
+
+        let preview = preview_config_changes({
+            let mut m = HashMap::new();
+            m.insert("server".to_string(), Some("0".to_string()));
+            m
+        })
+        .unwrap();
+
+        let result = apply_guided_config(
+            {
+                let mut m = HashMap::new();
+                m.insert("server".to_string(), Some("0".to_string()));
+                m
+            },
+            preview.preview_token.clone(),
+        );
+
+        assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+
+        // Verify .bak file exists
+        let bak_exists = cfg
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .any(|e| e.unwrap().file_name().to_string_lossy().contains(".bak"));
+        assert!(bak_exists, "backup file should exist after apply");
+
+        let on_disk = fs::read_to_string(&cfg).unwrap();
+        assert!(on_disk.contains("server=0"), "config should be updated");
+        drop(guard);
+    }
+
+    #[test]
+    fn apply_guided_config_rejects_stale_preview_token() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        fs::write(&cfg, "# original\nserver=1\n").unwrap();
+
+        // Preview
+        let preview = preview_config_changes({
+            let mut m = HashMap::new();
+            m.insert("server".to_string(), Some("0".to_string()));
+            m
+        })
+        .unwrap();
+
+        // Mutate config between preview and apply
+        fs::write(&cfg, "# modified externally\nserver=1\ntxindex=1\n").unwrap();
+
+        let result = apply_guided_config(
+            {
+                let mut m = HashMap::new();
+                m.insert("server".to_string(), Some("0".to_string()));
+                m
+            },
+            preview.preview_token.clone(),
+        );
+
+        assert!(result.is_err(), "should reject stale preview token");
+        assert!(
+            result.unwrap_err().contains("modified since preview"),
+            "should mention TOCTOU"
         );
         drop(guard);
     }

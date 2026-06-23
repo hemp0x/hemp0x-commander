@@ -33,6 +33,23 @@
     let showUnbanModal = false;
     let unbanTarget = "";
 
+    let addnodeAddresses = [];
+    async function loadAddnodeInfo() {
+        try {
+            addnodeAddresses = await core.invoke("get_addnode_hosts");
+        } catch {
+            addnodeAddresses = [];
+        }
+    }
+
+    function isAddnodeProtected(address) {
+        const normalizedBan = address.replace(/\/\d+$/, "").trim().toLowerCase();
+        return addnodeAddresses.some(a => {
+            const host = a.trim().replace(/\/\d+$/, "").trim().toLowerCase();
+            return host === normalizedBan;
+        });
+    }
+
     async function loadBanList() {
         if (!tauriReady || !isNodeOnline) return; // Prevent offline error
         banListLoading = true;
@@ -245,6 +262,7 @@
 
     onMount(() => {
         loadPeerProtectionSetting();
+        loadAddnodeInfo();
     });
 
     onDestroy(() => {
@@ -256,14 +274,15 @@
 <div class="tool-grid network-overhaul">
     <!-- 1. PEER PROTECTION (With Merged Ban List) -->
     <div class="update-panel">
-        <h3 class="update-title">🛡️ PEER PROTECTION</h3>
+        <h3 class="update-title">&#x1F6E1; PEER PROTECTION</h3>
         <p
             class="section-desc"
             style="margin-bottom: 1rem; color: #888; font-size: 0.8rem;"
         >
-            Automatically checks connected peers every 120 seconds. Peers
+            Automatically checks <strong>unsolicited</strong> connected peers every 120 seconds. Peers
             running old Hemp0x Core builds or non-Hemp0x subversions are banned
-            for 24 hours.
+            for 24 hours. Peers from configured <code>addnode</code> entries are protected and
+            excluded from automatic bans. Core maintains its own persistent ban list.
         </p>
 
         <div
@@ -350,6 +369,12 @@
                                     style="color: #ddd; font-size: 0.75rem;"
                                 >
                                     {ban.address}
+                                    {#if isAddnodeProtected(ban.address)}
+                                        <span
+                                            class="addnode-protected-badge"
+                                            title="This IP appears in configured addnode entries"
+                                        >addnode</span>
+                                    {/if}
                                 </div>
                                 <div style="font-size: 0.65rem; color: #777;">
                                     Reason: {ban.ban_reason}
@@ -722,5 +747,18 @@
     }
     .peer-toggle input {
         accent-color: var(--color-primary);
+    }
+    .addnode-protected-badge {
+        display: inline-block;
+        font-size: 0.55rem;
+        padding: 0.05rem 0.3rem;
+        margin-left: 0.35rem;
+        background: rgba(0, 255, 65, 0.08);
+        border: 1px solid rgba(0, 255, 65, 0.2);
+        border-radius: 3px;
+        color: var(--color-primary);
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        vertical-align: middle;
     }
 </style>

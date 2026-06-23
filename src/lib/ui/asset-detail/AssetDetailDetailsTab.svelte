@@ -122,7 +122,7 @@
             </div>
             <div class="meta-row">
                 <span class="meta-label">CREATED AT BLOCK</span>
-                <span class="meta-value">{metadata.block_height?.toLocaleString() ?? "--"}</span>
+                <span class="meta-value">{metadata.block_height ? metadata.block_height.toLocaleString() : "--"}</span>
             </div>
         </div>
 

@@ -9,13 +9,15 @@
     export let placeholder = "H...";
     export let addresses = []; // Array of {address, label, balance}
     export let nodeOnline = false;
+    export let defaultSortColumn = "label";
+    export let defaultSortDirection = "asc";
 
     const dispatch = createEventDispatcher();
 
     let showDropdown = false;
     let pickerEl;
-    let sortColumn = "label"; // 'label', 'balance'
-    let sortDirection = "asc"; // 'asc', 'desc'
+    let sortColumn = defaultSortColumn; // 'label', 'balance'
+    let sortDirection = defaultSortDirection; // 'asc', 'desc'
     let genLabel = "";
     let showGenForm = false;
 
@@ -58,7 +60,7 @@
             sortDirection = sortDirection === "asc" ? "desc" : "asc";
         } else {
             sortColumn = col;
-            sortDirection = "asc";
+            sortDirection = col === "balance" ? "desc" : "asc";
         }
     }
 

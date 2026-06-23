@@ -1077,8 +1077,16 @@ pub fn ban_old_peers() -> Result<BanResult, String> {
         for peer in arr {
             let subver = peer.get("subver").and_then(|v| v.as_str()).unwrap_or("");
             let addr = peer.get("addr").and_then(|v| v.as_str()).unwrap_or("");
+            let explicitly_added = peer
+                .get("addnode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let whitelisted = peer
+                .get("whitelisted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
-            if !subver.is_empty() && version_is_old(subver) {
+            if should_auto_ban_peer(subver, explicitly_added, whitelisted) {
                 let ip = addr.split(':').next().unwrap_or(addr);
                 if !ip.is_empty() {
                     if run_cli(&[
@@ -1101,6 +1109,10 @@ pub fn ban_old_peers() -> Result<BanResult, String> {
         banned_count,
         banned_peers,
     })
+}
+
+fn should_auto_ban_peer(subver: &str, explicitly_added: bool, whitelisted: bool) -> bool {
+    !subver.is_empty() && !explicitly_added && !whitelisted && version_is_old(subver)
 }
 
 #[tauri::command]
@@ -5890,7 +5902,7 @@ mod tests {
         estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
         hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
         max_policy_inputs, message_authority_asset_name, migration_rpc_readiness_error,
-        normalize_cli_txid,
+        normalize_cli_txid, should_auto_ban_peer,
         normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
         parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
         parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
@@ -5905,6 +5917,14 @@ mod tests {
     };
     use crate::modules::models::RawTxInput;
     use std::collections::HashMap;
+
+    #[test]
+    fn peer_guard_protects_explicit_and_whitelisted_peers() {
+        assert!(!should_auto_ban_peer("/Hemp0x:4.6.9/", true, false));
+        assert!(!should_auto_ban_peer("/Hemp0x:4.6.9/", false, true));
+        assert!(should_auto_ban_peer("/Hemp0x:4.6.9/", false, false));
+        assert!(!should_auto_ban_peer("/Hemp0x:4.7.0/", false, false));
+    }
 
     #[test]
     fn validates_valid_send_preview_input() {

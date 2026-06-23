@@ -8,6 +8,7 @@
         STRATUM_POLL_INTERVAL,
         formatHashrate,
     } from "../stores/stratum.js";
+    import WalletAddressPicker from "../ui/WalletAddressPicker.svelte";
 
     $: tauriReady = $systemStatus.tauriReady;
 
@@ -30,10 +31,7 @@
     let pollTimer;
 
     // Dropdown state
-    let walletDropdownOpen = false;
     let bindDropdownOpen = false;
-    /** @type {HTMLElement | undefined} */
-    let walletDropdownRef;
     /** @type {HTMLElement | undefined} */
     let bindDropdownRef;
     /** @type {HTMLElement | undefined} */
@@ -129,45 +127,6 @@
     }
 
     /**
-     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
-     */
-    function displayWalletAddress(item) {
-        if (typeof item === "string") return item;
-        const address = item?.address || "";
-        const label = item?.label ? `${item.label} — ` : "";
-        const balance = item?.balance && item.balance !== "0.00000000"
-            ? ` ${item.balance} HEMP`
-            : "";
-        return `${label}${address}${balance}`;
-    }
-
-    /**
-     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
-     */
-    function displayWalletAddressCompact(item) {
-        if (typeof item === "string") return compactAddress(item);
-        const address = item?.address || "";
-        const label = item?.label ? `${item.label} — ` : "";
-        const balance = item?.balance && item.balance !== "0.00000000"
-            ? ` ${item.balance} HEMP`
-            : "";
-        return `${label}${compactAddress(address)}${balance}`;
-    }
-
-    /**
-     * @param {string | { address?: string, label?: string, balance?: string } | null | undefined} item
-     */
-    function displayWalletAddressFull(item) {
-        if (typeof item === "string") return item;
-        const address = item?.address || "";
-        const label = item?.label ? `${item.label} — ` : "";
-        const balance = item?.balance && item.balance !== "0.00000000"
-            ? ` ${item.balance} HEMP`
-            : "";
-        return `${label}${address}${balance}`;
-    }
-
-    /**
      * @param {{ label: string, scope: string }} cand
      */
     function bindCandidateLabel(cand) {
@@ -239,7 +198,6 @@
      */
     function selectWalletAddress(address) {
         selectedWalletAddress = address;
-        walletDropdownOpen = false;
         validatePayoutAddress(address);
     }
 
@@ -393,9 +351,6 @@
     // Outside click handler for dropdowns
     /** @param {MouseEvent} event */
     function handleClickOutside(event) {
-        if (walletDropdownRef && event.target instanceof Node && !walletDropdownRef.contains(event.target)) {
-            walletDropdownOpen = false;
-        }
         if (bindDropdownRef && event.target instanceof Node && !bindDropdownRef.contains(event.target)) {
             bindDropdownOpen = false;
         }
@@ -405,7 +360,6 @@
     /** @param {KeyboardEvent} event */
     function handleKeydown(event) {
         if (event.key === "Escape") {
-            walletDropdownOpen = false;
             bindDropdownOpen = false;
         }
     }
@@ -525,46 +479,17 @@
                             </button>
                         </div>
                     {:else}
-                        <!-- Wallet Address Custom Dropdown -->
-                        <div class="dropdown" bind:this={walletDropdownRef}>
-                            <button
-                                type="button"
-                                class="dropdown-trigger"
-                                on:click={() => {
-                                    walletDropdownOpen = !walletDropdownOpen;
-                                }}
-                                aria-haspopup="listbox"
-                                aria-expanded={walletDropdownOpen}
-                            >
-                                <span class="dropdown-trigger-text" title={displayWalletAddressFull(walletAddresses.find(a => walletAddressValue(a) === selectedWalletAddress) || selectedWalletAddress)}>
-                                    <span class="responsive-full">{displayWalletAddress(walletAddresses.find(a => walletAddressValue(a) === selectedWalletAddress) || selectedWalletAddress)}</span>
-                                    <span class="responsive-compact">{displayWalletAddressCompact(walletAddresses.find(a => walletAddressValue(a) === selectedWalletAddress) || selectedWalletAddress)}</span>
-                                </span>
-                                <svg class="dropdown-chevron" class:open={walletDropdownOpen} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                                    <polyline points="6 9 12 15 18 9" />
-                                </svg>
-                            </button>
-                            {#if walletDropdownOpen}
-                                <div class="dropdown-menu" role="listbox">
-                                    {#each walletAddresses as addr}
-                                        <button
-                                            type="button"
-                                            class="dropdown-item"
-                                            class:selected={walletAddressValue(addr) === selectedWalletAddress}
-                                            role="option"
-                                            aria-selected={walletAddressValue(addr) === selectedWalletAddress}
-                                            on:click={() => selectWalletAddress(walletAddressValue(addr))}
-                                            title={displayWalletAddressFull(addr)}
-                                        >
-                                            <span class="dropdown-item-text">
-                                                <span class="responsive-full">{displayWalletAddress(addr)}</span>
-                                                <span class="responsive-compact">{displayWalletAddressCompact(addr)}</span>
-                                            </span>
-                                        </button>
-                                    {/each}
-                                </div>
-                            {/if}
-                        </div>
+                        <WalletAddressPicker
+                            id="solo-mining-worker-address"
+                            label="Payout Address"
+                            bind:value={selectedWalletAddress}
+                            addresses={walletAddresses}
+                            nodeOnline={nodeAvailable}
+                            defaultSortColumn="balance"
+                            defaultSortDirection="desc"
+                            on:select={(event) => selectWalletAddress(event.detail.address)}
+                            on:generate={generateNewAddress}
+                        />
 
                         <!-- Change address toggle -->
                         <div class="field-row compact">

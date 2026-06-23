@@ -164,6 +164,9 @@
         walletLoading = true;
         try {
             walletAddresses = await invoke("get_receive_addresses", { showChange: false });
+            walletAddresses = [...walletAddresses].sort(
+                (a, b) => Number(b.balance || 0) - Number(a.balance || 0),
+            );
             // Default destinations when fields are empty and we have addresses
             if (walletAddresses.length > 0) {
                 if (!qualifierDest) qualifierDest = walletAddresses[0].address;
@@ -1056,6 +1059,8 @@
                                 label="Destination Address"
                                 bind:value={qualifierDest}
                                 addresses={walletAddresses}
+                                defaultSortColumn="balance"
+                                defaultSortDirection="desc"
                                 {nodeOnline}
                                 on:generate={generateAddress}
                             />
@@ -1119,6 +1124,8 @@
                                 label="Destination Address"
                                 bind:value={restrictedDest}
                                 addresses={walletAddresses}
+                                defaultSortColumn="balance"
+                                defaultSortDirection="desc"
                                 {nodeOnline}
                                 on:generate={generateAddress}
                             />
@@ -1204,6 +1211,8 @@
                                     label="Address"
                                     bind:value={tagAddr}
                                     addresses={walletAddresses}
+                                    defaultSortColumn="balance"
+                                    defaultSortDirection="desc"
                                     {nodeOnline}
                                     on:generate={generateAddress}
                                 />
@@ -1455,6 +1464,8 @@
                                     label="Change / Dust Address (optional)"
                                     bind:value={rewardChangeAddress}
                                     addresses={walletAddresses}
+                                    defaultSortColumn="balance"
+                                    defaultSortDirection="desc"
                                     {nodeOnline}
                                     on:generate={generateAddress}
                                 />

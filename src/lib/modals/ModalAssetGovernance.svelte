@@ -50,29 +50,6 @@
     let alertType = "info";
     let shouldCloseOnAlertDismiss = false;
 
-    // Indexing State
-    let assetIndexEnabled = false; // We will check this on mount
-
-    async function checkAssetIndex() {
-        // TODO: Implement backend command to check hemp.conf
-        // For now, assume false to show the button
-        // const info = await invoke("get_info");
-        // assetIndexEnabled = info.assetindex;
-    }
-
-    async function enableAssetIndex() {
-        // TODO: invoke("enable_asset_index")
-        triggerAlert(
-            "Coming Soon",
-            "We need to add the backend logic to modify hemp.conf and restart the node. But the UI is ready!",
-            "info",
-        );
-    }
-
-    $: if (activeTab === "dividends") {
-        checkAssetIndex();
-    }
-
     function startHold() {
         if (!lockConfirmed || isSubmitting) return;
         isHolding = true;

@@ -103,7 +103,7 @@
     snapshotProgressMessage = "Preparing snapshot install...";
     snapshotProgressTimer = setInterval(() => {
       const elapsed = formatElapsed(Date.now() - snapshotInstallStartedAt);
-      snapshotProgressMessage = `Installing snapshot (${elapsed}). Keep Commander open.`;
+      snapshotProgressMessage = "Keep Commander open while the snapshot is installed.";
       if (processingMessage.startsWith("Extracting snapshot")) {
         processingMessage = `Extracting snapshot (${elapsed}). Large archives can take several minutes.`;
       }
@@ -1669,7 +1669,7 @@
       <p style="color:#aaa; margin:0;">{processingMessage}</p>
       {#if snapshotInstalling}
         <p style="color:#888; font-size:0.75rem; margin-top:1rem; line-height:1.45;">
-          {snapshotProgressMessage || "Installing snapshot. Keep Commander open."}
+          {snapshotProgressMessage || "Keep Commander open while the snapshot is installed."}
         </p>
         <p style="color:#666; font-size:0.7rem; margin-top:0.75rem; line-height:1.4;">
           Snapshot extraction can be slow on large archives. Commander will continue when the install finishes.

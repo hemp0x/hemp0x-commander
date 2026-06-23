@@ -245,9 +245,44 @@
   async function saveConfig() {
     try {
       await core.invoke("write_config", { contents: configText });
-      dispatchToast("Configuration Saved", "success");
+      dispatchToast("Configuration saved. Restart Core to activate raw-editor changes.", "success");
     } catch (err) {
-      dispatchToast("Failed to save config", "error");
+      dispatchToast(`Failed to save config: ${err}`, "error");
+    }
+  }
+  async function exportConfig() {
+    try {
+      const filePath = await core.invoke("dialog_write_text_file", {
+        content: configText,
+        defaultPath: "hemp.conf",
+        title: "Export Hemp0x Configuration",
+        filters: [["Hemp0x configuration", "conf"], ["All files", "*"]],
+      });
+      dispatchToast(`Configuration exported to ${filePath}`, "success");
+    } catch (err) {
+      if (!String(err).includes("No file selected")) {
+        dispatchToast(`Configuration export failed: ${err}`, "error");
+      }
+    }
+  }
+  async function importConfig() {
+    try {
+      const imported = await core.invoke("dialog_read_text_file", {
+        title: "Import Hemp0x Configuration",
+        filters: [["Hemp0x configuration", "conf"], ["All files", "*"]],
+      });
+      if (!imported.trim()) {
+        dispatchToast("The selected configuration is empty.", "error");
+        return;
+      }
+      configText = imported;
+      guidedPreset = "custom";
+      invalidatePreview({ resetPreset: false });
+      dispatchToast("Configuration loaded into the raw editor. Review it, then select Save Config.", "info");
+    } catch (err) {
+      if (!String(err).includes("No file selected")) {
+        dispatchToast(`Configuration import failed: ${err}`, "error");
+      }
     }
   }
   async function createDefaultConfig() {
@@ -446,6 +481,23 @@
   async function applyGuidedConfig() {
     if (guidedApplyLoading) return;
     if (!previewToken || !previewChanges) return;
+    const needsFullReindex = guidedPreview?.reindex_required?.length > 0;
+    const needsChainstateReindex =
+      !needsFullReindex && guidedPreview?.reindex_chainstate_required?.length > 0;
+    const repairModeNeeded = needsFullReindex
+      ? "reindex"
+      : needsChainstateReindex
+        ? "reindex-chainstate"
+        : null;
+    if (repairModeNeeded) {
+      const confirmed = await ask(
+        repairModeNeeded === "reindex"
+          ? "These settings require a full reindex. Core may take hours or days to rebuild, and returning from a pruned node can require downloading the blockchain again. Back up your wallet and vault before continuing. Apply the configuration and start the reindex now?"
+          : "These settings require a chainstate reindex. Core may be unavailable for an extended period while indexes rebuild. Back up your wallet and vault before continuing. Apply the configuration and start the reindex now?",
+        { title: "Apply Configuration and Reindex", kind: "warning" },
+      );
+      if (!confirmed) return;
+    }
     guidedApplyLoading = true;
     isProcessing = true;
     processingMessage = "Backing up and applying configuration...";
@@ -455,17 +507,12 @@
         previewToken,
       });
       dispatchToast("Configuration applied. Backup created.", "success");
-      await loadConfig(true);
-      guidedPreview = result;
-      previewToken = result.preview_token;
+      configText = await core.invoke("read_config");
+      await hydrateGuidedControls();
       if (result.changes && result.changes.length === 0) {
         dispatchToast("No changes to apply.", "info");
-      }
-      if (result.reindex_required && result.reindex_required.length > 0) {
-        dispatchToast("Reindex required for index changes. Use Repair tab.", "warning");
-      }
-      if (result.reindex_chainstate_required && result.reindex_chainstate_required.length > 0) {
-        dispatchToast("Reindex-chainstate required. Use Repair tab.", "warning");
+      } else {
+        await restartCoreAfterConfigChange(repairModeNeeded);
       }
     } catch (err) {
       dispatchToast(`Apply failed: ${err}`, "error");
@@ -474,6 +521,58 @@
     guidedApplyLoading = false;
     previewToken = null;
     guidedPreview = null;
+  }
+
+  async function restartCoreAfterConfigChange(repairModeNeeded) {
+    isProcessing = true;
+    try {
+      processingMessage = "Stopping Core...";
+      try {
+        await core.invoke("stop_node");
+      } catch {
+        // A stopped daemon needs no additional action before startup.
+      }
+      for (let i = 0; i < 30; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          const info = await core.invoke("get_data_folder_info");
+          if (!info.lock_exists) break;
+          processingMessage = "Waiting for Core to stop...";
+        } catch {
+          break;
+        }
+      }
+      if (repairModeNeeded) {
+        processingMessage =
+          repairModeNeeded === "reindex"
+            ? "Scheduling full reindex..."
+            : "Scheduling chainstate reindex...";
+        await core.invoke("set_daemon_repair_mode", { mode: repairModeNeeded });
+        repairMode = repairModeNeeded;
+      }
+      processingMessage = repairModeNeeded
+        ? "Starting Core rebuild..."
+        : "Restarting Core...";
+      await core.invoke("start_node");
+      if (repairModeNeeded) {
+        repairActive = true;
+        startRepairPolling();
+        dispatchToast("Core rebuild started. Progress is available in System > Repair.", "success");
+      } else {
+        processingMessage = "Waiting for Core RPC...";
+        const readiness = await core.invoke("wait_for_daemon_ready", {
+          timeoutMs: 120000,
+        });
+        if (!readiness.ready) {
+          throw new Error(readiness.rpc_error || "Core did not become ready.");
+        }
+        dispatchToast("Core restarted with the updated configuration.", "success");
+      }
+    } catch (err) {
+      dispatchToast(`Configuration was saved, but Core restart failed: ${err}`, "error");
+    } finally {
+      isProcessing = false;
+    }
   }
 
   function addAddnode() {
@@ -1305,6 +1404,8 @@
             </div>
             <div class="sh-action-row right">
               <button class="sh-btn sh-btn-ghost" on:click={() => { toggleConfHelp(); loadConfigHelp(); }}>HELP</button>
+              <button class="sh-btn sh-btn-ghost" on:click={importConfig}>IMPORT CONFIG</button>
+              <button class="sh-btn sh-btn-ghost" on:click={exportConfig}>BACKUP CONFIG</button>
               <button class="sh-btn sh-btn-ghost" on:click={createDefaultConfig}>CREATE DEFAULT</button>
               <button class="sh-btn sh-btn-ghost" on:click={() => loadConfig(false)}>RELOAD</button>
               <button class="sh-btn" on:click={saveConfig}>SAVE CONFIG</button>
@@ -1511,12 +1612,12 @@
 <!-- CONFIG HELP MODAL -->
 {#if showConfHelp}
   <div class="modal-overlay" role="button" tabindex="0" on:click|self={toggleConfHelp} on:keydown={(e) => e.key === "Escape" && toggleConfHelp()}>
-    <div class="modal-staged wide">
+    <div class="modal-staged wide config-help-modal">
       <div class="modal-header">
         <h3>CONFIGURATION REFERENCE</h3>
         <button class="btn-close-x" on:click={toggleConfHelp}>X</button>
       </div>
-      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+      <div class="modal-body config-help-body">
         <p class="highlight-warning"><strong>CRITICAL FOR WINDOWS:</strong> Set <code>daemon=0</code>. Setting <code>daemon=1</code> is for headless Linux/VPS only and will prevent the GUI from connecting to the node.</p>
         {#if configHelpLoading}
           <p style="color:#888; text-align:center; padding:1rem;">Loading reference...</p>
@@ -1868,7 +1969,11 @@
     align-items: center;
   }
   .sh-action-row.wrap { flex-wrap: wrap; }
-  .sh-action-row.right { justify-content: flex-end; padding: 0.5rem 0; }
+  .sh-action-row.right {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    padding: 0.5rem 0;
+  }
 
   /* === HELP / DANGER TEXT === */
   .sh-help-text {
@@ -2318,6 +2423,18 @@
   .config-editor-wrap .sh-editor {
     min-height: inherit;
     resize: vertical;
+  }
+  .config-help-modal {
+    width: min(58rem, calc(100vw - 1rem));
+    max-height: calc(100dvh - 1rem);
+  }
+  .config-help-body {
+    max-height: none;
+    overflow-x: hidden;
+  }
+  .config-help-body p,
+  .config-help-body code {
+    overflow-wrap: anywhere;
   }
   .sh-toggle-row input[type="checkbox"]:disabled {
     opacity: 0.3;

@@ -146,6 +146,7 @@ pub fn run() {
             // Commands from modules::process
             process::start_node,
             process::stop_node,
+            process::stop_node_and_wait,
             process::restart_node_with_wallet,
             process::set_network_mode,
             process::restart_app,

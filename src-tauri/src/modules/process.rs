@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 // Import local modules
 use crate::modules::commands::run_cli;
 use crate::modules::files::{
-    config_path, data_dir, ensure_config, load_app_settings, load_app_settings_impl,
+    config_path, data_dir, ensure_config, load_app_settings, load_app_settings_impl, parse_config,
     save_app_settings, save_app_settings_impl,
 };
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
@@ -53,6 +53,179 @@ pub(crate) fn daemon_process_running() -> bool {
     {
         false
     }
+}
+
+#[cfg(target_os = "linux")]
+fn running_daemon_contexts() -> Vec<(Option<PathBuf>, Option<PathBuf>)> {
+    let mut contexts = Vec::new();
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return contexts;
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let pid = file_name.to_string_lossy();
+        if !pid.chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(bytes) = fs::read(cmdline_path) else {
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+
+        let args: Vec<String> = bytes
+            .split(|b| *b == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).to_string())
+            .collect();
+        if args.is_empty() {
+            continue;
+        }
+
+        let exe_name = Path::new(&args[0])
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if exe_name != "hemp0xd" && exe_name != "hemp0xd.exe" {
+            continue;
+        }
+
+        let mut conf = None;
+        let mut datadir = None;
+        let mut iter = args.iter().peekable();
+        while let Some(arg) = iter.next() {
+            if let Some(value) = arg.strip_prefix("-conf=") {
+                conf = Some(PathBuf::from(value));
+            } else if arg == "-conf" {
+                if let Some(value) = iter.peek() {
+                    conf = Some(PathBuf::from(value.as_str()));
+                }
+            } else if let Some(value) = arg.strip_prefix("-datadir=") {
+                datadir = Some(PathBuf::from(value));
+            } else if arg == "-datadir" {
+                if let Some(value) = iter.peek() {
+                    datadir = Some(PathBuf::from(value.as_str()));
+                }
+            }
+        }
+
+        contexts.push((conf, datadir));
+    }
+
+    contexts
+}
+
+#[cfg(not(target_os = "linux"))]
+fn running_daemon_contexts() -> Vec<(Option<PathBuf>, Option<PathBuf>)> {
+    Vec::new()
+}
+
+fn run_cli_for_context(conf: &Path, datadir: &Path, args: &[String]) -> Result<String, String> {
+    let custom_bin_dir = load_app_settings_impl()
+        .ok()
+        .and_then(|s| s.custom_core_binary_dir);
+    let cli = if let Some(ref d) = custom_bin_dir {
+        resolve_bin_with_override("hemp0x-cli", Some(d))
+    } else {
+        resolve_bin("hemp0x-cli")
+    };
+    let cli_path = PathBuf::from(&cli);
+    if !cli_path.exists() {
+        return Err(format!("CLI not found at {}", cli));
+    }
+
+    let config = parse_config(conf)?;
+    let is_regtest = config.get("regtest").map(|v| v == "1").unwrap_or(false);
+    let is_testnet = config.get("testnet").map(|v| v == "1").unwrap_or(false);
+
+    let mut cmd = Command::new(&cli);
+    if let Some(parent) = cli_path.parent() {
+        cmd.current_dir(parent);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    if is_regtest {
+        cmd.arg("-regtest");
+    } else if is_testnet {
+        cmd.arg("-testnet");
+    }
+
+    let output = cmd
+        .arg(format!("-conf={}", conf.to_string_lossy()))
+        .arg(format!("-datadir={}", datadir.to_string_lossy()))
+        .args(args.iter().map(|v| v.as_str()))
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "CLI error ({}): {} {}",
+            output.status,
+            err.trim(),
+            out.trim()
+        )
+        .trim()
+        .to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
+    if !daemon_process_running() {
+        return Ok(());
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut last_stop_status = String::from("stop not requested yet");
+    let mut next_stop_attempt = Instant::now();
+
+    while daemon_process_running() && Instant::now() < deadline {
+        if Instant::now() >= next_stop_attempt {
+            match run_cli(&[String::from("stop")]) {
+                Ok(_) => last_stop_status = "stop requested for active data directory".to_string(),
+                Err(e) => {
+                    last_stop_status = e;
+                    for (conf, datadir) in running_daemon_contexts() {
+                        let (Some(conf), Some(datadir)) = (conf, datadir) else {
+                            continue;
+                        };
+                        match run_cli_for_context(&conf, &datadir, &[String::from("stop")]) {
+                            Ok(_) => {
+                                last_stop_status = format!(
+                                    "stop requested for running data directory {}",
+                                    datadir.to_string_lossy()
+                                );
+                            }
+                            Err(err) => {
+                                last_stop_status = format!("{last_stop_status}; {err}");
+                            }
+                        }
+                    }
+                }
+            }
+            next_stop_attempt = Instant::now() + Duration::from_secs(5);
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    if daemon_process_running() {
+        return Err(format!(
+            "CORE_LOCK_BUSY::Core is still stopping after {} seconds. Last stop status: {}",
+            timeout.as_secs(),
+            last_stop_status
+        ));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -317,6 +490,14 @@ pub fn stop_node() -> Result<(), String> {
         Err(e) if !daemon_process_running() => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+#[tauri::command]
+pub async fn stop_node_and_wait(timeout_ms: Option<u64>) -> Result<(), String> {
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(90_000).max(1_000));
+    tauri::async_runtime::spawn_blocking(move || stop_node_and_wait_blocking(timeout))
+        .await
+        .map_err(|e| format!("Stop node task failed: {e}"))?
 }
 
 #[tauri::command]

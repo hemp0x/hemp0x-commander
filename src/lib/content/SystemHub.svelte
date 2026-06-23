@@ -183,6 +183,41 @@
   let dataDirModalOpen = false;
   let dataDirModalTarget = "";
 
+  async function stopCoreForDataDirSwitch() {
+    processingMessage = "Stopping Core before switching data directories...";
+    await core.invoke("stop_node_and_wait", { timeoutMs: 90000 });
+    await new Promise((r) => setTimeout(r, 750));
+  }
+
+  async function startCoreAfterDataDirSwitch() {
+    processingMessage = "Starting Core from selected data directory...";
+    await core.invoke("start_node");
+    processingMessage = "Waiting for Core RPC...";
+    const readiness = await core.invoke("wait_for_daemon_ready", {
+      timeoutMs: 120000,
+    });
+    if (!readiness.ready) {
+      throw new Error(readiness.rpc_error || "Core did not become ready from the selected data directory.");
+    }
+  }
+
+  async function activateSelectedDataDir(path, successMessage) {
+    chooseDataDirInProgress = true;
+    isProcessing = true;
+    try {
+      await stopCoreForDataDirSwitch();
+      processingMessage = "Activating selected data directory...";
+      dataFolderInfo = await core.invoke("set_core_data_dir", { path });
+      await startCoreAfterDataDirSwitch();
+      dataFolderInfo = await core.invoke("get_data_folder_info");
+      dispatchToast(successMessage, "success");
+    } catch (err) {
+      dispatchToast(`Data directory switch failed: ${err}`, "error");
+    }
+    isProcessing = false;
+    chooseDataDirInProgress = false;
+  }
+
   async function chooseDataFolder() {
     if (chooseDataDirInProgress) return;
     const selected = await open({ title: "Select Core Data Directory", directory: true, multiple: false });
@@ -195,15 +230,7 @@
       return;
     }
 
-    // Fresh / empty — just set
-    chooseDataDirInProgress = true;
-    try {
-      dataFolderInfo = await core.invoke("set_core_data_dir", { path: selected });
-      dispatchToast("Core data directory set.", "success");
-    } catch (err) {
-      dispatchToast(`Failed: ${err}`, "error");
-    }
-    chooseDataDirInProgress = false;
+    await activateSelectedDataDir(selected, "Core data directory set and Core restarted.");
   }
 
   function cancelDataDirModal() {
@@ -217,33 +244,15 @@
     dataDirModalTarget = "";
 
     if (action === "point") {
-      chooseDataDirInProgress = true;
-      try {
-        dataFolderInfo = await core.invoke("set_core_data_dir", { path: target });
-        dispatchToast("Core data directory set to selected folder.", "success");
-      } catch (err) {
-        dispatchToast(`Failed: ${err}`, "error");
-      }
-      chooseDataDirInProgress = false;
+      await activateSelectedDataDir(target, "Core data directory set to selected folder and Core restarted.");
       return;
     }
 
     if (action === "copy") {
+      chooseDataDirInProgress = true;
       isProcessing = true;
       try {
-        processingMessage = "Stopping daemon...";
-        await core.invoke("stop_node");
-        for (let i = 0; i < 20; i++) {
-          await new Promise((r) => setTimeout(r, 1000));
-          try {
-            const info = await core.invoke("get_data_folder_info");
-            if (!info.lock_exists) break;
-            processingMessage = `Waiting for daemon to stop... (${20 - i}s)`;
-          } catch {
-            break;
-          }
-        }
-        await new Promise((r) => setTimeout(r, 1000));
+        await stopCoreForDataDirSwitch();
 
         processingMessage = "Copying data to new location...";
         await core.invoke("copy_core_data_dir_to", { targetPath: target });
@@ -251,13 +260,9 @@
         processingMessage = "Activating new data directory...";
         dataFolderInfo = await core.invoke("set_core_data_dir", { path: target });
 
-        processingMessage = "Restarting daemon...";
-        try {
-          await core.invoke("start_node");
-          dispatchToast("Data copied and new directory activated. Old data was not deleted.", "success");
-        } catch {
-          dispatchToast("Data copied and activated. Please restart the daemon manually.", "info");
-        }
+        await startCoreAfterDataDirSwitch();
+        dataFolderInfo = await core.invoke("get_data_folder_info");
+        dispatchToast("Data copied and new directory activated. Old data was not deleted.", "success");
       } catch (err) {
         dispatchToast(`Copy failed: ${err}`, "error");
       }
@@ -267,12 +272,20 @@
   }
 
   async function resetToDefaultDir() {
+    chooseDataDirInProgress = true;
+    isProcessing = true;
     try {
+      await stopCoreForDataDirSwitch();
+      processingMessage = "Restoring default data directory...";
       dataFolderInfo = await core.invoke("reset_core_data_dir");
-      dispatchToast("Data directory reset to default.", "success");
+      await startCoreAfterDataDirSwitch();
+      dataFolderInfo = await core.invoke("get_data_folder_info");
+      dispatchToast("Data directory reset to default and Core restarted.", "success");
     } catch (err) {
       dispatchToast(`Failed: ${err}`, "error");
     }
+    isProcessing = false;
+    chooseDataDirInProgress = false;
   }
 
   // Config tab
@@ -949,7 +962,7 @@
       </nav>
       <HelpHitbox title="System Hub">
         <p><strong>Overview</strong> — App version, binary status, daemon settings, and Core software management.</p>
-        <p><strong>Data</strong> — Manage the Core data directory. Commander settings live inside the active data folder. Use "Choose Data Folder" to change location. If data exists, you can copy it to the new location or start fresh.</p>
+        <p><strong>Data</strong> — Manage the Core data directory. Commander settings live inside the active data folder. Use "Choose Data Folder" to change location. If data exists, you can copy it to the new location or use the selected folder as-is.</p>
         <p><strong>Config</strong> — Edit hemp.conf directly. A default config can be created if none exists.</p>
         <p><strong>Network</strong> — Peer ban list, ping / port diagnostics, and network mode switching.</p>
         <p><strong>Logs</strong> — View and download the daemon debug.log.</p>
@@ -1169,7 +1182,7 @@
               <div class="sh-card-body">
                 <p class="sh-help-text">
                   The active data directory is where the blockchain, wallet, and Commander settings are stored.
-                  Use <strong>Choose Data Folder</strong> to change the active location. If data already exists, you will be asked whether to copy it or start fresh.
+                  Use <strong>Choose Data Folder</strong> to change the active location. Commander stops Core before switching folders, then restarts Core from the selected location.
                 </p>
                 <div class="sh-action-row wrap" style="margin-top: 0.75rem;">
                   <button class="sh-btn" on:click={chooseDataFolder} disabled={chooseDataDirInProgress || repairActive}>CHOOSE DATA FOLDER</button>
@@ -1626,8 +1639,8 @@
           <button class="sh-btn sh-btn-ghost" on:click={cancelDataDirModal}>CANCEL</button>
         </div>
         <p class="sh-help-text" style="margin-top: 0.75rem; font-size: 0.7rem; color: #666;">
-          <strong>Copy data here</strong> stops Core, copies your current data into the selected folder, then activates it.<br>
-          <strong>Use selected folder</strong> points Commander at that folder without copying. If it already contains Hemp0x Core data, Core will use it; if it is empty, Core starts there as a fresh data directory.
+          <strong>Copy data here</strong> stops Core, copies your current data into the selected folder, activates it, then restarts Core from that folder.<br>
+          <strong>Use selected folder</strong> stops Core, points Commander at that folder without copying, then restarts Core there. If it already contains Hemp0x Core data, Core will use it; if it is empty, Core starts there as a fresh data directory.
         </p>
       </div>
     </div>

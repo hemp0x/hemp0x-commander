@@ -2700,8 +2700,14 @@ fn get_daemon_repair_status_blocking() -> Result<RepairStatus, String> {
         .map(|h| h.to_lowercase().contains("syncing"))
         .unwrap_or(false);
 
+    let chain_catchup_ongoing = match (blocks, headers) {
+        (Some(blocks), Some(headers)) => headers > blocks,
+        _ => verification_progress
+            .map(|progress| progress < 0.999_999)
+            .unwrap_or(false),
+    };
     let rpc_healthy = rpc_online && blocks.is_some() && headers.is_some();
-    let repair_complete = rpc_healthy && !repair_work_ongoing;
+    let repair_complete = rpc_healthy && !repair_work_ongoing && !chain_catchup_ongoing;
 
     if repair_complete && has_active {
         settings.active_repair_mode = None;
@@ -2722,7 +2728,7 @@ fn get_daemon_repair_status_blocking() -> Result<RepairStatus, String> {
         }
     } else if repair_complete {
         "Repair complete / node online".to_string()
-    } else if rpc_online && (repair_work_ongoing || sync_ongoing) {
+    } else if rpc_online && (repair_work_ongoing || sync_ongoing || chain_catchup_ongoing) {
         "RPC online, syncing".to_string()
     } else if rpc_online && !repair_work_ongoing && has_active {
         "Node online; repair/sync status available".to_string()

@@ -2083,7 +2083,13 @@ pub fn get_binary_status() -> Result<BinaryStatus, String> {
 // See SystemHub.svelte for the placeholder UI.
 
 #[tauri::command]
-pub fn extract_snapshot(archive_path: String) -> Result<String, String> {
+pub async fn extract_snapshot(archive_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || extract_snapshot_blocking(archive_path))
+        .await
+        .map_err(|error| format!("Snapshot extraction task failed: {error}"))?
+}
+
+fn extract_snapshot_blocking(archive_path: String) -> Result<String, String> {
     let archive = Path::new(&archive_path);
     if !archive.exists() {
         return Err("Snapshot file not found".to_string());

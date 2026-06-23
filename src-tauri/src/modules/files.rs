@@ -2688,6 +2688,15 @@ fn get_daemon_repair_status_blocking() -> Result<RepairStatus, String> {
         || pending_mode.as_deref() == Some("reindex-chainstate");
     let has_active = active_mode.as_deref() == Some("reindex")
         || active_mode.as_deref() == Some("reindex-chainstate");
+    let shutdown_seen = latest_log_line
+        .as_ref()
+        .map(|line| {
+            let lower = line.to_lowercase();
+            lower.contains("shutdown")
+                || lower.contains("shutting down")
+                || lower.contains("scheduler thread interrupt")
+        })
+        .unwrap_or(false);
     let repair_mode = if has_active {
         active_mode.clone()
     } else {
@@ -2724,7 +2733,9 @@ fn get_daemon_repair_status_blocking() -> Result<RepairStatus, String> {
     let is_repair_active = has_active || has_pending;
     let is_startup_repair = is_repair_active && !rpc_online;
 
-    let phase = if is_startup_repair {
+    let phase = if is_repair_active && shutdown_seen {
+        "Stopping daemon; repair will resume on next start".to_string()
+    } else if is_startup_repair {
         if lock_exists {
             "Starting daemon with repair flag".to_string()
         } else {

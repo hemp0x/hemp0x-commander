@@ -138,11 +138,19 @@
   $: repairActive = repairStatus?.active === true;
   $: repairModeLabel =
     repairStatus?.mode === "reindex-chainstate" ? "CHAINSTATE REINDEX" : "REINDEXING";
+  $: repairDisplayPhase =
+    daemonOperation === "stopping"
+      ? "Stopping daemon; repair will resume on next start"
+      : daemonOperation === "starting" && repairActive
+        ? "Starting daemon with repair flag"
+        : repairStatus?.phase || repairModeLabel;
   $: repairProgress =
     typeof repairStatus?.verification_progress === "number"
       ? Math.max(0, Math.min(100, repairStatus.verification_progress * 100))
       : null;
-  $: syncLabel = repairActive
+  $: syncLabel = daemonOperation === "stopping"
+    ? "STOPPING"
+    : repairActive
     ? repairModeLabel
     : nodeInfo.synced
       ? "SYNCED"
@@ -1334,7 +1342,7 @@
               {#if repairActive}
                 <div class="repair-progress" aria-live="polite">
                   <div class="repair-progress-head">
-                    <span>{repairStatus.phase || repairModeLabel}</span>
+                    <span>{repairDisplayPhase}</span>
                     {#if repairProgress != null}
                       <span>{repairProgress.toFixed(2)}%</span>
                     {/if}

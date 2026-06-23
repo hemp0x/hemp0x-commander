@@ -240,8 +240,14 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
         resolve_bin("hemp0xd")
     };
 
-    let repair_flag: Option<String> = match settings.pending_repair_mode.as_deref() {
-        Some("reindex") | Some("reindex-chainstate") => settings.pending_repair_mode.clone(),
+    let repair_flag: Option<String> = match (
+        settings.pending_repair_mode.as_deref(),
+        settings.active_repair_mode.as_deref(),
+    ) {
+        (Some("reindex"), _) | (_, Some("reindex")) => Some("reindex".to_string()),
+        (Some("reindex-chainstate"), _) | (_, Some("reindex-chainstate")) => {
+            Some("reindex-chainstate".to_string())
+        }
         _ => None,
     };
 
@@ -291,6 +297,9 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
     if repair_flag.is_some() {
         let mut updated = settings.clone();
         updated.pending_repair_mode = None;
+        if updated.active_repair_mode.is_none() {
+            updated.active_repair_mode = repair_flag;
+        }
         save_app_settings(updated)?;
     }
 

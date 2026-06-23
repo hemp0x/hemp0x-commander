@@ -1358,16 +1358,26 @@
                       {#each guidedPreview.reindex_required as r}
                         <div class="sh-preview-reindex-item">{r}</div>
                       {/each}
-                      <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">Use System > Repair to schedule a reindex after applying. Back up wallet.dat first.</p>
+                      {#if guidedPreview.reindex_chainstate_required && guidedPreview.reindex_chainstate_required.length > 0}
+                        <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">
+                          Full reindex covers the chainstate/index rebuild too. Commander will ask for confirmation, then restart Core and begin one rebuild pass after applying.
+                        </p>
+                      {:else}
+                        <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">
+                          Commander will ask for confirmation, then restart Core and begin the reindex after applying.
+                        </p>
+                      {/if}
                     </div>
                   {/if}
-                  {#if guidedPreview.reindex_chainstate_required && guidedPreview.reindex_chainstate_required.length > 0}
+                  {#if (!guidedPreview.reindex_required || guidedPreview.reindex_required.length === 0) && guidedPreview.reindex_chainstate_required && guidedPreview.reindex_chainstate_required.length > 0}
                     <div class="sh-preview-section sh-preview-chainstate">
                       <h4 class="sh-preview-label">REINDEX-CHAINSTATE REQUIRED</h4>
                       {#each guidedPreview.reindex_chainstate_required as r}
                         <div class="sh-preview-chainstate-item">{r}</div>
                       {/each}
-                      <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">Use System > Repair to schedule a reindex-chainstate. Faster than full reindex.</p>
+                      <p class="sh-help-text" style="font-size: 0.7rem; margin-top: 0.35rem;">
+                        Commander will ask for confirmation, then restart Core and begin the chainstate rebuild after applying.
+                      </p>
                     </div>
                   {/if}
                   {#if guidedPreview.restart_required}

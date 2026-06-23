@@ -86,6 +86,8 @@
     let unlockPassword = "";
     let unlocking = false;
     let unlockError = "";
+    let unlockBody = "Your wallet is locked. Commander will unlock it for 5 minutes to continue.";
+    let unlockConfirmLabel = "UNLOCK AND CONTINUE";
     /** @type {(() => void) | null} */
     let pendingRetryFn = null;
 
@@ -137,6 +139,10 @@
         if (!address || !amount)
             return (status = "Address and amount required.");
         try { await ensureNodeSyncedForBroadcast(); } catch (e) { status = String(e); return; }
+        if (walletStatus === "LOCKED") {
+            requestWalletUnlock(handleSend, "preview");
+            return;
+        }
 
         if (isAdvanced) {
             await buildAdvancedPreview();
@@ -364,7 +370,7 @@
         } catch (err) {
             if (isWalletUnlockError(err)) {
                 status = "";
-                requestWalletUnlock(executeSend);
+                requestWalletUnlock(executeSend, "broadcast");
                 return;
             }
             status = `Error: ${err}`;
@@ -413,10 +419,17 @@
             || /wallet.*locked|passphrase|unlock/i.test(text);
     }
 
-    function requestWalletUnlock(/** @type {(() => void) | null} */ retryFn) {
+    function requestWalletUnlock(
+        /** @type {(() => void) | null} */ retryFn,
+        /** @type {"preview" | "broadcast"} */ mode = "broadcast",
+    ) {
         unlockPassword = "";
         unlockError = "";
         pendingRetryFn = retryFn;
+        unlockBody = mode === "preview"
+            ? "Your wallet is locked. Commander will unlock it for 5 minutes so you can preview and send this transaction."
+            : "Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction.";
+        unlockConfirmLabel = mode === "preview" ? "UNLOCK AND CONTINUE" : "UNLOCK AND BROADCAST";
         showUnlockModal = true;
     }
 
@@ -428,6 +441,7 @@
             await core.invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
             unlockPassword = "";
             showUnlockModal = false;
+            await refreshWalletStatus();
             const fn = pendingRetryFn;
             pendingRetryFn = null;
             if (fn) await fn();
@@ -995,7 +1009,7 @@
         } catch (err) {
             if (isWalletUnlockError(err)) {
                 status = "";
-                requestWalletUnlock(executeAdvancedSend);
+                requestWalletUnlock(executeAdvancedSend, "broadcast");
                 return;
             }
             status = `Error: ${err}`;
@@ -1201,8 +1215,8 @@
         <footer class="slab-footer">
             <button
                 class="btn-send-hero"
-                class:disabled={!isNodeReady || walletStatus === "LOCKED" || previewing}
-                disabled={!isNodeReady || walletStatus === "LOCKED" || previewing}
+                class:disabled={!isNodeReady || previewing}
+                disabled={!isNodeReady || previewing}
                 on:click={handleSend}
             >
                 <span class="bracket">{`{`}</span>
@@ -1211,7 +1225,7 @@
                     : !isNodeReady
                     ? "NOT CONNECTED"
                     : walletStatus === "LOCKED"
-                      ? "LOCKED"
+                      ? "UNLOCK TO SEND"
                       : isAdvanced
                         ? "PREVIEW ADVANCED TX"
                         : asset === "HEMP"
@@ -1241,8 +1255,8 @@
         <div class="modal-staged compact" role="document" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header">
                 <h3 id="confirm-title">
-                    <span class="warning-icon">⚠️</span>
-                    CONFIRM TRANSACTION
+                    <span class="warning-icon">✓</span>
+                    REVIEW TRANSACTION
                 </h3>
             </div>
 
@@ -1309,19 +1323,12 @@
                         </div>
                     {/each}
                 {/if}
-                <div class="warning-box">
-                    <span class="warning-title">&#9888; IMPORTANT WARNING</span>
-                    <p>
-                        Transactions on the blockchain are <strong
-                            >IRREVERSIBLE</strong
-                        >.
-                    </p>
-                    <p>Only send to addresses you trust and have verified.</p>
-                    <p>
-                        Sending to the wrong address will result in <strong
-                            >permanent loss</strong
-                        > of funds.
-                    </p>
+                <div class="send-review-note">
+                    <span class="review-dot">!</span>
+                    <div>
+                        <strong>Check the address before broadcasting.</strong>
+                        <p>Blockchain transactions cannot be reversed after they are accepted by the network.</p>
+                    </div>
                 </div>
             </div>
 
@@ -1347,8 +1354,8 @@
     {unlocking}
     error={unlockError}
     title="UNLOCK WALLET"
-    body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction."
-    confirmLabel="UNLOCK AND BROADCAST"
+    body={unlockBody}
+    confirmLabel={unlockConfirmLabel}
     on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; pendingRetryFn = null; }}
     on:confirm={unlockAndRetry}
 />
@@ -1911,15 +1918,6 @@
         letter-spacing: 1px;
         margin-bottom: 0.4rem;
     }
-    .warning-box p {
-        margin: 0.25rem 0;
-        color: #ccc;
-        font-size: 0.75rem;
-        line-height: 1.4;
-    }
-    .warning-box strong {
-        color: #ff6666;
-    }
     .info-box {
         background: rgba(0, 255, 200, 0.08);
         border: 1px solid rgba(0, 255, 200, 0.25);
@@ -1940,6 +1938,44 @@
         color: #aaa;
         font-size: 0.72rem;
         line-height: 1.4;
+    }
+    .send-review-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.65rem;
+        margin-top: 0.35rem;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid rgba(255, 190, 80, 0.28);
+        border-radius: 6px;
+        background: rgba(255, 190, 80, 0.07);
+        color: #d7d7d7;
+    }
+    .review-dot {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.2rem;
+        height: 1.2rem;
+        border: 1px solid rgba(255, 190, 80, 0.55);
+        border-radius: 999px;
+        color: #ffbd45;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 800;
+        flex: 0 0 auto;
+    }
+    .send-review-note strong {
+        display: block;
+        color: #ffbd45;
+        font-size: 0.76rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    .send-review-note p {
+        margin: 0.2rem 0 0;
+        color: #aaa;
+        font-size: 0.72rem;
+        line-height: 1.35;
     }
 
     /* --- UTXO MODAL --- */

@@ -1739,10 +1739,7 @@ pub fn preview_send_hemp(
         }
     };
 
-    let fee_estimate: Option<String> = None;
-    let fee_warning = Some(String::from(
-    "Fee estimation is not yet supported; final fee is determined by the network at broadcast time",
-  ));
+    let (fee_estimate, fee_warning) = estimate_standard_send_fee(parsed_amount, &mut warnings);
 
     if let Ok(bal) = available_balance.parse::<f64>() {
         if parsed_amount > bal {
@@ -1775,6 +1772,98 @@ pub fn preview_send_hemp(
         summary,
         validated: true,
     })
+}
+
+fn estimate_standard_send_fee(
+    amount: f64,
+    warnings: &mut Vec<String>,
+) -> (Option<String>, Option<String>) {
+    let fee_rate = estimate_smartfee_sat_per_byte().unwrap_or(DEFAULT_FEE_RATE_SAT_PER_BYTE);
+    let list_raw = run_active_wallet_cli(&[String::from("listunspent")]);
+
+    let mut spendable_amounts = Vec::new();
+    if let Ok(raw) = list_raw {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(items) = value.as_array() {
+                for item in items {
+                    let spendable = item
+                        .get("spendable")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let safe = item.get("safe").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let carries_asset = item
+                        .get("asset")
+                        .and_then(|v| v.as_str())
+                        .map(|asset| asset != "HEMP")
+                        .unwrap_or(false)
+                        || item
+                            .get("asset_amount")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0)
+                            > 0.0;
+                    if !spendable || !safe || carries_asset {
+                        continue;
+                    }
+                    if let Some(value) = item.get("amount").and_then(|v| v.as_f64()) {
+                        if value.is_finite() && value > 0.0 {
+                            spendable_amounts.push(value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Prefer larger inputs for a user-facing estimate. Core's exact coin
+    // selection can differ, but this avoids overstating fees for fragmented
+    // wallets while still accounting for multi-input sends.
+    spendable_amounts.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let mut input_count = 0usize;
+    let mut input_total = 0.0f64;
+    let mut fee = estimate_fee_from_bytes(estimate_legacy_tx_bytes(1, 2), fee_rate);
+
+    for value in spendable_amounts {
+        input_count += 1;
+        input_total += value;
+        fee = estimate_fee_from_bytes(estimate_legacy_tx_bytes(input_count, 2), fee_rate);
+        if input_total >= amount + fee {
+            break;
+        }
+    }
+
+    if input_count == 0 {
+        let fallback_fee = estimate_fee_from_bytes(estimate_legacy_tx_bytes(1, 2), fee_rate);
+        return (
+            Some(format!("{:.8}", fallback_fee)),
+            Some(
+                "Estimated from a standard one-input transaction. Final fee may vary at broadcast."
+                    .to_string(),
+            ),
+        );
+    }
+
+    if input_total < amount + fee {
+        warnings
+            .push("Available spendable UTXOs may be insufficient for amount plus fee.".to_string());
+    }
+
+    if estimate_legacy_tx_bytes(input_count, 2) > STANDARD_MAX_TX_BYTES {
+        warnings.push("Estimated transaction size may exceed standard relay policy. Use Advanced coin control or consolidate first.".to_string());
+    }
+
+    let warning = if input_count > 1 {
+        Some(format!(
+            "Estimated from {} wallet inputs at {} sat/byte. Final fee may vary slightly when Core selects coins.",
+            input_count, fee_rate
+        ))
+    } else {
+        Some(format!(
+            "Estimated at {} sat/byte. Final fee may vary slightly when Core broadcasts.",
+            fee_rate
+        ))
+    };
+
+    (Some(format!("{:.8}", fee)), warning)
 }
 
 fn validate_send_preview_fields(

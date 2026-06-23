@@ -2583,15 +2583,33 @@ fn get_binary_status_with_override(override_dir: Option<&str>) -> Result<BinaryS
 }
 
 fn read_log_recent_lines(path: &Path, max_lines: usize) -> Vec<String> {
-    if !path.exists() {
+    const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
+    if !path.exists() || max_lines == 0 {
         return Vec::new();
     }
-    if let Ok(content) = fs::read_to_string(path) {
-        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-        let start = lines.len().saturating_sub(max_lines);
-        return lines[start..].to_vec();
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+    let file_len = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return Vec::new(),
+    };
+    let read_start = file_len.saturating_sub(MAX_LOG_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(read_start)).is_err() {
+        return Vec::new();
     }
-    Vec::new()
+    let mut bytes = Vec::with_capacity((file_len - read_start) as usize);
+    if file.read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let content = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    if read_start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].to_vec()
 }
 
 fn parse_log_hint(lines: &[String]) -> Option<String> {
@@ -2623,7 +2641,13 @@ fn parse_log_hint(lines: &[String]) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn get_daemon_repair_status() -> Result<RepairStatus, String> {
+pub async fn get_daemon_repair_status() -> Result<RepairStatus, String> {
+    tauri::async_runtime::spawn_blocking(get_daemon_repair_status_blocking)
+        .await
+        .map_err(|error| format!("Repair status task failed: {error}"))?
+}
+
+fn get_daemon_repair_status_blocking() -> Result<RepairStatus, String> {
     let mut settings = load_app_settings_impl()?;
     let pending_mode = settings.pending_repair_mode.clone();
     let active_mode = settings.active_repair_mode.clone();
@@ -2634,32 +2658,17 @@ pub fn get_daemon_repair_status() -> Result<RepairStatus, String> {
         .unwrap_or(false);
     let debug_log_path = dir.as_ref().map(|d| d.join("debug.log"));
 
-    let rpc_online = {
-        use std::net::TcpStream;
-        use std::time::Duration;
-        TcpStream::connect_timeout(
-            &"127.0.0.1:42068".parse().unwrap(),
-            Duration::from_millis(500),
-        )
-        .is_ok()
-    };
-
-    let (blocks, headers, verification_progress) = if rpc_online {
-        use crate::modules::rpc::rpc_context;
-        if let Ok(ctx) = rpc_context() {
-            if let Ok(data) = ctx.call("getblockchaininfo", &[]) {
-                let b = data["blocks"].as_u64();
-                let h = data["headers"].as_u64();
-                let vp = data["verificationprogress"].as_f64();
-                (b, h, vp)
-            } else {
-                (None, None, None)
-            }
-        } else {
-            (None, None, None)
-        }
-    } else {
-        (None, None, None)
+    let blockchain_info = crate::modules::rpc::rpc_context()
+        .ok()
+        .and_then(|ctx| ctx.call("getblockchaininfo", &[]).ok());
+    let rpc_online = blockchain_info.is_some();
+    let (blocks, headers, verification_progress) = match blockchain_info {
+        Some(data) => (
+            data["blocks"].as_u64(),
+            data["headers"].as_u64(),
+            data["verificationprogress"].as_f64(),
+        ),
+        None => (None, None, None),
     };
 
     let log_lines = debug_log_path

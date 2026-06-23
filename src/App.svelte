@@ -100,6 +100,8 @@
   /** @type {{ node: NodeInfo, wallet: WalletInfo, tx: RecentTx[] } | null} */
   let lastKnownDashboard = null; // preserve last good data across transient errors
   let dashboardFailCount = 0;
+  let repairStatus = null;
+  let repairStatusRefreshing = false;
 
   // Vault status
   let vaultLocked = true;
@@ -133,11 +135,20 @@
   $: coreNextVersion = bundledDaemon.base_version
     ? `v${bundledDaemon.base_version}${bundledDaemon.commit_hash ? `-${bundledDaemon.commit_hash}` : ""}`
     : "--";
-  $: syncLabel = nodeInfo.synced
-    ? "SYNCED"
-    : nodeInfo.state === "RUNNING"
-      ? "SYNCING"
-      : "--";
+  $: repairActive = repairStatus?.active === true;
+  $: repairModeLabel =
+    repairStatus?.mode === "reindex-chainstate" ? "CHAINSTATE REINDEX" : "REINDEXING";
+  $: repairProgress =
+    typeof repairStatus?.verification_progress === "number"
+      ? Math.max(0, Math.min(100, repairStatus.verification_progress * 100))
+      : null;
+  $: syncLabel = repairActive
+    ? repairModeLabel
+    : nodeInfo.synced
+      ? "SYNCED"
+      : nodeInfo.state === "RUNNING"
+        ? "SYNCING"
+        : "--";
   $: conflictCapabilities = conflictRuntimeStatus?.identity?.capabilities;
   $: conflictCapabilityLabels = conflictCapabilities
     ? [
@@ -531,6 +542,18 @@
       }
     } finally {
       isRefreshing = false;
+    }
+  }
+
+  async function refreshRepairStatus() {
+    if (!tauriReady || repairStatusRefreshing) return;
+    repairStatusRefreshing = true;
+    try {
+      repairStatus = await core.invoke("get_daemon_repair_status");
+    } catch {
+      // Keep the last known repair state across transient startup failures.
+    } finally {
+      repairStatusRefreshing = false;
     }
   }
 
@@ -1086,18 +1109,21 @@
 
     // Adaptive Polling Logic for Performance
     const performPoll = async () => {
+      await refreshRepairStatus();
       if (Date.now() < coreBusyUntilMs) {
-        timer = setTimeout(performPoll, 5000);
+        timer = setTimeout(performPoll, repairActive ? 3000 : 5000);
         return;
       }
       if (conflictResolved) {
-        await refreshDashboard();
+        if (!repairActive || repairStatus?.rpc_online) {
+          await refreshDashboard();
+        }
         await refreshStratumStatus();
         await refreshRpcAuthStatus();
         await refreshVaultStatus();
       }
 
-      let delay = 5000;
+      let delay = repairActive ? 3000 : 5000;
       if (systemStatus === "yellow") delay = 8000;
       else if (systemStatus === "red") delay = 5000;
 
@@ -1285,9 +1311,9 @@
                   <span class="label">SYNC</span>
                   <span
                     class="mono stat-state"
-                    class:state-ok={nodeInfo.synced}
-                    class:state-warn={!nodeInfo.synced &&
-                      nodeInfo.state === "RUNNING"}
+                    class:state-ok={nodeInfo.synced && !repairActive}
+                    class:state-warn={repairActive || (!nodeInfo.synced &&
+                      nodeInfo.state === "RUNNING")}
                   >
                     {syncLabel}
                   </span>
@@ -1305,6 +1331,27 @@
                   <span class="mono">{nodeInfo.diff}</span>
                 </div>
               </div>
+              {#if repairActive}
+                <div class="repair-progress" aria-live="polite">
+                  <div class="repair-progress-head">
+                    <span>{repairStatus.phase || repairModeLabel}</span>
+                    {#if repairProgress != null}
+                      <span>{repairProgress.toFixed(2)}%</span>
+                    {/if}
+                  </div>
+                  <div class="repair-progress-track">
+                    <span
+                      class:indeterminate={repairProgress == null}
+                      style={repairProgress == null ? "" : `width: ${repairProgress}%`}
+                    ></span>
+                  </div>
+                  {#if repairStatus.blocks != null && repairStatus.headers != null}
+                    <div class="repair-progress-detail">
+                      {repairStatus.blocks} / {repairStatus.headers} blocks
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
 
             <div class="panel-actions">
@@ -2523,6 +2570,47 @@
   .stat-pair .mono {
     font-size: 1rem;
     color: #fff;
+  }
+  .repair-progress {
+    margin-top: 0.55rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid rgba(255, 170, 0, 0.24);
+    border-radius: 5px;
+    background: rgba(255, 170, 0, 0.04);
+  }
+  .repair-progress-head,
+  .repair-progress-detail {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: #d7a64a;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    line-height: 1.35;
+  }
+  .repair-progress-track {
+    height: 4px;
+    margin: 0.42rem 0;
+    overflow: hidden;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .repair-progress-track span {
+    display: block;
+    height: 100%;
+    min-width: 2px;
+    border-radius: inherit;
+    background: #ffaa00;
+    box-shadow: 0 0 8px rgba(255, 170, 0, 0.4);
+    transition: width 0.35s ease;
+  }
+  .repair-progress-track span.indeterminate {
+    width: 35%;
+    animation: repair-progress-slide 1.4s ease-in-out infinite;
+  }
+  @keyframes repair-progress-slide {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(300%); }
   }
 
   /* --- WALLET HERO SMALL --- */

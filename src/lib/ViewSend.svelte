@@ -1077,7 +1077,7 @@
                 <!-- Asset -->
                 <div class="field-col asset-col">
                     <label for="asset-select">Asset</label>
-                    <div class="input-wrapper brackets">
+                    <div class="input-wrapper brackets asset-select-wrapper">
                         <select
                             id="asset-select"
                             bind:value={asset}
@@ -1816,9 +1816,26 @@
         -moz-appearance: none;
         cursor: pointer;
         padding-right: 2rem;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ff41' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-        background-repeat: no-repeat;
-        background-position: right 0.8rem center;
+        background-image: none;
+    }
+    .asset-select-wrapper {
+        position: relative;
+    }
+    .asset-select-wrapper::after {
+        content: "";
+        position: absolute;
+        right: 0.75rem;
+        top: 50%;
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 6px solid var(--color-primary);
+        transform: translateY(-40%);
+        pointer-events: none;
+        filter: drop-shadow(0 0 4px rgba(0, 255, 65, 0.45));
+        opacity: 0.95;
+        z-index: 2;
     }
     select.input-glass option {
         background: #050706;

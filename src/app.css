@@ -121,10 +121,10 @@ button:active {
 }
 
 /* A 1px bottom edge can be rasterized at half intensity when WebView display
-   scaling places it between physical pixels. Command buttons use a 2px
+   scaling places it between physical pixels. Command buttons use a 1.5px
    bottom edge so the frame remains crisp at every window size. */
 button:not(.tab-btn):not(.ts-item) {
-  border-bottom-width: 2px;
+  border-bottom-width: 1.5px;
 }
 
 /* TABS */

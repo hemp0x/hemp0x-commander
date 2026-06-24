@@ -2071,11 +2071,15 @@ pub fn extract_binaries(target_dir: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_binary_status() -> Result<BinaryStatus, String> {
-    let custom_bin_dir = load_app_settings_impl()
-        .ok()
-        .and_then(|s| s.custom_core_binary_dir);
-    get_binary_status_with_override(custom_bin_dir.as_deref())
+pub async fn get_binary_status() -> Result<BinaryStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let custom_bin_dir = load_app_settings_impl()
+            .ok()
+            .and_then(|s| s.custom_core_binary_dir);
+        get_binary_status_with_override(custom_bin_dir.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Binary status task failed: {e}"))?
 }
 
 // SAFETY: replace_binaries removed in Slice 17d.

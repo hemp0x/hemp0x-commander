@@ -870,13 +870,15 @@
   }
 
   // System / Overview
+  let runtimeStatusLoading = true;
   let runtimeStatus = {
-    daemon: { exists: false, path: "--", base_version: null },
-    cli: { exists: false, path: "--", base_version: null },
+    daemon: { exists: null, path: "--", base_version: null },
+    cli: { exists: null, path: "--", base_version: null },
     bundled_core_next_ready: false,
   };
 
   async function loadRuntimeStatus() {
+    runtimeStatusLoading = true;
     try {
       runtimeStatus = await core.invoke("get_runtime_status");
     } catch {
@@ -886,6 +888,7 @@
         bundled_core_next_ready: false,
       };
     }
+    runtimeStatusLoading = false;
   }
 
   async function extractBinaries() {
@@ -988,14 +991,14 @@
                   </div>
                   <div class="sh-metric">
                     <span class="sh-metric-label">HEMP0XD</span>
-                    <span class="sh-metric-value" class:sh-ok={runtimeStatus.daemon.exists}>
-                      {runtimeStatus.daemon.base_version || (runtimeStatus.daemon.exists ? "Found" : "Not Found")}
+                    <span class="sh-metric-value" class:sh-ok={runtimeStatus.daemon.exists === true}>
+                      {runtimeStatusLoading ? "Checking..." : (runtimeStatus.daemon.base_version || (runtimeStatus.daemon.exists ? "Found" : "Not Found"))}
                     </span>
                   </div>
                   <div class="sh-metric">
                     <span class="sh-metric-label">HEMP0X-CLI</span>
-                    <span class="sh-metric-value" class:sh-ok={runtimeStatus.cli.exists}>
-                      {runtimeStatus.cli.base_version || (runtimeStatus.cli.exists ? "Found" : "Not Found")}
+                    <span class="sh-metric-value" class:sh-ok={runtimeStatus.cli.exists === true}>
+                      {runtimeStatusLoading ? "Checking..." : (runtimeStatus.cli.base_version || (runtimeStatus.cli.exists ? "Found" : "Not Found"))}
                     </span>
                   </div>
                 </div>
@@ -1003,11 +1006,11 @@
                 <div class="sh-subtitle">BINARY STATUS</div>
                 <div class="sh-list-row">
                   <span class="sh-mono">hemp0xd</span>
-                  <span class="sh-badge" class:sh-badge-ok={runtimeStatus.daemon.exists}>{runtimeStatus.daemon.exists ? "FOUND" : "MISSING"}</span>
+                  <span class="sh-badge" class:sh-badge-ok={runtimeStatus.daemon.exists === true}>{runtimeStatusLoading ? "CHECKING" : (runtimeStatus.daemon.exists ? "FOUND" : "MISSING")}</span>
                 </div>
                 <div class="sh-list-row">
                   <span class="sh-mono">hemp0x-cli</span>
-                  <span class="sh-badge" class:sh-badge-ok={runtimeStatus.cli.exists}>{runtimeStatus.cli.exists ? "FOUND" : "MISSING"}</span>
+                  <span class="sh-badge" class:sh-badge-ok={runtimeStatus.cli.exists === true}>{runtimeStatusLoading ? "CHECKING" : (runtimeStatus.cli.exists ? "FOUND" : "MISSING")}</span>
                 </div>
               </div>
             </div>

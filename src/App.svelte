@@ -311,7 +311,7 @@
   async function closeStopDaemon() {
     showClosePrompt = false;
     try {
-      await core.invoke("stop_node");
+      await core.invoke("stop_node_and_wait", { timeoutMs: 90000 });
       await core.invoke("release_daemon_ownership");
     } catch {
       // best-effort cleanup
@@ -877,6 +877,8 @@
     addRuntimeNotification("Daemon start requested", "", "info");
     try {
       await core.invoke("start_node");
+      await core.invoke("take_daemon_ownership");
+      daemonRuntime.update((d) => ({ ...d, commanderOwns: true }));
       daemonStatusMessage = "Starting";
       const readiness = await core.invoke("wait_for_daemon_ready", { timeoutMs: 90000 });
       daemonRuntime.update((d) => ({ ...d, readiness }));
@@ -928,7 +930,9 @@
     daemonPollProgress = "";
     addRuntimeNotification("Daemon stop requested", "", "info");
     try {
-      await core.invoke("stop_node");
+      await core.invoke("stop_node_and_wait", { timeoutMs: 90000 });
+      await core.invoke("release_daemon_ownership");
+      daemonRuntime.update((d) => ({ ...d, commanderOwns: false }));
       daemonStatusMessage = "Stopping";
       const stopped = await waitForDaemonStopped();
       await refreshRpcAuthStatus();

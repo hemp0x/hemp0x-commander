@@ -341,7 +341,38 @@ pub fn probe_default_daemon() -> DaemonProbe {
 }
 
 #[tauri::command]
-pub fn get_runtime_status() -> RuntimeStatus {
+pub async fn get_runtime_status() -> RuntimeStatus {
+    tauri::async_runtime::spawn_blocking(get_runtime_status_blocking)
+        .await
+        .unwrap_or_else(|_| runtime_status_unavailable())
+}
+
+fn runtime_status_unavailable() -> RuntimeStatus {
+    RuntimeStatus {
+        required_base_version: REQUIRED_CORE_BASE_VERSION.to_string(),
+        required_commit_hash: REQUIRED_CORE_NEXT_COMMIT.to_string(),
+        daemon: BinaryVersion {
+            path: resolve_bin("hemp0xd"),
+            exists: false,
+            raw: "Runtime status check failed.".to_string(),
+            base_version: None,
+            commit_hash: None,
+            exact_core_next_match: false,
+        },
+        cli: BinaryVersion {
+            path: resolve_bin("hemp0x-cli"),
+            exists: false,
+            raw: "Runtime status check failed.".to_string(),
+            base_version: None,
+            commit_hash: None,
+            exact_core_next_match: false,
+        },
+        bundled_core_next_ready: false,
+        probe: probe_default_daemon(),
+    }
+}
+
+fn get_runtime_status_blocking() -> RuntimeStatus {
     let daemon = binary_version("hemp0xd");
     let cli = binary_version("hemp0x-cli");
     let bundled_core_next_ready = daemon.exact_core_next_match && cli.exact_core_next_match;

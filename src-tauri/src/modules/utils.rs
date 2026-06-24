@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn parse_version_accepts_common_hemp0x_subver_formats() {
         assert_eq!(parse_version("/Hemp0x:4.7.0/"), Some((4, 7, 0)));
-        assert_eq!(parse_version("/Hemp0x:4.7.0.0/"), Some((4, 7, 0)));
+        assert_eq!(parse_version("/Hemp0x:4.8.0.0/"), Some((4, 8, 0)));
         assert_eq!(parse_version("/Hemp0x Core:4.7.1/"), Some((4, 7, 1)));
     }
 

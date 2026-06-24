@@ -12,8 +12,8 @@ use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
 use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
 
-const REQUIRED_CORE_NEXT_COMMIT: &str = "fbbf578d6";
-const REQUIRED_CORE_BASE_VERSION: &str = "4.7.0.0";
+const REQUIRED_CORE_NEXT_COMMIT: &str = "10dc5599b";
+const REQUIRED_CORE_BASE_VERSION: &str = "4.8.0.0";
 const DEFAULT_RPC_PORT: u16 = 42068;
 const DEFAULT_P2P_PORT: u16 = 42069;
 
@@ -716,9 +716,9 @@ mod tests {
 
     #[test]
     fn parses_base_version_from_typical_output() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-192c6b5ce";
         let result = parse_base_version(raw);
-        assert_eq!(result, Some("4.7.0.0".to_string()));
+        assert_eq!(result, Some("4.8.0.0".to_string()));
     }
 
     #[test]
@@ -730,8 +730,8 @@ mod tests {
 
     #[test]
     fn parses_base_version_from_alpha() {
-        let raw = "Hemp0x RPC client version v4.7.0.0-alpha";
-        assert_eq!(parse_base_version(raw), Some("4.7.0.0".to_string()));
+        let raw = "Hemp0x RPC client version v4.8.0.0-alpha";
+        assert_eq!(parse_base_version(raw), Some("4.8.0.0".to_string()));
     }
 
     #[test]
@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn parses_commit_hash_from_known_hash() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-192c6b5ce";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-192c6b5ce";
         let result = parse_commit_hash(raw);
         assert_eq!(result, Some("192c6b5ce".to_string()));
     }
@@ -768,19 +768,19 @@ mod tests {
 
     #[test]
     fn parse_commit_hash_short_hex_not_returned() {
-        let raw = "Hemp0x Core v4.7.0.0-abc";
+        let raw = "Hemp0x Core v4.8.0.0-abc";
         assert_eq!(parse_commit_hash(raw), None);
     }
 
     #[test]
     fn parse_commit_hash_no_hash() {
-        let raw = "Hemp0x Core v4.7.0.0";
+        let raw = "Hemp0x Core v4.8.0.0";
         assert_eq!(parse_commit_hash(raw), None);
     }
 
     #[test]
     fn parse_numeric_version_standard() {
-        assert_eq!(parse_numeric_version(4070000), "4.7.0.0");
+        assert_eq!(parse_numeric_version(4080000), "4.8.0.0");
     }
 
     #[test]
@@ -992,21 +992,21 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_matches_required_hash() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-fbbf578d6";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-10dc5599b";
         let result = parse_commit_hash(raw);
         assert_eq!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }
 
     #[test]
     fn parse_commit_hash_rejects_different_hash() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-abcdef1234567890";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-abcdef1234567890";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }
 
     #[test]
     fn parse_commit_hash_does_not_match_required_hash_as_substring() {
-        let raw = "Hemp0x Core Daemon version v4.7.0.0-00fbbf578d6ff";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-0010dc5599bff";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }

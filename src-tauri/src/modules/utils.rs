@@ -316,6 +316,7 @@ mod tests {
         assert!(version_is_old("/Satoshi:4.7.0/"));
         assert!(!version_is_old("/Hemp0x:4.7.0/"));
         assert!(!version_is_old("/Hemp0x Core:4.8.0/"));
+        assert!(!version_is_old("/Hemp0x Core:4.8.0.0/"));
     }
 
     #[test]

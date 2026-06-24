@@ -37,6 +37,7 @@
   import CopyIcon from "./lib/ui/CopyIcon.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
   import { cidViewerTarget, ipfsHubSection } from "./lib/stores/contentLibrary.js";
+  import { systemHubSection } from "./lib/stores/systemHub.js";
   import { vaultStatus } from "./stores.js";
   import { APP_VERSION } from "./lib/constants.js";
 
@@ -298,6 +299,13 @@
   function openRpcAuthHelp() {
     if (rpcAuthStatus?.auth_mode === "cookie") return;
     showRpcAuthHelp = true;
+  }
+
+  function openRpcAuthConfig() {
+    showRpcAuthHelp = false;
+    systemHubSection.set("config");
+    activeTab = "TOOLS";
+    window.dispatchEvent(new CustomEvent("commander-open-tools-system", { detail: { section: "config" } }));
   }
 
   async function closeStopDaemon() {
@@ -2085,8 +2093,8 @@ rpccookiefile=...</pre>
           </p>
         </div>
         <div class="welcome-footer" style="flex-wrap: wrap; gap: 0.5rem;">
-          <button class="btn-xs" style="flex: 1;" on:click={() => { showRpcAuthHelp = false; activeTab = "TOOLS"; }}>
-            Open Tools
+          <button class="btn-xs" style="flex: 1;" on:click={openRpcAuthConfig}>
+            Open Config
           </button>
           <button class="btn-xs ghost" style="flex: 1;" on:click={() => (showRpcAuthHelp = false)}>
             Close

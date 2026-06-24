@@ -65,6 +65,14 @@
     activeSubTab = "HISTORY";
   }
 
+  function openSystemFromAnywhere(event) {
+    activeSubTab = "SYSTEM";
+    const section = String(event?.detail?.section || "");
+    if (section) {
+      systemHubSection.set(section);
+    }
+  }
+
   function openExplorerFromAnywhere(event) {
     explorerTarget = String(event?.detail?.target || "");
     activeSubTab = "EXPLORER";
@@ -112,6 +120,7 @@
     window.addEventListener("commander-open-content-library", openLibraryFromPicker);
     window.addEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
     window.addEventListener("commander-open-tools-history", openHistoryFromAnywhere);
+    window.addEventListener("commander-open-tools-system", openSystemFromAnywhere);
     window.addEventListener("commander-open-explorer", openExplorerFromAnywhere);
     tauriReady = typeof core?.isTauri === "function" ? core.isTauri() : false;
   });
@@ -120,6 +129,7 @@
     window.removeEventListener("commander-open-content-library", openLibraryFromPicker);
     window.removeEventListener("commander-open-tools-wallet", openWalletFromAnywhere);
     window.removeEventListener("commander-open-tools-history", openHistoryFromAnywhere);
+    window.removeEventListener("commander-open-tools-system", openSystemFromAnywhere);
     window.removeEventListener("commander-open-explorer", openExplorerFromAnywhere);
     clearTimeout(toastTimer);
   });

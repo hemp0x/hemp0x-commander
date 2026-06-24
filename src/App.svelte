@@ -221,6 +221,7 @@
   let showClosePrompt = false;
   /** @type {RpcAuthStatus | null} */
   let rpcAuthStatus = null;
+  let showRpcAuthHelp = false;
   let appSettings = {
     auto_start_daemon_on_launch: false,
     keep_daemon_running_on_close: false,
@@ -292,6 +293,11 @@
     } catch {
       // auth status probe is best-effort
     }
+  }
+
+  function openRpcAuthHelp() {
+    if (rpcAuthStatus?.auth_mode === "cookie") return;
+    showRpcAuthHelp = true;
   }
 
   async function closeStopDaemon() {
@@ -1356,16 +1362,18 @@
       <span class="ts-label">Network</span>
       <span class="ts-val">LOCAL ONLY</span>
     </div>
-    <div
+    <button
+      type="button"
       class="ts-item"
       class:ts-ok={rpcAuthStatus?.auth_mode === 'cookie'}
-      class:ts-warn={rpcAuthStatus?.auth_mode === 'legacy_userpass'}
-      class:ts-bad={rpcAuthStatus?.auth_mode === 'unavailable'}
-      title={rpcAuthStatus?.warning || ''}
+      class:ts-bad={rpcAuthStatus && rpcAuthStatus.auth_mode !== 'cookie'}
+      class:wallet-status-action={rpcAuthStatus?.auth_mode !== 'cookie'}
+      title={rpcAuthStatus?.auth_mode === 'cookie' ? 'Cookie RPC authentication is active' : 'Open RPC cookie auth guidance'}
+      on:click={openRpcAuthHelp}
     >
       <span class="ts-label">RPC Auth</span>
       <span class="ts-val">{rpcAuthStatus ? (rpcAuthStatus.auth_mode === 'cookie' ? 'Cookie' : rpcAuthStatus.auth_mode === 'legacy_userpass' ? 'Legacy' : '--') : '--'}</span>
-    </div>
+    </button>
     <div
       class="ts-item"
       class:ts-ok={stratumRunning}
@@ -1678,7 +1686,7 @@
           </p>
           <p class="about-text">
             This application controls <strong>hemp0xd</strong> and
-            <strong>hemp0x-cli</strong> binaries built from the official Hemp0x repository.
+            <strong>hemp0x-cli</strong> Core Next binaries built from the official Hemp0x repository.
           </p>
           <p class="about-credit">
             Forked from Ravencoin (December 18, 2025)<br />
@@ -2044,6 +2052,44 @@
           </button>
           <button class="btn-xs ghost" style="flex: 1;" on:click={closeCancel}>
             Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showRpcAuthHelp}
+    <div class="welcome-overlay">
+      <div class="welcome-modal rpc-auth-modal">
+        <div class="welcome-header">
+          <h2>Use Cookie RPC Auth</h2>
+        </div>
+        <div class="welcome-body">
+          <p class="welcome-text">
+            Cookie auth is recommended for Commander and Core Next. Core creates a local
+            <span class="mono">.cookie</span> file in the active data directory when the daemon starts.
+          </p>
+          <p class="welcome-text">
+            In <span class="mono">hemp.conf</span>, remove or comment active static RPC credential lines:
+          </p>
+          <pre class="rpc-auth-code">rpcuser=...
+rpcpassword=...
+rpcauth=...
+rpccookiefile=...</pre>
+          <p class="welcome-text">
+            Lines that start with <span class="mono">#</span> are ignored. Keep
+            <span class="mono">server=1</span>, save the config, then restart Core.
+          </p>
+          <p class="welcome-caution">
+            Do not paste RPC passwords into screenshots, logs, or support messages.
+          </p>
+        </div>
+        <div class="welcome-footer" style="flex-wrap: wrap; gap: 0.5rem;">
+          <button class="btn-xs" style="flex: 1;" on:click={() => { showRpcAuthHelp = false; activeTab = "TOOLS"; }}>
+            Open Tools
+          </button>
+          <button class="btn-xs ghost" style="flex: 1;" on:click={() => (showRpcAuthHelp = false)}>
+            Close
           </button>
         </div>
       </div>
@@ -3133,6 +3179,21 @@
     max-width: 480px;
     width: 90%;
     animation: slideUp 0.3s ease-out;
+  }
+  .rpc-auth-modal {
+    max-width: 560px;
+  }
+  .rpc-auth-code {
+    margin: 0.75rem 0;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid rgba(0, 255, 65, 0.16);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #d7fbe1;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
   }
   @keyframes slideUp {
     from {

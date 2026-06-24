@@ -237,19 +237,33 @@ pub async fn run_cli_args(args: Vec<String>) -> Result<String, String> {
 
 /// Simple getinfo wrapper for node status checks
 #[tauri::command]
-pub fn get_info() -> Result<String, String> {
-    run_cli(&[String::from("getinfo")])
+pub async fn get_info() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_cli(&[String::from("getinfo")]))
+        .await
+        .map_err(|e| format!("Get info task failed: {e}"))?
 }
 
 /// List address groupings for wallet keys display
 #[tauri::command]
-pub fn list_address_groupings() -> Result<serde_json::Value, String> {
+pub async fn list_address_groupings() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(list_address_groupings_blocking)
+        .await
+        .map_err(|e| format!("Address grouping task failed: {e}"))?
+}
+
+fn list_address_groupings_blocking() -> Result<serde_json::Value, String> {
     let raw = run_active_wallet_cli(&[String::from("listaddressgroupings")])?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn dashboard_data() -> Result<DashboardData, String> {
+pub async fn dashboard_data() -> Result<DashboardData, String> {
+    tauri::async_runtime::spawn_blocking(dashboard_data_blocking)
+        .await
+        .map_err(|e| format!("Dashboard fallback task failed: {e}"))?
+}
+
+fn dashboard_data_blocking() -> Result<DashboardData, String> {
     let cfg = ensure_config()?;
     let _ = parse_config(&cfg)?;
 
@@ -384,7 +398,13 @@ pub fn dashboard_data() -> Result<DashboardData, String> {
 }
 
 #[tauri::command]
-pub fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, String> {
+pub async fn get_receive_addresses(show_change: bool) -> Result<Vec<AddressItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || get_receive_addresses_blocking(show_change))
+        .await
+        .map_err(|e| format!("Receive address task failed: {e}"))?
+}
+
+fn get_receive_addresses_blocking(show_change: bool) -> Result<Vec<AddressItem>, String> {
     ensure_config()?;
 
     let groups_raw = run_active_wallet_cli(&[String::from("listaddressgroupings")])?;
@@ -542,7 +562,13 @@ fn classify_asset_type(name: &str) -> &'static str {
 }
 
 #[tauri::command]
-pub fn list_assets() -> Result<Vec<AssetItem>, String> {
+pub async fn list_assets() -> Result<Vec<AssetItem>, String> {
+    tauri::async_runtime::spawn_blocking(list_assets_blocking)
+        .await
+        .map_err(|e| format!("Asset list task failed: {e}"))?
+}
+
+fn list_assets_blocking() -> Result<Vec<AssetItem>, String> {
     ensure_config()?;
     let raw = run_cli(&[String::from("listmyassets")])?;
     let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
@@ -727,7 +753,19 @@ fn asset_block_height(value: &serde_json::Value) -> Option<u64> {
 }
 
 #[tauri::command]
-pub fn list_network_assets(
+pub async fn list_network_assets(
+    pattern: String,
+    verbose: bool,
+    limit: Option<i64>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_network_assets_blocking(pattern, verbose, limit)
+    })
+    .await
+    .map_err(|e| format!("Network asset list task failed: {e}"))?
+}
+
+fn list_network_assets_blocking(
     pattern: String,
     verbose: bool,
     limit: Option<i64>,

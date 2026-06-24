@@ -360,17 +360,39 @@ pub(crate) fn call_active_wallet_or_default(
 }
 
 #[tauri::command]
-pub fn rpc_get_blockchain_info() -> RpcResult {
-    rpc_command_with_result("getblockchaininfo", &[])
+pub async fn rpc_get_blockchain_info() -> RpcResult {
+    tauri::async_runtime::spawn_blocking(|| rpc_command_with_result("getblockchaininfo", &[]))
+        .await
+        .unwrap_or_else(|e| RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: format!("Blockchain info task failed: {e}"),
+        })
 }
 
 #[tauri::command]
-pub fn rpc_get_network_info() -> RpcResult {
-    rpc_command_with_result("getnetworkinfo", &[])
+pub async fn rpc_get_network_info() -> RpcResult {
+    tauri::async_runtime::spawn_blocking(|| rpc_command_with_result("getnetworkinfo", &[]))
+        .await
+        .unwrap_or_else(|e| RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: format!("Network info task failed: {e}"),
+        })
 }
 
 #[tauri::command]
-pub fn rpc_get_wallet_info() -> RpcResult {
+pub async fn rpc_get_wallet_info() -> RpcResult {
+    tauri::async_runtime::spawn_blocking(rpc_get_wallet_info_blocking)
+        .await
+        .unwrap_or_else(|e| RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: format!("Wallet info task failed: {e}"),
+        })
+}
+
+fn rpc_get_wallet_info_blocking() -> RpcResult {
     match call_active_wallet_or_default("getwalletinfo", &[]) {
         Ok(mut data) => {
             if let Ok(migration_info) = call_active_wallet_or_default("getwalletmigrationinfo", &[])
@@ -456,7 +478,7 @@ const ALLOWED_METHODS: &[&str] = &[
 ];
 
 #[tauri::command]
-pub fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
+pub async fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
     if !ALLOWED_METHODS.contains(&method.as_str()) {
         return RpcResult {
             success: false,
@@ -467,7 +489,13 @@ pub fn rpc_call(method: String, params: Vec<serde_json::Value>) -> RpcResult {
         };
     }
 
-    rpc_command_with_result(&method, &params)
+    tauri::async_runtime::spawn_blocking(move || rpc_command_with_result(&method, &params))
+        .await
+        .unwrap_or_else(|e| RpcResult {
+            success: false,
+            data: serde_json::Value::Null,
+            error: format!("RPC task failed: {e}"),
+        })
 }
 
 pub(crate) fn build_dashboard_from_rpc(
@@ -558,22 +586,43 @@ pub(crate) fn build_dashboard_from_rpc(
 }
 
 #[tauri::command]
-pub fn rpc_dashboard() -> Result<DashboardData, String> {
+pub async fn rpc_dashboard() -> Result<DashboardData, String> {
+    tauri::async_runtime::spawn_blocking(rpc_dashboard_blocking)
+        .await
+        .map_err(|e| format!("Dashboard RPC task failed: {e}"))?
+}
+
+fn rpc_dashboard_blocking() -> Result<DashboardData, String> {
     let _cfg = ensure_config()?;
     let ctx = rpc_context()?;
 
-    let mut info = ctx.call("getinfo", &[])?;
-    let bc = ctx.call("getblockchaininfo", &[])?;
+    let fast_connect = Duration::from_millis(800);
+    let fast_read = Duration::from_millis(2500);
+
+    let mut info = ctx.call_with_timeouts("getinfo", &[], fast_connect, fast_read)?;
+    let bc = ctx.call_with_timeouts("getblockchaininfo", &[], fast_connect, fast_read)?;
     let tx_params = [
         serde_json::Value::String("*".to_string()),
         serde_json::Value::Number(serde_json::value::Number::from(100)),
     ];
     let tx_raw = if let Some(wallet_name) = active_vault_wallet_name() {
-        let wallet_info = call_rpc_wallet(&wallet_name, "getwalletinfo", &[])?;
+        let wallet_info = call_rpc_wallet_with_timeouts(
+            &wallet_name,
+            "getwalletinfo",
+            &[],
+            fast_connect,
+            fast_read,
+        )?;
         overlay_wallet_info(&mut info, &wallet_info);
-        call_rpc_wallet(&wallet_name, "listtransactions", &tx_params)?
+        call_rpc_wallet_with_timeouts(
+            &wallet_name,
+            "listtransactions",
+            &tx_params,
+            fast_connect,
+            fast_read,
+        )?
     } else {
-        ctx.call("listtransactions", &tx_params)?
+        ctx.call_with_timeouts("listtransactions", &tx_params, fast_connect, fast_read)?
     };
 
     build_dashboard_from_rpc(&info, &bc, &tx_raw)

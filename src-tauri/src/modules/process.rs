@@ -480,7 +480,13 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn stop_node() -> Result<(), String> {
+pub async fn stop_node() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(stop_node_blocking)
+        .await
+        .map_err(|e| format!("Stop node task failed: {e}"))?
+}
+
+pub fn stop_node_blocking() -> Result<(), String> {
     if !daemon_process_running() {
         return Ok(());
     }
@@ -597,7 +603,7 @@ fn restart_node_with_wallet_robust_inner(
 #[tauri::command]
 pub fn set_network_mode(mode: String) -> Result<String, String> {
     // Attempt to stop the running node BEFORE changing config
-    let _ = stop_node();
+    let _ = stop_node_blocking();
 
     // Give it a moment to shutdown gracefully
     thread::sleep(Duration::from_secs(2));

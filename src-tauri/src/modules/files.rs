@@ -2213,6 +2213,11 @@ pub fn set_core_data_dir(path: String) -> Result<DataFolderInfo, String> {
         return get_data_folder_info();
     }
 
+    // Switching the active data dir changes the wallet identity binding, so
+    // invalidate the local wallet-PIN record in the OLD dir before switching.
+    // Best effort only — never block a data-dir switch over PIN cleanup.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
+
     // 1. Load current settings from wherever they are now
     let mut settings = load_app_settings_impl()?;
 
@@ -2233,6 +2238,9 @@ pub fn set_core_data_dir(path: String) -> Result<DataFolderInfo, String> {
 
 #[tauri::command]
 pub fn reset_core_data_dir() -> Result<DataFolderInfo, String> {
+    // Invalidate the local wallet-PIN record before the data dir resets; the
+    // new default dir has a different wallet identity binding. Best effort.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
     // 1. Clear bootstrap pointer FIRST so an invalid bootstrap does not block reset
     save_bootstrap(None)?;
 

@@ -7,6 +7,19 @@
     import CryptoJS from "crypto-js";
     import { coreBusyUntil, systemStatus, vaultStatus } from "../../stores.js"; // Import Store
     import { addToolNotification } from "../stores/notifications.js";
+    import {
+        loadWalletPinStatus,
+        defaultUnlockMode,
+        pinRequiresPassphrase,
+        unlockWalletWithPin,
+        unlockRuntimeWalletWithPassphrase,
+        forgotWalletPin,
+        setupWalletPin,
+        changeWalletPin,
+        removeWalletPin,
+        isValidPin,
+        cleanWalletPin,
+    } from "../walletPinUnlock.js";
 
 
     $: tauriReady = $systemStatus.tauriReady;
@@ -383,8 +396,17 @@
     let showUnlockModal = false;
     let unlockPassword = "";
     let unlockError = "";
+    let unlocking = false;
     let unlockAfterWalletUnlock = null;
     let unlockModalPurpose = "key_export";
+    // Runtime Wallet PIN unlock (slice 76b). Applies to the wallet_unlock
+    // purpose of the shared unlock modal only.
+    let walletPinStatus = null;
+    let walletPinStatusLoaded = false;
+    let walletUnlockMode = "passphrase"; // "passphrase" | "pin"
+    let unlockPin = "";
+    $: walletPinUsable = !!walletPinStatus?.pin_configured && !pinRequiresPassphrase(walletPinStatus);
+    $: runtimePinUnlockActive = !unlockingFile && unlockModalPurpose === "wallet_unlock";
 
     // Hardened export danger flow state
     let showExportDangerModal = false;
@@ -592,10 +614,157 @@
     function closeUnlockModal() {
         showUnlockModal = false;
         unlockPassword = "";
+        unlockPin = "";
         unlockError = "";
         unlockAfterWalletUnlock = null;
         unlockModalPurpose = "key_export";
         unlockingFile = false;
+        walletUnlockMode = "passphrase";
+        walletPinStatus = null;
+        walletPinStatusLoaded = false;
+    }
+
+    // --- Runtime Wallet PIN unlock (slice 76b) ---
+
+    async function refreshWalletPinStatus() {
+        walletPinStatus = await loadWalletPinStatus();
+        walletPinStatusLoaded = true;
+    }
+
+    // When the shared unlock modal opens for a plain runtime wallet unlock,
+    // load PIN status and default to PIN entry when a usable PIN exists.
+    $: if (
+        showUnlockModal
+        && runtimePinUnlockActive
+        && !walletPinStatusLoaded
+        && tauriReady
+    ) {
+        walletPinStatusLoaded = true;
+        loadWalletPinStatus().then((status) => {
+            if (showUnlockModal && runtimePinUnlockActive) {
+                walletPinStatus = status;
+                if (walletUnlockMode === "passphrase") {
+                    walletUnlockMode = defaultUnlockMode(status);
+                }
+            }
+        });
+    }
+
+    function switchRuntimeUnlockToPassphrase() {
+        walletUnlockMode = "passphrase";
+        unlockPin = "";
+        unlockError = "";
+    }
+
+    function switchRuntimeUnlockToPin() {
+        if (!walletPinUsable) return;
+        walletUnlockMode = "pin";
+        unlockPin = "";
+        unlockError = "";
+    }
+
+    async function forgotRuntimeWalletPin() {
+        if (unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await forgotWalletPin();
+            await refreshWalletPinStatus();
+            walletUnlockMode = "passphrase";
+            unlockPin = "";
+            unlockError = "Device PIN cleared. Enter your wallet passphrase to unlock.";
+        } catch (err) {
+            unlockError = "Could not clear PIN: " + String(err);
+        } finally {
+            unlocking = false;
+        }
+    }
+
+    // Set / Change / Remove PIN management modal.
+    let showWalletPinModal = false;
+    let walletPinModalMode = "set"; // "set" | "change" | "remove"
+    let walletPinModalPass = "";
+    let walletPinModalPin = "";
+    let walletPinModalConfirm = "";
+    let walletPinModalError = "";
+    let walletPinModalWorking = false;
+    let walletPinModalResult = null;
+    // Post-unlock "set a PIN" offer.
+    let showSetWalletPinOffer = false;
+
+    function openWalletPinModal(mode) {
+        walletPinModalMode = mode;
+        walletPinModalPass = "";
+        walletPinModalPin = "";
+        walletPinModalConfirm = "";
+        walletPinModalError = "";
+        walletPinModalResult = null;
+        walletPinModalWorking = false;
+        showWalletPinModal = true;
+    }
+
+    function closeWalletPinModal() {
+        if (walletPinModalWorking) return;
+        walletPinModalPass = "";
+        walletPinModalPin = "";
+        walletPinModalConfirm = "";
+        walletPinModalError = "";
+        if (!walletPinModalResult) {
+            showWalletPinModal = false;
+        }
+    }
+
+    function dismissWalletPinModalSuccess() {
+        walletPinModalResult = null;
+        showWalletPinModal = false;
+    }
+
+    function dismissSetWalletPinOffer() {
+        showSetWalletPinOffer = false;
+    }
+
+    async function executeWalletPinModal() {
+        walletPinModalError = "";
+        walletPinModalResult = null;
+        if (!walletPinModalPass) {
+            walletPinModalError = "Enter your wallet passphrase to authorize this change.";
+            return;
+        }
+        if (walletPinModalMode !== "remove") {
+            if (!isValidPin(walletPinModalPin)) {
+                walletPinModalError = "PIN must be exactly 6 digits.";
+                return;
+            }
+            if (walletPinModalPin !== walletPinModalConfirm) {
+                walletPinModalError = "PIN and confirmation do not match.";
+                return;
+            }
+        }
+        walletPinModalWorking = true;
+        try {
+            let result;
+            if (walletPinModalMode === "remove") {
+                result = await removeWalletPin(walletPinModalPass);
+            } else if (walletPinModalMode === "change") {
+                result = await changeWalletPin(walletPinModalPass, walletPinModalPin);
+            } else {
+                result = await setupWalletPin(walletPinModalPass, walletPinModalPin, 300);
+            }
+            walletPinModalResult = result;
+            walletPinModalPass = "";
+            walletPinModalPin = "";
+            walletPinModalConfirm = "";
+            await refreshWalletPinStatus();
+            showSetWalletPinOffer = false;
+            showToast(
+                walletPinModalMode === "remove" ? "Runtime Wallet PIN removed." : "Runtime Wallet PIN saved.",
+                "success",
+            );
+        } catch (err) {
+            walletPinModalError = String(err);
+        } finally {
+            walletPinModalWorking = false;
+        }
     }
 
     async function tryUnlockWallet() {
@@ -629,8 +798,59 @@
             unlockError = "";
             const plainWalletUnlock = unlockModalPurpose === "wallet_unlock";
             const unlockDuration = unlockModalPurpose === "vault_backup" || plainWalletUnlock ? 300 : 60;
+
+            // Runtime Wallet PIN unlock path (slice 76b): only for the plain
+            // runtime wallet-unlock purpose, when a usable PIN is configured
+            // and the user is in PIN mode.
+            if (plainWalletUnlock && walletUnlockMode === "pin" && walletPinUsable) {
+                if (!isValidPin(unlockPin)) {
+                    unlockError = "Enter your 6-digit PIN.";
+                    return;
+                }
+                unlocking = true;
+                try {
+                    await unlockWalletWithPin(unlockPin, unlockDuration);
+                } catch (err) {
+                    unlockPin = "";
+                    unlockError = String(err);
+                    await refreshWalletPinStatus();
+                    if (pinRequiresPassphrase(walletPinStatus)) {
+                        walletUnlockMode = "passphrase";
+                    }
+                    unlocking = false;
+                    return;
+                }
+                unlockPin = "";
+                unlocking = false;
+                showUnlockModal = false;
+                if (walletStatus && isRuntimeWalletEncrypted(walletStatus)) {
+                    walletStatus = {
+                        ...walletStatus,
+                        unlocked_until: Math.floor(Date.now() / 1000) + unlockDuration,
+                        locked: false,
+                    };
+                }
+                const afterUnlock = unlockAfterWalletUnlock;
+                unlockAfterWalletUnlock = null;
+                unlockModalPurpose = "key_export";
+                walletUnlockMode = "passphrase";
+                walletPinStatusLoaded = false;
+                await refreshWalletHeader();
+                if (afterUnlock) await afterUnlock();
+                showToast("Wallet unlocked.", "success");
+                return;
+            }
+
             const runtimeWalletName = loadedRuntimeWalletName();
-            if (isDefaultRuntimeWalletName(runtimeWalletName)) {
+            // For the plain runtime wallet unlock purpose, use the shared
+            // active-wallet unlock helper so the passphrase fallback and the
+            // PIN fallback unlock the same active wallet (slice 76c). For
+            // other purposes (key export, vault backup, guided connect), keep
+            // the existing explicit default/named routing since those are
+            // one-off operations.
+            if (plainWalletUnlock) {
+                await unlockRuntimeWalletWithPassphrase(unlockPassword, unlockDuration);
+            } else if (isDefaultRuntimeWalletName(runtimeWalletName)) {
                 await core.invoke("wallet_unlock", {
                     password: unlockPassword,
                     duration: unlockDuration,
@@ -666,6 +886,10 @@
             }
             if (plainWalletUnlock) {
                 showToast("Wallet unlocked.", "success");
+                // After a successful full passphrase unlock, offer to set a
+                // device PIN if none is configured.
+                await refreshWalletPinStatus();
+                showSetWalletPinOffer = !walletPinStatus?.pin_configured;
             }
         } catch (e) {
             unlockError = "Incorrect Passphrase";
@@ -1687,6 +1911,7 @@
                 loadVaultOverview(),
                 loadVaultUnlockStatus(),
                 loadActiveVaultWalletName(),
+                refreshWalletPinStatus().catch(() => {}),
             ]);
         } catch (e) {
             console.error("refreshWalletHeader failed:", e);
@@ -3946,7 +4171,23 @@
                     </span>
                 </div>
 
-                <!-- SECTION 3b: Vault security (advanced) — passphrase rotation + unload/fallback (64p) -->
+                <!-- SECTION 3a: Runtime Wallet PIN offer (slice 76b). Shown after a full wallet passphrase unlock when no PIN is configured. -->
+                {#if showSetWalletPinOffer && walletStatus && isRuntimeWalletEncrypted(walletStatus) && !walletPinStatus?.pin_configured}
+                    <div style="background:rgba(0,255,65,0.05); border:1px solid rgba(0,255,65,0.18); border-radius:6px; padding:0.75rem 1rem; display:flex; gap:0.6rem; align-items:flex-start;">
+                        <div style="flex:1;">
+                            <h4 style="color:var(--color-primary); margin:0 0 0.3rem; font-size:0.72rem; letter-spacing:0.5px;">SET A RUNTIME WALLET PIN</h4>
+                            <p class="desc" style="margin:0; font-size:0.63rem; line-height:1.5;">
+                                Optionally create a short 6-digit PIN so you can unlock the local Core wallet for signing on this device without typing the wallet passphrase repeatedly. The PIN is stored locally on this machine only. It does not protect your portable Hemp0x Vault file, and your wallet passphrase always works.
+                            </p>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                            <button class="cyber-btn primary-glow tiny" on:click={() => openWalletPinModal("set")}>SET PIN</button>
+                            <button class="cyber-btn ghost tiny" on:click={dismissSetWalletPinOffer}>LATER</button>
+                        </div>
+                    </div>
+                {/if}
+
+                <!-- SECTION 3b: Vault security (advanced). Passphrase rotation + unload/fallback (64p). -->
                 <div style="background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem 1rem;">
                     <h4 style="color:var(--color-primary); margin:0 0 0.4rem; font-size:0.75rem; letter-spacing:0.5px;">VAULT / WALLET SECURITY</h4>
                     <p class="desc" style="margin:0 0 0.55rem; font-size:0.65rem;">
@@ -3965,6 +4206,32 @@
                         <button class="cyber-btn ghost small" on:click={openUnloadVaultModal} disabled={!hasVault}>
                             UNLOAD VAULT
                         </button>
+                    </div>
+
+                    <!-- Runtime Wallet PIN management (slice 76b) -->
+                    <div style="margin-top:0.6rem; border-top:1px dashed rgba(255,255,255,0.06); padding-top:0.6rem;">
+                        <h5 style="color:var(--color-primary); margin:0 0 0.3rem; font-size:0.66rem; letter-spacing:0.5px;">RUNTIME WALLET PIN</h5>
+                        <p class="desc" style="margin:0 0 0.45rem; font-size:0.62rem; line-height:1.5;">
+                            {#if walletPinStatus?.pin_configured}
+                                A Runtime Wallet PIN is configured for this wallet on this device. You can unlock the Core wallet with the PIN instead of the passphrase when sending or broadcasting. The full passphrase is required again every 30 days or after heavy PIN use, and the PIN is cleared if the active wallet is switched, changed, imported, unloaded, or its passphrase rotated.
+                            {:else}
+                                No Runtime Wallet PIN configured. A PIN lets you unlock the local Core wallet for signing on this device with a short 6-digit code instead of the full wallet passphrase. It is stored locally on this machine only and never changes your portable Hemp0x Vault file.
+                            {/if}
+                        </p>
+                        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                            {#if walletPinStatus?.pin_configured}
+                                <button class="cyber-btn ghost small" on:click={() => openWalletPinModal("change")} disabled={!walletStatus || !isRuntimeWalletEncrypted(walletStatus)}>
+                                    CHANGE PIN
+                                </button>
+                                <button class="cyber-btn ghost small" on:click={() => openWalletPinModal("remove")} disabled={!walletStatus || !isRuntimeWalletEncrypted(walletStatus)}>
+                                    REMOVE PIN
+                                </button>
+                            {:else}
+                                <button class="cyber-btn ghost small" on:click={() => openWalletPinModal("set")} disabled={!walletStatus || !isRuntimeWalletEncrypted(walletStatus)}>
+                                    SET RUNTIME WALLET PIN
+                                </button>
+                            {/if}
+                        </div>
                     </div>
                 </div>
 
@@ -4418,37 +4685,83 @@
     >
         <div class="vault-connect-modal" style="max-width:400px; padding:1.25rem;">
             <h3 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
-                {unlockingFile ? "DECRYPT FILE" : "UNLOCK CORE WALLET"}
+                {unlockingFile ? "DECRYPT FILE" : (runtimePinUnlockActive && walletUnlockMode === "pin" && walletPinUsable ? "UNLOCK WITH DEVICE PIN" : "UNLOCK CORE WALLET")}
             </h3>
             <p style="color:#aaa; font-size:0.7rem; margin:0 0 0.6rem;">
                 {unlockingFile
                     ? "Enter password to decrypt file:"
-                    : unlockModalPurpose === "vault_backup"
-                        ? "Enter the Core wallet passphrase to unlock the runtime wallet for backup. This is separate from your vault passphrase."
-                        : unlockModalPurpose === "wallet_unlock"
-                            ? "Enter your Core wallet passphrase to unlock the runtime wallet."
-                            : unlockModalPurpose === "vault_guided_connect"
-                                ? "Enter your Core wallet passphrase so Commander can back up the current runtime wallet before connecting the vault wallet."
-                                : "Enter your Core wallet passphrase to export keys."}
+                    : runtimePinUnlockActive && walletUnlockMode === "pin" && walletPinUsable
+                        ? "Enter this device's 6-digit PIN to unlock the local Core wallet for signing on this device."
+                        : unlockModalPurpose === "vault_backup"
+                            ? "Enter the Core wallet passphrase to unlock the runtime wallet for backup. This is separate from your vault passphrase."
+                            : unlockModalPurpose === "wallet_unlock"
+                                ? "Enter your Core wallet passphrase to unlock the runtime wallet."
+                                : unlockModalPurpose === "vault_guided_connect"
+                                    ? "Enter your Core wallet passphrase so Commander can back up the current runtime wallet before connecting the vault wallet."
+                                    : "Enter your Core wallet passphrase to export keys."}
             </p>
-            <input
-                type="password"
-                class="input-glass"
-                placeholder="Passphrase"
-                bind:value={unlockPassword}
-                on:keydown={(e) =>
-                    e.key === "Enter" && tryUnlockWallet()}
-                style="font-size:0.8rem; padding:0.55rem; width:100%; box-sizing:border-box; margin-bottom:0.5rem;"
-            />
+
+            {#if runtimePinUnlockActive && walletPinStatus?.pin_configured && pinRequiresPassphrase(walletPinStatus) && walletPinStatus?.reason && walletUnlockMode === "pin"}
+                <div style="margin-bottom:0.5rem; border:1px solid rgba(0,255,65,0.18); background:rgba(0,255,65,0.06); border-radius:5px; padding:0.45rem 0.55rem;">
+                    <p style="color:#9fd8af; font-size:0.66rem; margin:0; line-height:1.45;">{walletPinStatus.reason}</p>
+                </div>
+            {/if}
+
+            {#if runtimePinUnlockActive && walletUnlockMode === "pin" && walletPinUsable}
+                <input
+                    type="password"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    maxlength="6"
+                    class="input-glass"
+                    placeholder="6-digit PIN"
+                    bind:value={unlockPin}
+                    on:input={(e) => (unlockPin = cleanWalletPin(e.currentTarget.value))}
+                    on:keydown={(e) => e.key === "Enter" && unlockPin.length === 6 && tryUnlockWallet()}
+                    style="font-size:1rem; padding:0.55rem; width:100%; box-sizing:border-box; margin-bottom:0.5rem; text-align:center; letter-spacing:0.5rem;"
+                />
+                {#if (walletPinStatus?.lockout_remaining_secs || 0) > 0}
+                    <p style="color:#ffaa55; font-size:0.64rem; margin:0 0 0.5rem; line-height:1.45;">
+                        PIN unlock temporarily locked. Try again in {Math.ceil(walletPinStatus.lockout_remaining_secs)}s, or use your wallet passphrase.
+                    </p>
+                {/if}
+            {:else}
+                <input
+                    type="password"
+                    class="input-glass"
+                    placeholder="Passphrase"
+                    bind:value={unlockPassword}
+                    on:keydown={(e) =>
+                        e.key === "Enter" && tryUnlockWallet()}
+                    style="font-size:0.8rem; padding:0.55rem; width:100%; box-sizing:border-box; margin-bottom:0.5rem;"
+                />
+            {/if}
             {#if unlockError}
                 <div style="margin-bottom:0.5rem; border:1px solid rgba(255,85,85,0.35); background:rgba(255,0,0,0.08); border-radius:5px; padding:0.5rem 0.6rem;">
                     <p style="color:#ff7777; font-size:0.7rem; margin:0;">{unlockError}</p>
                 </div>
             {/if}
             <div style="display:flex; gap:0.5rem;">
-                <button class="cyber-btn primary-glow small" style="flex:1;" on:click={tryUnlockWallet}>UNLOCK</button>
+                <button class="cyber-btn primary-glow small" style="flex:1;" on:click={tryUnlockWallet} disabled={(runtimePinUnlockActive && walletUnlockMode === "pin" && walletPinUsable) ? unlockPin.length !== 6 : !unlockPassword}>UNLOCK</button>
                 <button class="cyber-btn ghost small" style="flex:1;" on:click={closeUnlockModal}>CANCEL</button>
             </div>
+
+            {#if runtimePinUnlockActive}
+                <div style="display:flex; justify-content:space-between; gap:0.4rem; margin-top:0.6rem; flex-wrap:wrap;">
+                    {#if walletUnlockMode === "pin" && walletPinUsable}
+                        <button type="button" style="background:none; border:none; color:#7799aa; font-size:0.64rem; cursor:pointer; text-decoration:underline; text-underline-offset:2px; padding:0;" on:click={switchRuntimeUnlockToPassphrase} disabled={unlocking}>
+                            Use wallet passphrase
+                        </button>
+                        <button type="button" style="background:none; border:none; color:#9a8a8a; font-size:0.64rem; cursor:pointer; text-decoration:underline; text-underline-offset:2px; padding:0;" on:click={forgotRuntimeWalletPin} disabled={unlocking}>
+                            Forgot PIN
+                        </button>
+                    {:else if walletPinUsable}
+                        <button type="button" style="background:none; border:none; color:#7799aa; font-size:0.64rem; cursor:pointer; text-decoration:underline; text-underline-offset:2px; padding:0;" on:click={switchRuntimeUnlockToPin} disabled={unlocking}>
+                            Use device PIN instead
+                        </button>
+                    {/if}
+                </div>
+            {/if}
         </div>
     </div>
 {/if}
@@ -5830,6 +6143,94 @@
                         CHANGE PASSWORD
                     </button>
                     <button class="cyber-btn ghost small" style="flex:1;" on:click={closeChangeRuntimeWalletPassModal}>
+                        CANCEL
+                    </button>
+                </div>
+            {/if}
+        </div>
+    </div>
+{/if}
+
+<!-- RUNTIME WALLET PIN MANAGEMENT MODAL (slice 76b) -->
+{#if showWalletPinModal}
+    <div
+        class="modal-overlay"
+        role="button"
+        tabindex="0"
+        on:click|self={() => closeWalletPinModal()}
+        on:keydown={(e) => e.key === "Escape" && closeWalletPinModal()}
+    >
+        <div class="vault-connect-modal" style="max-width:440px; padding:1.25rem;">
+            <h3 style="color:var(--color-primary); margin:0 0 0.35rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
+                {walletPinModalMode === "remove" ? "REMOVE RUNTIME WALLET PIN" : walletPinModalMode === "change" ? "CHANGE RUNTIME WALLET PIN" : "SET RUNTIME WALLET PIN"}
+            </h3>
+            <div class="laser-divider" style="margin:0 0 0.75rem;"></div>
+
+            {#if walletPinModalResult}
+                <div class="vault-connect-result">
+                    <div class="vault-connect-success">
+                        <span class="vault-connect-check">&#10003;</span>
+                        <span>
+                            {walletPinModalMode === "remove"
+                                ? "Runtime Wallet PIN removed. You will unlock with your wallet passphrase."
+                                : "Runtime Wallet PIN saved. You can now unlock the Core wallet on this device with your PIN."}
+                        </span>
+                    </div>
+                </div>
+                <div class="laser-divider" style="margin:0.75rem 0;"></div>
+                <button class="cyber-btn primary-glow small wide" on:click={dismissWalletPinModalSuccess}>
+                    DONE
+                </button>
+            {:else if walletPinModalWorking}
+                <div class="vault-connect-loading">
+                    <span class="vault-connect-spinner"></span>
+                    <p style="color:#aaa; font-size:0.7rem; margin:0;">
+                        {walletPinModalMode === "remove" ? "Removing Runtime Wallet PIN…" : "Saving Runtime Wallet PIN…"}
+                    </p>
+                </div>
+            {:else}
+                <p class="vault-connect-help" style="margin-bottom:0.6rem;">
+                    {#if walletPinModalMode === "remove"}
+                        Remove the local Runtime Wallet PIN. You will unlock the Core wallet with your full wallet passphrase. Enter your wallet passphrase to confirm.
+                    {:else if walletPinModalMode === "change"}
+                        Change the 6-digit PIN used to unlock the local Core wallet for signing on this device. Enter your wallet passphrase to authorize the change.
+                    {:else}
+                        Create a 6-digit PIN so you can unlock the local Core wallet for signing on this device without typing the wallet passphrase repeatedly. The encrypted passphrase is stored locally on this machine only. It does not protect your portable Hemp0x Vault file, and your wallet passphrase always works.
+                    {/if}
+                </p>
+                <div class="vault-connect-form">
+                    <div>
+                        <label for="wpm-pass" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">WALLET PASSPHRASE</label>
+                        <input id="wpm-pass" type="password" class="input-glass" bind:value={walletPinModalPass} placeholder="Wallet passphrase" style="font-size:0.75rem; padding:0.45rem; width:100%; box-sizing:border-box;" />
+                    </div>
+                    {#if walletPinModalMode !== "remove"}
+                        <div>
+                            <label for="wpm-pin" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">NEW 6-DIGIT PIN</label>
+                            <input id="wpm-pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="input-glass" bind:value={walletPinModalPin} on:input={(e) => (walletPinModalPin = cleanWalletPin(e.currentTarget.value))} placeholder="6 digits" style="font-size:0.95rem; padding:0.45rem; width:100%; box-sizing:border-box; letter-spacing:0.4rem; text-align:center;" />
+                        </div>
+                        <div>
+                            <label for="wpm-confirm" style="font-size:0.6rem; color:#888; margin-bottom:0.15rem; display:block;">CONFIRM PIN</label>
+                            <input id="wpm-confirm" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="input-glass" bind:value={walletPinModalConfirm} on:input={(e) => (walletPinModalConfirm = cleanWalletPin(e.currentTarget.value))} placeholder="Re-enter 6 digits" style="font-size:0.95rem; padding:0.45rem; width:100%; box-sizing:border-box; letter-spacing:0.4rem; text-align:center;" />
+                        </div>
+                    {/if}
+                </div>
+
+                {#if walletPinModalError}
+                    <div class="vault-connect-error" style="margin-top:0.5rem;">
+                        {walletPinModalError}
+                    </div>
+                {/if}
+
+                <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+                    <button
+                        class="cyber-btn primary-glow small"
+                        style="flex:1;"
+                        on:click={executeWalletPinModal}
+                        disabled={!walletPinModalPass || (walletPinModalMode !== "remove" && (!isValidPin(walletPinModalPin) || walletPinModalPin !== walletPinModalConfirm))}
+                    >
+                        {walletPinModalMode === "remove" ? "REMOVE PIN" : walletPinModalMode === "change" ? "CHANGE PIN" : "SET PIN"}
+                    </button>
+                    <button class="cyber-btn ghost small" style="flex:1;" on:click={closeWalletPinModal}>
                         CANCEL
                     </button>
                 </div>

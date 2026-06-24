@@ -12,6 +12,15 @@
     import { ensureNodeSyncedForBroadcast } from "../../utils/nodeSync.js";
     import TablePackPanel from "./TablePackPanel.svelte";
     import WalletUnlockModal from "../WalletUnlockModal.svelte";
+    import {
+        loadWalletPinStatus,
+        defaultUnlockMode,
+        pinRequiresPassphrase,
+        unlockWalletWithPin,
+        unlockRuntimeWalletWithPassphrase,
+        forgotWalletPin,
+        isValidPin,
+    } from "../../walletPinUnlock.js";
 
     const dispatch = createEventDispatcher();
 
@@ -67,6 +76,11 @@
     let messageUnlockPassword = "";
     let messageUnlocking = false;
     let messageUnlockError = "";
+    // Runtime Wallet PIN unlock (slice 76b)
+    let walletPinStatus = null;
+    let walletUnlockMode = "passphrase";
+    let messageUnlockPin = "";
+    $: walletPinUsable = !!walletPinStatus?.pin_configured && !pinRequiresPassphrase(walletPinStatus);
 
     /** @param {any} pack */
     function tablePackLabel(pack) {
@@ -227,9 +241,50 @@
 
     function requestMessageWalletUnlock() {
         messageUnlockPassword = "";
+        messageUnlockPin = "";
         messageUnlockError = "";
+        walletUnlockMode = "passphrase";
+        walletPinStatus = null;
         showMessageUnlockModal = true;
         composeError = "Wallet unlock required before broadcasting this message.";
+        loadWalletPinStatus().then((status) => {
+            if (showMessageUnlockModal) {
+                walletPinStatus = status;
+                if (walletUnlockMode === "passphrase") {
+                    walletUnlockMode = defaultUnlockMode(status);
+                }
+            }
+        });
+    }
+
+    function switchWalletUnlockToPassphrase() {
+        walletUnlockMode = "passphrase";
+        messageUnlockPin = "";
+        messageUnlockError = "";
+    }
+
+    function switchWalletUnlockToPin() {
+        if (!walletPinUsable) return;
+        walletUnlockMode = "pin";
+        messageUnlockPin = "";
+        messageUnlockError = "";
+    }
+
+    async function forgotWalletPinUnlock() {
+        if (messageUnlocking) return;
+        messageUnlocking = true;
+        messageUnlockError = "";
+        try {
+            await forgotWalletPin();
+            walletPinStatus = await loadWalletPinStatus();
+            walletUnlockMode = "passphrase";
+            messageUnlockPin = "";
+            messageUnlockError = "Device PIN cleared. Enter your wallet passphrase to unlock.";
+        } catch (err) {
+            messageUnlockError = "Could not clear PIN: " + String(err);
+        } finally {
+            messageUnlocking = false;
+        }
     }
 
     /** @param {string} suggestion */
@@ -625,11 +680,37 @@
     }
 
     async function unlockAndBroadcastAnnouncement() {
+        if (messageUnlocking) return;
+        if (walletUnlockMode === "pin" && walletPinUsable) {
+            if (!isValidPin(messageUnlockPin)) {
+                messageUnlockError = "Enter your 6-digit PIN.";
+                return;
+            }
+            messageUnlocking = true;
+            messageUnlockError = "";
+            try {
+                await unlockWalletWithPin(messageUnlockPin, 300);
+                messageUnlockPin = "";
+                showMessageUnlockModal = false;
+                composeError = "";
+                await broadcastAnnouncement();
+            } catch (err) {
+                messageUnlockPin = "";
+                messageUnlockError = messageRpcError(err);
+                walletPinStatus = await loadWalletPinStatus();
+                if (pinRequiresPassphrase(walletPinStatus)) {
+                    walletUnlockMode = "passphrase";
+                }
+            } finally {
+                messageUnlocking = false;
+            }
+            return;
+        }
         if (!messageUnlockPassword.trim() || messageUnlocking) return;
         messageUnlocking = true;
         messageUnlockError = "";
         try {
-            await core.invoke("wallet_unlock", { password: messageUnlockPassword, duration: 300 });
+            await unlockRuntimeWalletWithPassphrase(messageUnlockPassword, 300);
             messageUnlockPassword = "";
             showMessageUnlockModal = false;
             composeError = "";
@@ -651,6 +732,7 @@
         composeError = "";
         showMessageUnlockModal = false;
         messageUnlockPassword = "";
+        messageUnlockPin = "";
         messageUnlockError = "";
         dispatch("close");
     }
@@ -1072,14 +1154,23 @@
 
 <WalletUnlockModal
     show={showMessageUnlockModal}
+    mode={walletUnlockMode}
     bind:password={messageUnlockPassword}
+    bind:pin={messageUnlockPin}
     unlocking={messageUnlocking}
     error={messageUnlockError}
-    title="UNLOCK WALLET"
-    body="Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this asset message. Lock the wallet again when you are done sending transactions."
-    confirmLabel="UNLOCK AND BROADCAST"
-    on:cancel={() => { showMessageUnlockModal = false; messageUnlockError = ""; }}
+    title={walletUnlockMode === "pin" && walletPinUsable ? "UNLOCK WITH DEVICE PIN" : "UNLOCK WALLET"}
+    body={walletUnlockMode === "pin" && walletPinUsable ? "Enter this device's 6-digit PIN to unlock the local Core wallet for signing." : "Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this asset message. Lock the wallet again when you are done sending transactions."}
+    confirmLabel={walletUnlockMode === "pin" && walletPinUsable ? "UNLOCK" : "UNLOCK AND BROADCAST"}
+    pinConfigured={walletPinUsable}
+    pinRequiresPassphrase={walletUnlockMode === "pin" && pinRequiresPassphrase(walletPinStatus)}
+    pinRequiresPassphraseReason={walletPinStatus?.reason || ""}
+    lockoutRemainingSecs={walletPinStatus?.lockout_remaining_secs || 0}
+    on:cancel={() => { showMessageUnlockModal = false; messageUnlockError = ""; messageUnlockPin = ""; }}
     on:confirm={unlockAndBroadcastAnnouncement}
+    on:usepassphrase={switchWalletUnlockToPassphrase}
+    on:usepin={switchWalletUnlockToPin}
+    on:forgotpin={forgotWalletPinUnlock}
 />
 
 <style>

@@ -23,6 +23,16 @@
   import ViewTools from "./lib/ViewTools.svelte";
   import NotificationCenter from "./lib/ui/NotificationCenter.svelte";
   import VaultUnlockModal from "./lib/ui/VaultUnlockModal.svelte";
+  import {
+    loadWalletPinStatus,
+    defaultUnlockMode,
+    pinRequiresPassphrase,
+    unlockWalletWithPin,
+    unlockRuntimeWalletWithPassphrase,
+    forgotWalletPin,
+    isValidPin,
+    cleanWalletPin,
+  } from "./lib/walletPinUnlock.js";
   import CommanderLoader from "./lib/ui/CommanderLoader.svelte";
   import CopyIcon from "./lib/ui/CopyIcon.svelte";
   import { stratumStatus } from "./lib/stores/stratum.js";
@@ -367,6 +377,12 @@
   let walletPromptPassConfirm = "";
   let walletPromptDuration = "60";
   let walletPromptError = "";
+  // Runtime Wallet PIN unlock (slice 76b). Applies to the unlock mode only.
+  let walletPromptPin = "";
+  let walletPromptMode2 = "passphrase"; // "passphrase" | "pin" (PIN entry within the unlock prompt)
+  let walletPinStatus = null;
+  let walletPromptWorking = false;
+  $: walletPinUsable = !!walletPinStatus?.pin_configured && !pinRequiresPassphrase(walletPinStatus);
   // --- DASHBOARD OVERHAUL ---
   let isActivityExpanded = false;
 
@@ -661,15 +677,86 @@
     walletPromptPassConfirm = "";
     walletPromptDuration = "300";
     walletPromptError = "";
+    walletPromptPin = "";
+    walletPromptMode2 = "passphrase";
+    walletPinStatus = null;
     showWalletPrompt = true;
+    if (mode === "unlock") {
+      loadWalletPinStatus().then((status) => {
+        if (showWalletPrompt && walletPromptMode === "unlock") {
+          walletPinStatus = status;
+          if (walletPromptMode2 === "passphrase") {
+            walletPromptMode2 = defaultUnlockMode(status);
+          }
+        }
+      });
+    }
   }
 
   function closeWalletPrompt() {
     showWalletPrompt = false;
+    walletPromptPin = "";
+  }
+
+  function switchWalletPromptToPassphrase() {
+    walletPromptMode2 = "passphrase";
+    walletPromptPin = "";
+    walletPromptError = "";
+  }
+
+  function switchWalletPromptToPin() {
+    if (!walletPinUsable) return;
+    walletPromptMode2 = "pin";
+    walletPromptPin = "";
+    walletPromptError = "";
+  }
+
+  async function forgotWalletPromptPin() {
+    if (walletPromptWorking) return;
+    walletPromptWorking = true;
+    walletPromptError = "";
+    try {
+      await forgotWalletPin();
+      walletPinStatus = await loadWalletPinStatus();
+      walletPromptMode2 = "passphrase";
+      walletPromptPin = "";
+      walletPromptError = "Device PIN cleared. Enter your wallet passphrase to unlock.";
+    } catch (err) {
+      walletPromptError = "Could not clear PIN: " + String(err);
+    } finally {
+      walletPromptWorking = false;
+    }
   }
 
   async function confirmWalletPrompt() {
     if (!tauriReady) return;
+    // PIN unlock mode (only for unlock, not encrypt).
+    if (walletPromptMode === "unlock" && walletPromptMode2 === "pin" && walletPinUsable) {
+      if (!isValidPin(walletPromptPin)) {
+        walletPromptError = "Enter your 6-digit PIN.";
+        return;
+      }
+      walletPromptWorking = true;
+      walletPromptError = "";
+      try {
+        const duration = Number(walletPromptDuration || 300);
+        await unlockWalletWithPin(walletPromptPin, duration);
+        walletPromptPin = "";
+        showWalletPrompt = false;
+        try { networkMode = await core.invoke("get_network_mode"); } catch (e) {}
+        await refreshDashboard();
+      } catch (err) {
+        walletPromptPin = "";
+        walletPromptError = String(err || "PIN unlock failed");
+        walletPinStatus = await loadWalletPinStatus();
+        if (pinRequiresPassphrase(walletPinStatus)) {
+          walletPromptMode2 = "passphrase";
+        }
+      } finally {
+        walletPromptWorking = false;
+      }
+      return;
+    }
     try {
       if (walletPromptMode === "encrypt") {
         if (!walletPromptPass) {
@@ -687,10 +774,11 @@
           return;
         }
         const duration = Number(walletPromptDuration || 60);
-        await core.invoke("wallet_unlock", {
-          password: walletPromptPass,
-          duration,
-        });
+        await unlockRuntimeWalletWithPassphrase(walletPromptPass, duration);
+        // After a successful full passphrase unlock, offer to set a device PIN
+        // if none is configured. The offer is surfaced via the wallet prompt's
+        // success path; the Wallet page also shows Set/Change/Remove PIN.
+        walletPinStatus = await loadWalletPinStatus();
       }
       // Check Network Mode
       try {
@@ -1676,15 +1764,17 @@
           Encryption is permanent. If you lose this password, funds are lost.
         </p>
       {/if}
-      <label class="modal-label" for="wallet-pass">Password</label>
-      <input
-        id="wallet-pass"
-        type="password"
-        class="modal-input"
-        bind:value={walletPromptPass}
-        placeholder="Enter password"
-        on:keydown={(e) => e.key === "Enter" && confirmWalletPrompt()}
-      />
+      {#if walletPromptMode === "encrypt" || walletPromptMode2 === "passphrase" || !walletPinUsable}
+        <label class="modal-label" for="wallet-pass">{walletPromptMode === "encrypt" ? "Password" : "Wallet passphrase"}</label>
+        <input
+          id="wallet-pass"
+          type="password"
+          class="modal-input"
+          bind:value={walletPromptPass}
+          placeholder={walletPromptMode === "encrypt" ? "Enter password" : "Enter wallet passphrase"}
+          on:keydown={(e) => e.key === "Enter" && confirmWalletPrompt()}
+        />
+      {/if}
       {#if walletPromptMode === "encrypt"}
         <label class="modal-label" for="wallet-pass-confirm"
           >Confirm Password</label
@@ -1697,19 +1787,63 @@
           placeholder="Confirm password"
         />
       {:else}
-        <p class="modal-text">
-          Unlocking allows Commander to sign transactions for the selected time. The default is 5 minutes. Lock the wallet again when you are done sending.
-        </p>
-        <label class="modal-label" for="wallet-duration"
-          >Duration (seconds)</label
-        >
-        <input
-          id="wallet-duration"
-          type="number"
-          class="modal-input"
-          bind:value={walletPromptDuration}
-          min="1"
-        />
+        {#if walletPromptMode2 === "pin" && walletPinUsable}
+          <p class="modal-text">
+            Enter this device's 6-digit PIN to unlock the local Core wallet for signing on this device.
+          </p>
+          <label class="modal-label" for="wallet-pin">Device PIN</label>
+          <input
+            id="wallet-pin"
+            type="password"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="6"
+            class="modal-input modal-pin-input"
+            bind:value={walletPromptPin}
+            placeholder="6-digit PIN"
+            on:input={(e) => (walletPromptPin = cleanWalletPin(e.currentTarget.value))}
+            on:keydown={(e) => e.key === "Enter" && walletPromptPin.length === 6 && confirmWalletPrompt()}
+          />
+          {#if (walletPinStatus?.lockout_remaining_secs || 0) > 0}
+            <p class="modal-text" style="color:#ffaa55;">
+              PIN unlock temporarily locked. Try again in {Math.ceil(walletPinStatus.lockout_remaining_secs)}s, or use your wallet passphrase.
+            </p>
+          {/if}
+          <div class="modal-pin-actions">
+            <button type="button" class="modal-link-btn" on:click={switchWalletPromptToPassphrase} disabled={walletPromptWorking}>
+              Use wallet passphrase
+            </button>
+            <button type="button" class="modal-link-btn muted" on:click={forgotWalletPromptPin} disabled={walletPromptWorking}>
+              Forgot PIN
+            </button>
+          </div>
+        {:else}
+          {#if walletPinStatus?.pin_configured && pinRequiresPassphrase(walletPinStatus) && walletPinStatus?.reason}
+            <p class="modal-text" style="color:#9fd8af;">
+              {walletPinStatus.reason}
+            </p>
+          {/if}
+          <p class="modal-text">
+            Unlocking allows Commander to sign transactions for the selected time. The default is 5 minutes. Lock the wallet again when you are done sending.
+          </p>
+          <label class="modal-label" for="wallet-duration"
+            >Duration (seconds)</label
+          >
+          <input
+            id="wallet-duration"
+            type="number"
+            class="modal-input"
+            bind:value={walletPromptDuration}
+            min="1"
+          />
+          {#if walletPinUsable}
+            <div class="modal-pin-actions single">
+              <button type="button" class="modal-link-btn" on:click={switchWalletPromptToPin} disabled={walletPromptWorking}>
+                Use device PIN instead
+              </button>
+            </div>
+          {/if}
+        {/if}
       {/if}
       {#if walletPromptError}
         <div class="modal-error" role="alert">{walletPromptError}</div>
@@ -1717,8 +1851,8 @@
       <div class="modal-actions">
         <button class="btn-sm ghost" on:click={closeWalletPrompt}>CANCEL</button
         >
-        <button class="btn-sm primary" on:click={confirmWalletPrompt}>
-          {walletPromptMode === "encrypt" ? "ENCRYPT" : "UNLOCK"}
+        <button class="btn-sm primary" on:click={confirmWalletPrompt} disabled={walletPromptWorking}>
+          {walletPromptMode === "encrypt" ? "ENCRYPT" : (walletPromptMode2 === "pin" && walletPinUsable ? "UNLOCK" : "UNLOCK")}
         </button>
       </div>
     </div>
@@ -2876,6 +3010,50 @@
   .modal-input:focus {
     border-color: var(--color-primary);
     box-shadow: 0 0 12px rgba(0, 255, 65, 0.15);
+  }
+  .modal-pin-input {
+    text-align: center;
+    letter-spacing: 0.45rem;
+    font-size: 1rem;
+    color: var(--color-primary);
+    background: rgba(0, 0, 0, 0.72);
+    border-width: 1.5px;
+  }
+  .modal-pin-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.45rem;
+    flex-wrap: wrap;
+  }
+  .modal-pin-actions.single {
+    justify-content: flex-start;
+  }
+  .modal-link-btn {
+    background: none;
+    border: none;
+    color: #7fb69b;
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    padding: 0;
+  }
+  .modal-link-btn:hover:not(:disabled) {
+    color: var(--color-primary);
+  }
+  .modal-link-btn.muted {
+    color: #9a8a8a;
+  }
+  .modal-link-btn.muted:hover:not(:disabled) {
+    color: #ff7777;
+  }
+  .modal-link-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    text-decoration: none;
   }
   .modal-error {
     margin-top: 0.75rem;

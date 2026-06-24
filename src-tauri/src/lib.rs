@@ -18,6 +18,7 @@ use modules::short_message_suggestions;
 use modules::short_message_table_packs;
 use modules::stratum;
 use modules::vault;
+use modules::wallet_pin_unlock;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -385,6 +386,15 @@ pub fn run() {
             // Vault passphrase rotation + unload/fallback (slice 64p)
             vault::vault_change_passphrase,
             vault::vault_unload_vault_and_use_wallet_dat,
+            // Wallet runtime PIN unlock (slice 76b)
+            wallet_pin_unlock::wallet_pin_status,
+            wallet_pin_unlock::wallet_pin_setup,
+            wallet_pin_unlock::wallet_pin_change,
+            wallet_pin_unlock::wallet_pin_remove,
+            wallet_pin_unlock::wallet_pin_forgot,
+            wallet_pin_unlock::wallet_pin_unlock,
+            // Active runtime wallet passphrase unlock (slice 76c routing cleanup)
+            wallet_pin_unlock::wallet_unlock_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,6 +4,15 @@
     import { formatAmount } from "./utils.js";
     import { ensureNodeSyncedForBroadcast } from "./utils/nodeSync.js";
     import WalletUnlockModal from "./ui/WalletUnlockModal.svelte";
+    import {
+        loadWalletPinStatus,
+        defaultUnlockMode,
+        pinRequiresPassphrase,
+        unlockWalletWithPin,
+        unlockRuntimeWalletWithPassphrase,
+        forgotWalletPin,
+        isValidPin,
+    } from "./walletPinUnlock.js";
 
     // --- FORM STATE ---
     let address = "";
@@ -90,6 +99,11 @@
     let unlockConfirmLabel = "UNLOCK AND CONTINUE";
     /** @type {(() => void) | null} */
     let pendingRetryFn = null;
+    // Runtime Wallet PIN unlock (slice 76b)
+    let walletPinStatus = null;
+    let walletUnlockMode = "passphrase";
+    let unlockPin = "";
+    $: walletPinUsable = !!walletPinStatus?.pin_configured && !pinRequiresPassphrase(walletPinStatus);
 
     // --- LIFECYCLE ---
     onMount(() => {
@@ -424,21 +438,92 @@
         /** @type {"preview" | "broadcast"} */ mode = "broadcast",
     ) {
         unlockPassword = "";
+        unlockPin = "";
         unlockError = "";
         pendingRetryFn = retryFn;
         unlockBody = mode === "preview"
             ? "Your wallet is locked. Commander will unlock it for 5 minutes so you can preview and send this transaction."
             : "Your wallet is locked. Commander will unlock it for 5 minutes to broadcast this transaction.";
         unlockConfirmLabel = mode === "preview" ? "UNLOCK AND CONTINUE" : "UNLOCK AND BROADCAST";
+        walletUnlockMode = "passphrase";
+        walletPinStatus = null;
         showUnlockModal = true;
+        // Load PIN status async, then pick the default mode once known.
+        loadWalletPinStatus().then((status) => {
+            if (showUnlockModal) {
+                walletPinStatus = status;
+                if (walletUnlockMode === "passphrase") {
+                    walletUnlockMode = defaultUnlockMode(status);
+                }
+            }
+        });
+    }
+
+    function switchWalletUnlockToPassphrase() {
+        walletUnlockMode = "passphrase";
+        unlockPin = "";
+        unlockError = "";
+    }
+
+    function switchWalletUnlockToPin() {
+        if (!walletPinUsable) return;
+        walletUnlockMode = "pin";
+        unlockPin = "";
+        unlockError = "";
+    }
+
+    async function forgotWalletPinUnlock() {
+        if (unlocking) return;
+        unlocking = true;
+        unlockError = "";
+        try {
+            await forgotWalletPin();
+            walletPinStatus = await loadWalletPinStatus();
+            walletUnlockMode = "passphrase";
+            unlockPin = "";
+            unlockError = "Device PIN cleared. Enter your wallet passphrase to unlock.";
+        } catch (err) {
+            unlockError = "Could not clear PIN: " + String(err);
+        } finally {
+            unlocking = false;
+        }
     }
 
     async function unlockAndRetry() {
+        if (unlocking) return;
+        // PIN mode: unlock the active runtime wallet with the device PIN.
+        if (walletUnlockMode === "pin" && walletPinUsable) {
+            if (!isValidPin(unlockPin)) {
+                unlockError = "Enter your 6-digit PIN.";
+                return;
+            }
+            unlocking = true;
+            unlockError = "";
+            try {
+                await unlockWalletWithPin(unlockPin, 300);
+                unlockPin = "";
+                showUnlockModal = false;
+                await refreshWalletStatus();
+                const fn = pendingRetryFn;
+                pendingRetryFn = null;
+                if (fn) await fn();
+            } catch (err) {
+                unlockPin = "";
+                unlockError = String(err);
+                walletPinStatus = await loadWalletPinStatus();
+                if (pinRequiresPassphrase(walletPinStatus)) {
+                    walletUnlockMode = "passphrase";
+                }
+            } finally {
+                unlocking = false;
+            }
+            return;
+        }
         if (!unlockPassword.trim() || unlocking) return;
         unlocking = true;
         unlockError = "";
         try {
-            await core.invoke("wallet_unlock", { password: unlockPassword, duration: 300 });
+            await unlockRuntimeWalletWithPassphrase(unlockPassword, 300);
             unlockPassword = "";
             showUnlockModal = false;
             await refreshWalletStatus();
@@ -1350,14 +1435,23 @@
 
 <WalletUnlockModal
     show={showUnlockModal}
+    mode={walletUnlockMode}
     bind:password={unlockPassword}
+    bind:pin={unlockPin}
     {unlocking}
     error={unlockError}
-    title="UNLOCK WALLET"
-    body={unlockBody}
-    confirmLabel={unlockConfirmLabel}
-    on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockError = ""; pendingRetryFn = null; }}
+    title={walletUnlockMode === "pin" && walletPinUsable ? "UNLOCK WITH DEVICE PIN" : "UNLOCK WALLET"}
+    body={walletUnlockMode === "pin" && walletPinUsable ? "Enter this device's 6-digit PIN to unlock the local Core wallet for signing." : unlockBody}
+    confirmLabel={walletUnlockMode === "pin" && walletPinUsable ? "UNLOCK" : unlockConfirmLabel}
+    pinConfigured={walletPinUsable}
+    pinRequiresPassphrase={walletUnlockMode === "pin" && pinRequiresPassphrase(walletPinStatus)}
+    pinRequiresPassphraseReason={walletPinStatus?.reason || ""}
+    lockoutRemainingSecs={walletPinStatus?.lockout_remaining_secs || 0}
+    on:cancel={() => { showUnlockModal = false; unlockPassword = ""; unlockPin = ""; unlockError = ""; pendingRetryFn = null; }}
     on:confirm={unlockAndRetry}
+    on:usepassphrase={switchWalletUnlockToPassphrase}
+    on:usepin={switchWalletUnlockToPin}
+    on:forgotpin={forgotWalletPinUnlock}
 />
 
 <!-- UTXO SELECTION MODAL -->

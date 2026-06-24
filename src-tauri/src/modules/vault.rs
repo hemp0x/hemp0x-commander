@@ -1218,6 +1218,11 @@ pub fn import_bundle_replace_from_path(
 
     save_bundle_atomic(&bundle)?;
 
+    // Replacing the vault changes the runtime wallet identity, so any existing
+    // local wallet-PIN record must not unlock the new wallet. Invalidate it.
+    // Best effort only.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
+
     Ok(serde_json::json!({
         "imported": true,
         "bundle_version": bundle.bundleVersion,
@@ -7265,6 +7270,11 @@ pub fn vault_connect_webcom_primary_wallet_to_core_guided(
 #[tauri::command]
 pub fn vault_set_active_wallet_name(wallet_name: String) -> Result<(), String> {
     let mut settings = crate::modules::files::load_app_settings_impl()?;
+    // Switching the active runtime wallet changes the wallet identity, so any
+    // existing local wallet-PIN record must not unlock the new wallet.
+    // Invalidate it; the user re-sets the PIN after unlocking the new wallet.
+    // Best effort only — never fail a wallet switch over PIN cleanup.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
     settings.active_vault_wallet_name = Some(wallet_name);
     crate::modules::files::save_app_settings_impl(&settings)
 }
@@ -7525,6 +7535,12 @@ pub fn unload_vault_and_use_wallet_dat_blocking(
 
     // 1) Clear the cached vault session passphrase.
     crate::modules::provider_settings::clear_vault_passphrase();
+
+    // 1b) Invalidate the local wallet-PIN unlock record. Unloading the vault
+    // means the active runtime wallet is changing (back to wallet.dat or none),
+    // so a PIN bound to the previous wallet must not unlock the next one. Best
+    // effort only.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
 
     // 2) Clear `active_vault_wallet_name` in app settings so the next
     //    Core start does not pass `-wallet=<vault-name>`.

@@ -1446,6 +1446,10 @@ pub fn wallet_unlock(password: String, duration: u64) -> Result<String, String> 
             serde_json::Value::Number(serde_json::value::Number::from(duration)),
         ],
     )?;
+    // Refresh the local wallet PIN unlock record's rotation/brute-force
+    // counters after a successful full passphrase unlock. Best effort: a
+    // missing/mismatched PIN record is a no-op/cleanup, never fatal.
+    let _ = crate::modules::wallet_pin_unlock::refresh_after_passphrase_unlock();
     Ok(result.as_str().unwrap_or("").to_string())
 }
 
@@ -1464,6 +1468,8 @@ pub fn wallet_unlock_named(
             serde_json::Value::Number(serde_json::value::Number::from(duration)),
         ],
     )?;
+    // Same PIN-record refresh as the default-wallet unlock path.
+    let _ = crate::modules::wallet_pin_unlock::refresh_after_passphrase_unlock();
     Ok(result.as_str().unwrap_or("").to_string())
 }
 
@@ -1490,6 +1496,10 @@ pub fn change_wallet_password(old_pass: String, new_pass: String) -> Result<Stri
             serde_json::Value::String(new_pass),
         ],
     )?;
+    // A wallet passphrase change makes the stored PIN-encrypted passphrase
+    // stale and changes the wallet fingerprint (new hd master keyid). Invalidate
+    // the local PIN record; the user re-sets the PIN. Best effort only.
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
     Ok(result.as_str().unwrap_or("").to_string())
 }
 
@@ -1508,6 +1518,7 @@ pub fn change_wallet_password_named(
             serde_json::Value::String(new_pass),
         ],
     )?;
+    let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
     Ok(result.as_str().unwrap_or("").to_string())
 }
 

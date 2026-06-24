@@ -17,3 +17,4 @@ pub mod short_message_tables;
 pub mod stratum;
 pub mod utils;
 pub mod vault;
+pub mod wallet_pin_unlock;

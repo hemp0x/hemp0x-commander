@@ -348,7 +348,7 @@ fn active_vault_wallet_name() -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
-fn call_active_wallet_or_default(
+pub(crate) fn call_active_wallet_or_default(
     method: &str,
     params: &[serde_json::Value],
 ) -> Result<serde_json::Value, String> {

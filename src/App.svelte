@@ -220,6 +220,7 @@
   let closeCleanupInProgress = false;
   let closeCleanupComplete = false;
   let showClosePrompt = false;
+  let closePromptStatus = "";
   /** @type {RpcAuthStatus | null} */
   let rpcAuthStatus = null;
   let showRpcAuthHelp = false;
@@ -309,19 +310,21 @@
   }
 
   async function closeStopDaemon() {
-    showClosePrompt = false;
+    closePromptStatus = "Stopping daemon...";
+    closeCleanupInProgress = true;
     try {
-      await core.invoke("stop_node_and_wait", { timeoutMs: 90000 });
+      await core.invoke("stop_node_and_wait", { timeoutMs: 45000 });
       await core.invoke("release_daemon_ownership");
-    } catch {
-      // best-effort cleanup
+    } catch (err) {
+      addRuntimeNotification("Daemon stop on close timed out", String(err || "").substring(0, 240), "warning");
     }
     closeCleanupComplete = true;
     await getCurrentWindow().close();
   }
 
   async function closeLeaveDaemon() {
-    showClosePrompt = false;
+    closePromptStatus = "Closing Commander...";
+    closeCleanupInProgress = true;
     try {
       await core.invoke("release_daemon_ownership");
     } catch {
@@ -334,6 +337,7 @@
   function closeCancel() {
     showClosePrompt = false;
     closeCleanupInProgress = false;
+    closePromptStatus = "";
   }
 
   function closeWelcome() {
@@ -1030,8 +1034,10 @@
           // can't determine ownership, close immediately
         }
 
-        if (owns) {
+        const status = get(nodeStatus);
+        if (owns || status.online) {
           closeCleanupInProgress = true;
+          closePromptStatus = "";
           showClosePrompt = true;
         } else {
           closeCleanupComplete = true;
@@ -2054,15 +2060,20 @@
           <p class="welcome-text">
             Commander is currently managing the hemp0xd daemon. How would you like to proceed?
           </p>
+          {#if closePromptStatus}
+            <div style="margin-top:0.8rem;">
+              <CommanderLoader compact={true} label={closePromptStatus} detail="Please wait while Commander finishes the shutdown request." />
+            </div>
+          {/if}
         </div>
         <div class="welcome-footer" style="flex-wrap: wrap; gap: 0.5rem;">
-          <button class="btn-xs" style="flex: 1;" on:click={closeStopDaemon}>
+          <button class="btn-xs" style="flex: 1;" on:click={closeStopDaemon} disabled={!!closePromptStatus}>
             Stop daemon and exit
           </button>
-          <button class="btn-xs" style="flex: 1;" on:click={closeLeaveDaemon}>
+          <button class="btn-xs" style="flex: 1;" on:click={closeLeaveDaemon} disabled={!!closePromptStatus}>
             Leave daemon running
           </button>
-          <button class="btn-xs ghost" style="flex: 1;" on:click={closeCancel}>
+          <button class="btn-xs ghost" style="flex: 1;" on:click={closeCancel} disabled={!!closePromptStatus}>
             Cancel
           </button>
         </div>

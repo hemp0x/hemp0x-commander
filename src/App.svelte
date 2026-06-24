@@ -3523,31 +3523,6 @@ rpccookiefile=...</pre>
     justify-content: center;
     align-items: center;
   }
-  .settings-section {
-    background: rgba(0, 255, 65, 0.02);
-    border: 1px solid rgba(0, 255, 65, 0.1);
-    border-radius: 8px;
-    padding: 1rem;
-  }
-  .about-footer {
-    margin-top: auto;
-    padding-top: 1.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .about-link {
-    color: var(--color-primary);
-    text-decoration: none;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-    transition: opacity 0.2s;
-  }
-  .about-link:hover {
-    opacity: 0.8;
-    text-decoration: underline;
-  }
   /* --- HEADER RESPONSIVENESS --- */
 
   @media (max-width: 900px) {

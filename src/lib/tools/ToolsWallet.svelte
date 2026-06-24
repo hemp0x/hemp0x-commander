@@ -1524,7 +1524,7 @@
                 showToast("Legacy wallet.dat imported successfully.", "success");
             }
             if (result.hemp_conf_wallet) {
-                showToast("Warning: hemp.conf contains wallet=" + result.hemp_conf_wallet + " — Core may load that wallet instead of wallet.dat.", "warning", false);
+                showToast("Warning: hemp.conf contains wallet=" + result.hemp_conf_wallet + ". Core may load that wallet instead of wallet.dat.", "warning", false);
             }
             if (result.restart_error) {
                 unifiedImportError = result.restart_error;
@@ -1986,7 +1986,7 @@
                 showToast("Core is using wallet.dat. Your Hemp0x Vault remains unlocked.", "success");
             }
             if (result?.hemp_conf_wallet) {
-                showToast("Warning: hemp.conf contains wallet=" + result.hemp_conf_wallet + " — Core may load that wallet instead of wallet.dat.", "warning", false);
+                showToast("Warning: hemp.conf contains wallet=" + result.hemp_conf_wallet + ". Core may load that wallet instead of wallet.dat.", "warning", false);
             }
         } catch (e) {
             vaultPageError = "Could not switch to wallet.dat: " + String(e);
@@ -2146,7 +2146,7 @@
 
     function formatBytes(n) {
         const num = Number(n);
-        if (!num || num < 0) return "—";
+        if (!num || num < 0) return "n/a";
         if (num < 1024) return `${num} B`;
         if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
         return `${(num / (1024 * 1024)).toFixed(2)} MB`;
@@ -2397,11 +2397,11 @@
 
     function formatUnixShort(ts) {
         const n = Number(ts);
-        if (!n) return "—";
+        if (!n) return "n/a";
         try {
             return new Date(n * 1000).toLocaleString();
         } catch {
-            return "—";
+            return "n/a";
         }
     }
 
@@ -2833,7 +2833,7 @@
             unloadVaultResult = result;
 
             if (result.no_legacy_wallet) {
-                showToast("Vault unloaded. No wallet.dat was found — choose a next action below.", "warning", false);
+                showToast("Vault unloaded. No wallet.dat was found. Choose a next action below.", "warning", false);
             } else {
                 showToast("Vault unloaded. Core restarted in legacy wallet.dat mode.", "success");
             }
@@ -2841,7 +2841,7 @@
                 showToast("Vault was unloaded but could not be archived: " + result.archive_error, "warning", false);
             }
             if (result.hemp_conf_wallet) {
-                showToast("Warning: hemp.conf has wallet=" + result.hemp_conf_wallet + " — Core may load that wallet instead of wallet.dat.", "warning", false);
+                showToast("Warning: hemp.conf has wallet=" + result.hemp_conf_wallet + ". Core may load that wallet instead of wallet.dat.", "warning", false);
             }
             if (result.restart_error) {
                 unloadVaultError = result.restart_error;
@@ -4048,11 +4048,11 @@
                     <h4 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.75rem; letter-spacing:0.5px;">RUNTIME WALLET</h4>
                     {#if !runtimeWalletIsVaultConnected}
                         <div style="background:rgba(255,170,0,0.08); border:1px solid rgba(255,170,0,0.2); border-radius:4px; padding:0.35rem 0.6rem; margin-bottom:0.5rem; font-size:0.6rem; color:#ffaa00;">
-                            <strong>Mode: Legacy Core wallet</strong> — Commander is using the default wallet.dat, not a connected vault wallet.
+                            <strong>Mode: Legacy Core wallet</strong>. Commander is using the default wallet.dat, not a connected vault wallet.
                         </div>
                     {:else}
                         <div style="background:rgba(0,255,102,0.06); border:1px solid rgba(0,255,102,0.18); border-radius:4px; padding:0.35rem 0.6rem; margin-bottom:0.5rem; font-size:0.6rem; color:var(--color-primary);">
-                            <strong>Mode: Hemp0x Vault wallet</strong> — Commander is using the portable vault runtime wallet.
+                            <strong>Mode: Hemp0x Vault wallet</strong>. Commander is using the portable vault runtime wallet.
                         </div>
                     {/if}
                     {#if walletStatusError}
@@ -4917,9 +4917,9 @@
             {:else if alignmentConnectPlan}
                 <!-- Compact plan summary -->
                 <div style="display:flex; flex-direction:column; gap:0.25rem; font-size:0.6rem; color:#aaa; margin-bottom:0.75rem;">
-                    <div><span style="color:#666;">Network:</span> {alignmentConnectPlan.webcom_primary_network || "—"}</div>
-                    <div><span style="color:#666;">Derivation:</span> {alignmentConnectPlan.webcom_primary_derivation_hemp || "—"}</div>
-                    <div><span style="color:#666;">History scan:</span> {alignmentConnectPlan.rescan_window_label || "—"}</div>
+                    <div><span style="color:#666;">Network:</span> {alignmentConnectPlan.webcom_primary_network || "n/a"}</div>
+                    <div><span style="color:#666;">Derivation:</span> {alignmentConnectPlan.webcom_primary_derivation_hemp || "n/a"}</div>
+                    <div><span style="color:#666;">History scan:</span> {alignmentConnectPlan.rescan_window_label || "n/a"}</div>
                 </div>
 
                 {#if alignmentConnectPlan.can_guided_connect}
@@ -5083,7 +5083,7 @@
                             {#if alignmentConnectPlan.pre_connect_backup_required}
                                 <label class="vault-connect-confirm">
                                     <input type="checkbox" bind:checked={skipBackup} />
-                                    <span>Skip backup — connect without backing up current wallet</span>
+                                    <span>Skip backup. Connect without backing up current wallet</span>
                                 </label>
                             {/if}
                             {#if alignmentConnectPlan.rescan_window_label}
@@ -5634,7 +5634,7 @@
                 <div class="vault-connect-info" style="margin-bottom:0.6rem;">
                     <strong>Detected: Hemp0x Vault</strong>
                     {#if unifiedImportDetection?.network}
-                        <span style="color:#888;"> — {unifiedImportDetection.network}</span>
+                        <span style="color:#888;"> | {unifiedImportDetection.network}</span>
                     {/if}
                 </div>
                 <p class="vault-connect-help" style="margin-bottom:0.65rem;">
@@ -5799,7 +5799,7 @@
                 <div class="vault-connect-info" style="margin-bottom:0.6rem;">
                     <strong>Detected: Core migration envelope</strong>
                     {#if unifiedImportDetection?.migration_wallet_name}
-                        <span style="color:#888;"> — wallet: {unifiedImportDetection.migration_wallet_name}</span>
+                        <span style="color:#888;"> | wallet: {unifiedImportDetection.migration_wallet_name}</span>
                     {/if}
                     {#if unifiedImportDetection?.migration_encrypted}
                         <span style="color:#ffaa00;"> (encrypted)</span>

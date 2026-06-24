@@ -109,12 +109,15 @@ We value your feedback.
 
 **Prerequisites:** Node.js v18+, Rust Stable.
 
-**Critical Note:** You must manually place `hemp0xd` and `hemp0x-cli` into the `src-tauri/` folder. **Crucially, they must retain their target triple suffix** (e.g., `hemp0xd-x86_64-pc-windows-msvc.exe`) for the Tauri builder to detect them.
+Commander bundles Core Next `hemp0xd`, `hemp0x-cli`, and `hemp0x-tx` binaries as Tauri sidecars. Stage them from the Core Next 4.8.0.0 release artifacts before building. The staging script verifies SHA256 checksums and places the binaries into `src-tauri/binaries/` with the required target-triple suffixes.
 
 ```bash
 npm install
+npm run stage:core-next
 npm run tauri build
 ```
+
+See [`docs/RELEASE_BUILDING.md`](docs/RELEASE_BUILDING.md) for the full repeatable build flow (Linux AppImage and Windows portable EXE).
 
 ---
 

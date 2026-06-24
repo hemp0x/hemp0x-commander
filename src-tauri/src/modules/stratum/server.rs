@@ -157,7 +157,7 @@ async fn update_template() -> Result<(), String> {
                 .lock()
                 .map_err(|e| format!("Lock error: {}", e))?;
             state.node_rpc_ok = false;
-            state.template_error = Some("Node unavailable — will retry automatically".to_string());
+            state.template_error = Some("Node unavailable. Will retry automatically".to_string());
             state.last_error = Some(format!("Template RPC error: {}", e));
             log::warn!("Block template update failed: {}", e);
             Err(e)

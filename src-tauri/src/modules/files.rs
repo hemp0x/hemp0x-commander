@@ -1457,7 +1457,7 @@ pub fn get_config_help_reference() -> Result<Vec<ConfigHelpSection>, String> {
             entries: vec![
                 ConfigHelpEntry {
                     key: "addnode".to_string(),
-                    description: "Add a node to connect to. Format IP:port. Repeatable — one entry per line. Supports IPv4, hostname, and bracketed IPv6.".to_string(),
+                    description: "Add a node to connect to. Format IP:port. Repeatable. One entry per line. Supports IPv4, hostname, and bracketed IPv6.".to_string(),
                     default_value: "Not set".to_string(),
                     commander_relevance: "Commander can add bootstrap addnodes. Addnode peers are protected from automatic Peer Guard bans.".to_string(),
                 },
@@ -2308,7 +2308,7 @@ pub fn prepare_core_data_dir_move(target_path: String) -> Result<DataMovePreview
     }
     if source.join(".lock").exists() {
         warnings.push(
-            "Source has a .lock file — daemon may be running. Stop it before move.".to_string(),
+            "Source has a .lock file. The daemon may be running. Stop it before move.".to_string(),
         );
     }
 

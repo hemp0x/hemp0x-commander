@@ -1,5 +1,7 @@
 # Build Guide for Hemp0x Commander
 
+> **Note:** This is a legacy v1.x cross-compilation guide. For current Hemp0x Commander 2.0.0 builds, use the staging-based flow in [`RELEASE_BUILDING.md`](RELEASE_BUILDING.md): run `npm run stage:core-next` to stage Core Next 4.8.0.0 binaries into `src-tauri/binaries/` (with target-triple suffixes), then `npm run tauri build`. Do not place binaries directly into `src-tauri/`. The manual placement steps below are retained as historical reference only.
+
 This generic guide outlines the process for building the Hemp0x Commander application from source. It covers setting up the unique cross-compilation environment required to produce stable binaries for both Windows and Linux platforms.
 
 ## Prerequisites
@@ -13,9 +15,13 @@ Ensure the following tools are installed on your workstation:
 - Git
 
 ### Core Binaries (Critical)
-Since binaries are excluded from Git, **you must manually place them** before building:
-- **Windows:** Place `hemp0xd.exe` and `hemp0x-cli.exe` into `hemp0x-commander/src-tauri/`
-- **Linux:** Place `hemp0xd` and `hemp0x-cli` into `hemp0x-commander/src-tauri/`
+Since binaries are excluded from Git, stage them before building using the Core Next release artifacts and the staging script, which verifies SHA256 checksums and writes them to `src-tauri/binaries/` with the required target-triple suffixes:
+
+```bash
+npm run stage:core-next
+```
+
+Override the artifact source directory with `CORE_NEXT_ARTIFACT_DIR=/path/to/artifacts npm run stage:core-next` if needed. See [`RELEASE_BUILDING.md`](RELEASE_BUILDING.md) for details.
 
 ### Linux Build Host Requirements
 To produce widely compatible binaries, we recommend using a Linux environment (specifically Nobara or Fedora) for the compilation process. This host performs two critical functions:

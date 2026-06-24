@@ -387,7 +387,7 @@
                 {#if holdersShown}
                     <div class="holders-panel">
                         <div class="holders-panel-header">
-                            <span class="holders-panel-title">HOLDER DETAILS — {asset?.name ?? ""}</span>
+                            <span class="holders-panel-title">HOLDER DETAILS: {asset?.name ?? ""}</span>
                             <div class="holders-panel-actions">
                                 <button class="holders-refresh-btn" on:click={loadHolders} disabled={holdersLoading} title="Refresh">↻</button>
                                 <button class="holders-close-btn" on:click={() => (holdersShown = false)}>&times;</button>

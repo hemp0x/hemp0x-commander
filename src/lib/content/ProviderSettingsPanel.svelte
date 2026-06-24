@@ -479,7 +479,7 @@
                     disabled={!vaultExists || !vaultUnlocked}
                     bind:value={providerSettings.pinata_api_token}
                     on:input={markEdited}
-                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.pinata?.stored ? "Stored in vault — paste new token to replace" : "Paste Pinata JWT"}
+                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.pinata?.stored ? "Stored in vault. Paste new token to replace" : "Paste Pinata JWT"}
                 />
                 <button
                     class="token-eye-btn"
@@ -536,7 +536,7 @@
                     disabled={!vaultExists || !vaultUnlocked}
                     bind:value={providerSettings.filebase_token}
                     on:input={markEdited}
-                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.filebase?.stored ? "Stored in vault — paste new token to replace" : "Paste Filebase token"}
+                    placeholder={!vaultExists ? "Create a vault in Tools → Wallet first" : !vaultUnlocked ? "Unlock vault to edit" : tokenPresence?.providers?.filebase?.stored ? "Stored in vault. Paste new token to replace" : "Paste Filebase token"}
                 />
                 <button
                     class="token-eye-btn"
@@ -675,7 +675,7 @@ https://ipfs.io/ipfs/"
     <div class="modal-container" on:click|stopPropagation>
         <div class="modal-header">
             <h4 class="modal-title">
-                Published Content — {modalProvider === "pinata" ? "Pinata" : modalProvider === "filebase" ? "Filebase" : "Installed Kubo"}
+                Published Content: {modalProvider === "pinata" ? "Pinata" : modalProvider === "filebase" ? "Filebase" : "Installed Kubo"}
             </h4>
             <button class="cyber-btn ghost small" on:click={closePublishedModal}>CLOSE</button>
         </div>
@@ -722,15 +722,15 @@ https://ipfs.io/ipfs/"
                         {#each modalItems as item}
                         <tr>
                             <td class="col-check"><input type="checkbox" checked={selectedCids.includes(item.cid)} on:change={() => toggleCid(item.cid)} /></td>
-                            <td class="col-name" title={item.name || ""}>{item.name || "—"}</td>
+                            <td class="col-name" title={item.name || ""}>{item.name || "n/a"}</td>
                             <td class="col-cid mono" title={item.cid}>{shortCid(item.cid)}</td>
-                            <td class="col-size">{item.size_bytes != null ? formatSize(item.size_bytes) : "—"}</td>
-                            <td class="col-status">{item.status || "—"}</td>
+                            <td class="col-size">{item.size_bytes != null ? formatSize(item.size_bytes) : "n/a"}</td>
+                            <td class="col-status">{item.status || "n/a"}</td>
                             <td class="col-local">
                                 {#if item.local_package_names && item.local_package_names.length > 0}
                                     <span class="local-badge" title={item.local_package_names.join(", ")}>Matched local package</span>
                                 {:else}
-                                    —
+                                    n/a
                                 {/if}
                             </td>
                             <td class="col-actions">

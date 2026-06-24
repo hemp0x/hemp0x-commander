@@ -837,7 +837,7 @@ fn restore_legacy_wallet_dat_blocking(
 
     let source_meta = fs::metadata(&source).map_err(|e| format!("Cannot read source file: {e}"))?;
     if source_meta.len() == 0 {
-        return Err("Selected file is empty — not a valid wallet.".to_string());
+        return Err("Selected file is empty. Not a valid wallet.".to_string());
     }
 
     // Same-file check: if the selected source canonicalizes to the active
@@ -964,7 +964,7 @@ pub fn validate_wallet_file(path: String) -> Result<serde_json::Value, String> {
     }
     let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if file_size == 0 {
-        return Err("File is empty — not a valid wallet file.".to_string());
+        return Err("File is empty. Not a valid wallet file.".to_string());
     }
     let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
     let mut buf = vec![0u8; 100.min(file_size as usize)];

@@ -2320,7 +2320,7 @@ pub fn vault_restore_wallet_migration_record(
         && !migration_passphrase.is_empty()
     {
         return Err(
-            "This backup record was created with vault-passphrase recovery. Do not provide a separate migration passphrase — the vault passphrase is used automatically.".to_string()
+            "This backup record was created with vault-passphrase recovery. Do not provide a separate migration passphrase. The vault passphrase is used automatically.".to_string()
         );
     } else if recovery_mode == RECOVERY_MODE_VAULT_PASSPHRASE {
         passphrase.clone()

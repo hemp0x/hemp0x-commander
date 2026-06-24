@@ -921,12 +921,12 @@
                 params: [6],
             });
             if (!result.success || !result.data || result.data.feerate == null) {
-                feeEstimateError = "Fee estimation unavailable — set fee manually.";
+                feeEstimateError = "Fee estimation unavailable. Set the fee manually.";
                 return;
             }
             const feerate = parseFloat(result.data.feerate);
             if (isNaN(feerate) || feerate <= 0) {
-                feeEstimateError = "Fee estimation unavailable — set fee manually.";
+                feeEstimateError = "Fee estimation unavailable. Set the fee manually.";
                 return;
             }
             let suggestedFee = feerate * estimatedSelectedTxBytes / 1000;
@@ -941,7 +941,7 @@
             }
             estimatedFee = suggestedFee.toFixed(8);
         } catch {
-            feeEstimateError = "Fee estimation unavailable — set fee manually.";
+            feeEstimateError = "Fee estimation unavailable. Set the fee manually.";
         } finally {
             estimatingFee = false;
         }
@@ -1218,7 +1218,7 @@
                             Selected: {estimatedSelectedTxBytes}B |
                             Max safe: {maxSafeInputsForSend} inputs
                             {#if policyDiag?.current_safe_utxo_count > maxSafeInputsForSend}
-                                <span class="frag-warn"> | Wallet fragmented — consider consolidation</span>
+                                <span class="frag-warn"> | Wallet fragmented. Consider consolidation</span>
                             {/if}
                         </div>
                     {/if}

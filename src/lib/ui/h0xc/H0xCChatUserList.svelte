@@ -116,7 +116,7 @@
                     class:muted={mutedUsers.includes(p.rootName)}
                     on:click={(e) => openContextClick(e, p.rootName)}
                     on:contextmenu={(e) => openContext(e, p.rootName)}
-                    title={`${p.rootName.toUpperCase()} — ${p.messageCount} msgs — ${bucket.label}`}
+                    title={`${p.rootName.toUpperCase()} | ${p.messageCount} msgs | ${bucket.label}`}
                 >
                     <span class="ul-dot dot-tier-{bucket.tier}"></span>
                     <span class="ul-name">[{p.rootName.toUpperCase()}]</span>

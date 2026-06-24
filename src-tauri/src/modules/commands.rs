@@ -3298,9 +3298,9 @@ fn build_reissue_preview(
     }
     if qty_val == 0.0 {
         if ipfs_hash.is_some() {
-            warnings.push("Quantity is zero and a new IPFS hash is set — this will be a metadata update without increasing supply.".to_string());
+            warnings.push("Quantity is zero and a new IPFS hash is set. This will be a metadata update without increasing supply.".to_string());
         } else {
-            warnings.push("Reissue amount is zero — no new supply will be created, but metadata/IPFS or reissuable flag may be updated.".to_string());
+            warnings.push("Reissue amount is zero. No new supply will be created, but metadata/IPFS or reissuable flag may be updated.".to_string());
         }
     }
     if !reissuable {

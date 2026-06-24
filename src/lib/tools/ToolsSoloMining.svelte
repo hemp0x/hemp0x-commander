@@ -421,7 +421,7 @@
                 </svg>
                 <span>NODE UNAVAILABLE</span>
             </div>
-            <p class="alert-message">Local node is not responding. Mining is paused — connected miners will receive work once the node recovers.</p>
+            <p class="alert-message">Local node is not responding. Mining is paused. Connected miners will receive work once the node recovers.</p>
         </div>
     {:else if !isRunning && !nodeAvailable}
         <div class="alert-panel alert-warn node-down-banner">

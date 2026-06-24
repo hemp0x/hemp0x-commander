@@ -1132,7 +1132,7 @@
                             </div>
 
                             <div class="field-group">
-                                <label for="qualifier-qty">Quantity (1 – 10)</label>
+                                <label for="qualifier-qty">Quantity (1-10)</label>
                                 <input id="qualifier-qty" type="text" bind:value={qualifierQty} placeholder="1" class="cyber-input narrow" />
                             </div>
 
@@ -1191,9 +1191,9 @@
                                         <p>A logic expression using qualifier tags.</p>
                                         <p><strong>Operators:</strong></p>
                                         <ul>
-                                            <li><code>&amp;</code> — AND (must have both)</li>
-                                            <li><code>|</code> — OR (must have at least one)</li>
-                                            <li><code>!</code> — NOT (must not have)</li>
+                                            <li><code>&amp;</code>: AND (must have both)</li>
+                                            <li><code>|</code>: OR (must have at least one)</li>
+                                            <li><code>!</code>: NOT (must not have)</li>
                                         </ul>
                                         <p>Example: <code>#KYC &amp; (!#AML | #COMPLIANT)</code></p>
                                     </HelpHitbox>
@@ -1213,7 +1213,7 @@
                             />
 
                             <div class="field-group narrow-inline">
-                                <label for="restricted-units">Units (0–8)</label>
+                                <label for="restricted-units">Units (0-8)</label>
                                 <input id="restricted-units" type="number" bind:value={restrictedUnits} min="0" max="8" class="cyber-input" />
                             </div>
 
@@ -1244,9 +1244,9 @@
                                     <p>Manage qualifier tags assigned to addresses. You must hold the qualifier asset to add or remove its tag.</p>
                                     <p><strong>Actions:</strong></p>
                                     <ul>
-                                        <li><strong>Add tag</strong> — grant a qualifier to an address.</li>
-                                        <li><strong>Remove tag</strong> — revoke a qualifier from an address.</li>
-                                        <li><strong>List tags</strong> — check which qualifiers an address currently holds.</li>
+                                        <li><strong>Add tag</strong>: grant a qualifier to an address.</li>
+                                        <li><strong>Remove tag</strong>: revoke a qualifier from an address.</li>
+                                        <li><strong>List tags</strong>: check which qualifiers an address currently holds.</li>
                                     </ul>
                                     <p><strong>Common failures:</strong> invalid address format, you do not hold the qualifier, or node missing <code>-assetindex</code>.</p>
                                 </HelpHitbox>
@@ -1336,7 +1336,7 @@
                                 <div class="field-row">
                                     <div class="field-group flex-grow">
                                         <span class="field-label">Address</span>
-                                        <div class="read-only-field mono">{tagAddr || "—"}</div>
+                                        <div class="read-only-field mono">{tagAddr || "n/a"}</div>
                                     </div>
                                     <div class="panel-actions left align-center">
                                         <button class="cyber-btn small" on:click={lookupTags} disabled={tagLookupLoading}>

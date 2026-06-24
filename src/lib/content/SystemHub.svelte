@@ -961,12 +961,12 @@
         {/each}
       </nav>
       <HelpHitbox title="System Hub">
-        <p><strong>Overview</strong> — App version, binary status, daemon settings, and Core software management.</p>
-        <p><strong>Data</strong> — Manage the Core data directory. Commander settings live inside the active data folder. Use "Choose Data Folder" to change location. If data exists, you can copy it to the new location or use the selected folder as-is.</p>
-        <p><strong>Config</strong> — Edit hemp.conf directly. A default config can be created if none exists.</p>
-        <p><strong>Network</strong> — Peer ban list, ping / port diagnostics, and network mode switching.</p>
-        <p><strong>Logs</strong> — View and download the daemon debug.log.</p>
-        <p><strong>Repair</strong> — Schedule a one-shot reindex or reindex-chainstate. Requires wallet backup confirmation. The daemon is stopped, the flag is set, and the daemon is restarted automatically. Progress is monitored in real-time.</p>
+        <p><strong>Overview</strong>: App version, binary status, daemon settings, and Core software management.</p>
+        <p><strong>Data</strong>: Manage the Core data directory. Commander settings live inside the active data folder. Use "Choose Data Folder" to change location. If data exists, you can copy it to the new location or use the selected folder as-is.</p>
+        <p><strong>Config</strong>: Edit hemp.conf directly. A default config can be created if none exists.</p>
+        <p><strong>Network</strong>: Peer ban list, ping / port diagnostics, and network mode switching.</p>
+        <p><strong>Logs</strong>: View and download the daemon debug.log.</p>
+        <p><strong>Repair</strong>: Schedule a one-shot reindex or reindex-chainstate. Requires wallet backup confirmation. The daemon is stopped, the flag is set, and the daemon is restarted automatically. Progress is monitored in real-time.</p>
       </HelpHitbox>
     </div>
   </header>
@@ -1198,11 +1198,11 @@
               <div class="sh-card-body">
                 <p class="sh-help-text">The <strong>data folder</strong> contains all Hemp0x blockchain data and wallet information.</p>
                 <ul class="sh-bullet-list">
-                  <li><strong>wallet.dat</strong> — Your wallet keys and transaction history. BACK THIS UP!</li>
-                  <li><strong>hemp.conf</strong> — Node configuration file</li>
-                  <li><strong>blocks/</strong> — Downloaded blockchain data</li>
-                  <li><strong>chainstate/</strong> — Current UTXO set</li>
-                  <li><strong>debug.log</strong> — Node debug log file</li>
+                  <li><strong>wallet.dat</strong>: Your wallet keys and transaction history. BACK THIS UP!</li>
+                  <li><strong>hemp.conf</strong>: Node configuration file</li>
+                  <li><strong>blocks/</strong>: Downloaded blockchain data</li>
+                  <li><strong>chainstate/</strong>: Current UTXO set</li>
+                  <li><strong>debug.log</strong>: Node debug log file</li>
                 </ul>
                 <div class="sh-divider"></div>
                 <div class="sh-subtitle">COMMANDER SETTINGS</div>

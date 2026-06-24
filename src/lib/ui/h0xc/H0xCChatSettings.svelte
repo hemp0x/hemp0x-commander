@@ -131,7 +131,7 @@
                         <button class="sett-expiry-btn" class:active={draft.historyDays === 180} on:click={() => { draft.historyDays = 180; draft = draft; }}>180 Days</button>
                         <button class="sett-expiry-btn" class:active={draft.historyDays === 0} on:click={() => { draft.historyDays = 0; draft = draft; }}>All</button>
                     </div>
-                    <p class="sett-hint">How far back to show messages in the chat feed. Older messages are filtered in the UI only — nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
+                    <p class="sett-hint">How far back to show messages in the chat feed. Older messages are filtered in the UI only. Nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
                 </div>
 
                 <div class="sett-section">

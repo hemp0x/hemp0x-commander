@@ -31,7 +31,7 @@
     }
 
     function displayLabel(lbl) {
-        return lbl && lbl.trim() ? lbl : "—";
+        return lbl && lbl.trim() ? lbl : "n/a";
     }
 
     $: filtered = filterFavorites(favorites, searchQuery);

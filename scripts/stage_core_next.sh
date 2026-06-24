@@ -8,19 +8,19 @@ set -euo pipefail
 #
 # Environment overrides:
 #   CORE_NEXT_ARTIFACT_DIR  Path to the directory containing the release archives and SHA256SUMS.
-#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/github-upload-v4.7.0.0-core-next-r2/
+#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0/
 #   STAGING_DIR             Destination directory for staged binaries.
 #                           Default: <repo root>/src-tauri/binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/github-upload-v4.7.0.0-core-next-r2"
+DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0"
 ARTIFACT_DIR="${CORE_NEXT_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
 STAGING_DIR="${STAGING_DIR:-$REPO_ROOT/src-tauri/binaries}"
 
-LINUX_ARCHIVE="hemp0x-core-next-4.7.0.0-linux-gnu.tar.gz"
-WINDOWS_ARCHIVE="hemp0x-core-next-4.7.0.0-w64-mingw32.zip"
+LINUX_ARCHIVE="hemp0x-core-next-4.8.0.0-linux-gnu.tar.gz"
+WINDOWS_ARCHIVE="hemp0x-core-next-4.8.0.0-w64-mingw32.zip"
 SUMS_FILE="SHA256SUMS"
 
 LINUX_TRIPLE="x86_64-unknown-linux-gnu"
@@ -89,8 +89,8 @@ echo "[4/4] Staging binaries to $STAGING_DIR..."
 staged_count=0
 
 for bin in "${BINARIES[@]}"; do
-  # Linux
-  linux_src="$LINUX_WORK/$bin"
+  # Linux (archives may nest binaries under a top-level directory)
+  linux_src="$(find "$LINUX_WORK" -type f -name "$bin" | head -n 1)"
   linux_dst="$STAGING_DIR/${bin}-${LINUX_TRIPLE}"
   if [[ -f "$linux_src" ]]; then
     cp "$linux_src" "$linux_dst"
@@ -103,7 +103,7 @@ for bin in "${BINARIES[@]}"; do
   fi
 
   # Windows
-  win_src="$WINDOWS_WORK/${bin}.exe"
+  win_src="$(find "$WINDOWS_WORK" -type f -name "${bin}.exe" | head -n 1)"
   win_dst="$STAGING_DIR/${bin}-${WINDOWS_TRIPLE}.exe"
   if [[ -f "$win_src" ]]; then
     cp "$win_src" "$win_dst"

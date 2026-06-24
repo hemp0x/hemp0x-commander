@@ -15,6 +15,8 @@ use serde::Serialize;
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::thread;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 
@@ -66,6 +68,43 @@ fn is_valid_bind_address(addr: &str) -> bool {
         return false;
     }
     matches!(addr.parse::<IpAddr>(), Ok(ip) if is_private_lan_ip(&ip))
+}
+
+fn probe_node_ready_for_stratum(timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error = String::new();
+
+    while Instant::now() < deadline {
+        match crate::modules::rpc::call_rpc_with_timeouts(
+            "getblockchaininfo",
+            &[],
+            Duration::from_millis(800),
+            Duration::from_millis(2_500),
+        ) {
+            Ok(info) => {
+                let ibd = info
+                    .get("initialblockdownload")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if ibd {
+                    return Err(
+                        "Node is still in initial block download. Wait for sync to finish."
+                            .to_string(),
+                    );
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                last_error = err;
+                thread::sleep(Duration::from_millis(750));
+            }
+        }
+    }
+
+    if last_error.is_empty() {
+        last_error = "no RPC response".to_string();
+    }
+    Err(format!("Core RPC is not ready for solo mining: {last_error}"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,36 +171,19 @@ pub fn start_stratum_server(
     }
 
     {
-        let probe = crate::modules::rpc::call_rpc("getblockchaininfo", &[]);
-        match probe {
-            Ok(info) => {
-                let ibd = info
-                    .get("initialblockdownload")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if ibd {
-                    if let Ok(mut state) = global_state().lock() {
-                        state.node_rpc_ok = false;
-                        state.last_error =
-                            Some("Node is still in initial block download".to_string());
-                    }
-                    return Err(
-                        "Cannot start: node is still in initial block download. Wait for sync to finish."
-                            .to_string(),
-                    );
-                }
+        match probe_node_ready_for_stratum(Duration::from_secs(12)) {
+            Ok(()) => {
                 if let Ok(mut state) = global_state().lock() {
                     state.node_rpc_ok = true;
                     state.last_error = None;
                 }
             }
-            Err(_) => {
+            Err(err) => {
                 if let Ok(mut state) = global_state().lock() {
                     state.node_rpc_ok = false;
-                    state.last_error =
-                        Some("Node is not running or RPC is unavailable".to_string());
+                    state.last_error = Some(err.clone());
                 }
-                return Err("Cannot start: node is not running or RPC is unavailable.".to_string());
+                return Err(format!("Cannot start solo mining: {err}"));
             }
         }
     }

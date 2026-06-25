@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -124,7 +125,7 @@ fn running_daemon_contexts() -> Vec<(Option<PathBuf>, Option<PathBuf>)> {
     Vec::new()
 }
 
-fn run_cli_for_context(conf: &Path, datadir: &Path, args: &[String]) -> Result<String, String> {
+fn request_stop_for_context(conf: &Path, datadir: &Path, timeout: Duration) -> Result<String, String> {
     let custom_bin_dir = load_app_settings_impl()
         .ok()
         .and_then(|s| s.custom_core_binary_dir);
@@ -157,26 +158,47 @@ fn run_cli_for_context(conf: &Path, datadir: &Path, args: &[String]) -> Result<S
         cmd.arg("-testnet");
     }
 
-    let output = cmd
+    let mut child = cmd
         .arg(format!("-conf={}", conf.to_string_lossy()))
         .arg(format!("-datadir={}", datadir.to_string_lossy()))
-        .args(args.iter().map(|v| v.as_str()))
-        .output()
+        .arg("stop")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| e.to_string())?;
 
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let out = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "CLI error ({}): {} {}",
-            output.status,
-            err.trim(),
-            out.trim()
-        )
-        .trim()
-        .to_string());
+    let started = Instant::now();
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_string(&mut stderr);
+                }
+                if status.success() {
+                    return Ok(stdout.trim().to_string());
+                }
+                return Err(format!(
+                    "CLI error ({}): {} {}",
+                    status,
+                    stderr.trim(),
+                    stdout.trim()
+                )
+                .trim()
+                .to_string());
+            }
+            None if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("CLI stop request timed out after {} seconds", timeout.as_secs()));
+            }
+            None => thread::sleep(Duration::from_millis(100)),
+        }
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
@@ -190,7 +212,12 @@ fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
 
     while daemon_process_running() && Instant::now() < deadline {
         if Instant::now() >= next_stop_attempt {
-            match run_cli(&[String::from("stop")]) {
+            let stop_timeout = Duration::from_secs(4);
+            let active_stop = match (config_path(), data_dir()) {
+                (Ok(conf), Ok(datadir)) => request_stop_for_context(&conf, &datadir, stop_timeout),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+            match active_stop {
                 Ok(_) => last_stop_status = "stop requested for active data directory".to_string(),
                 Err(e) => {
                     last_stop_status = e;
@@ -198,7 +225,7 @@ fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
                         let (Some(conf), Some(datadir)) = (conf, datadir) else {
                             continue;
                         };
-                        match run_cli_for_context(&conf, &datadir, &[String::from("stop")]) {
+                        match request_stop_for_context(&conf, &datadir, stop_timeout) {
                             Ok(_) => {
                                 last_stop_status = format!(
                                     "stop requested for running data directory {}",

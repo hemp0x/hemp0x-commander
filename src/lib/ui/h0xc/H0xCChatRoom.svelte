@@ -716,6 +716,9 @@
         if (ms === Date.now() && (raw == null || raw === "")) return "";
         const d = new Date(ms);
         const pad = (/** @type {number} */ n) => String(n).padStart(2, "0");
+        if (Date.now() - ms > 86400000) {
+            return `[${pad(d.getMonth() + 1)}/${pad(d.getDate())}]`;
+        }
         return `[${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}]`;
     }
 

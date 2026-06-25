@@ -309,14 +309,46 @@
     window.dispatchEvent(new CustomEvent("commander-open-tools-system", { detail: { section: "config" } }));
   }
 
+  function timeoutResult(ms, message) {
+    return new Promise((resolve) => {
+      setTimeout(() => resolve({ timedOut: true, error: message }), ms);
+    });
+  }
+
+  async function invokeWithCloseWatchdog(command, args, timeoutMs, timeoutMessage) {
+    return Promise.race([
+      core.invoke(command, args).then((value) => ({ value })).catch((error) => ({ error })),
+      timeoutResult(timeoutMs, timeoutMessage),
+    ]);
+  }
+
   async function closeStopDaemon() {
     closePromptStatus = "Stopping daemon...";
     closeCleanupInProgress = true;
+    const closeWaitMs = 30000;
     try {
-      await core.invoke("stop_node_and_wait", { timeoutMs: 45000 });
-      await core.invoke("release_daemon_ownership");
+      const stop = await invokeWithCloseWatchdog(
+        "stop_node_and_wait",
+        { timeoutMs: 20000 },
+        closeWaitMs,
+        "Commander waited for Core to stop, but Core did not answer in time."
+      );
+      if (stop.error) {
+        addRuntimeNotification("Daemon stop on close timed out", String(stop.error || "").substring(0, 240), "warning");
+      }
     } catch (err) {
       addRuntimeNotification("Daemon stop on close timed out", String(err || "").substring(0, 240), "warning");
+    }
+    closePromptStatus = "Closing Commander...";
+    try {
+      await invokeWithCloseWatchdog(
+        "release_daemon_ownership",
+        {},
+        3000,
+        "Commander could not release daemon ownership before closing."
+      );
+    } catch {
+      // best-effort cleanup
     }
     closeCleanupComplete = true;
     await getCurrentWindow().close();
@@ -326,7 +358,12 @@
     closePromptStatus = "Closing Commander...";
     closeCleanupInProgress = true;
     try {
-      await core.invoke("release_daemon_ownership");
+      await invokeWithCloseWatchdog(
+        "release_daemon_ownership",
+        {},
+        3000,
+        "Commander could not release daemon ownership before closing."
+      );
     } catch {
       // best-effort cleanup
     }
@@ -892,7 +929,9 @@
       if (!readiness.ready) {
         daemonStatusMessage = "Still starting";
         lastError = readiness.rpc_error || "Core has not answered RPC yet.";
-        addRuntimeNotification("Daemon still starting", lastError, "warning");
+        if (!/connection failed|actively refused|no cookie file|rpc authentication unavailable/i.test(lastError)) {
+          addRuntimeNotification("Daemon still starting", lastError, "warning");
+        }
       } else {
         daemonStatusMessage = "Ready";
         lastDaemonStartSuccessAt = Date.now();

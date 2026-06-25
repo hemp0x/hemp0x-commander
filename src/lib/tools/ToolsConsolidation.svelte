@@ -899,9 +899,6 @@
     async function loadWalletAddresses() {
         try {
             walletAddresses = await core.invoke("get_receive_addresses", { showChange: false });
-            if ((!destination || !destination.trim()) && walletAddresses.length > 0) {
-                destination = walletAddresses[0].address;
-            }
         } catch {
             walletAddresses = [];
         }

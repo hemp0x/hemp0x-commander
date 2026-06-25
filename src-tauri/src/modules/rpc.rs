@@ -138,12 +138,123 @@ fn detect_auth_sources() -> (bool, bool) {
 pub(crate) struct RpcContext {
     url: String,
     auth: String,
+    auth_mode: RpcAuthMode,
 }
 
 pub(crate) fn rpc_context() -> Result<RpcContext, String> {
     let url = rpc_url()?;
-    let (auth, _auth_mode) = rpc_auth()?;
-    Ok(RpcContext { url, auth })
+    let (auth, auth_mode) = rpc_auth()?;
+    Ok(RpcContext {
+        url,
+        auth,
+        auth_mode,
+    })
+}
+
+#[derive(Debug)]
+enum RpcHttpFailure {
+    AuthRejected,
+    Other(String),
+}
+
+impl RpcHttpFailure {
+    fn into_message(self, method: &str) -> String {
+        match self {
+            RpcHttpFailure::AuthRejected => format!(
+                "RPC authentication rejected ({method}). Check rpcuser/rpcpassword or let Core refresh cookie auth."
+            ),
+            RpcHttpFailure::Other(e) => e,
+        }
+    }
+}
+
+fn parse_rpc_response(raw: serde_json::Value, method: &str) -> Result<serde_json::Value, String> {
+    if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown RPC error");
+        return Err(format!("RPC error ({method}): {msg}"));
+    }
+
+    Ok(raw
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
+fn send_rpc_request(
+    url: &str,
+    auth: &str,
+    method: &str,
+    params: &[serde_json::Value],
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<serde_json::Value, RpcHttpFailure> {
+    let body = serde_json::json!({
+        "jsonrpc": "1.0",
+        "id": "commander",
+        "method": method,
+        "params": params,
+    });
+
+    let response_result = ureq::AgentBuilder::new()
+        .timeout_connect(connect_timeout)
+        .timeout_read(read_timeout)
+        .build()
+        .post(url)
+        .set("Authorization", auth)
+        .set("Content-Type", "application/json")
+        .send_json(&body);
+
+    match response_result {
+        Ok(resp) => resp
+            .into_json()
+            .map_err(|e| RpcHttpFailure::Other(format!("RPC parse error ({method}): {e}"))),
+        Err(ureq::Error::Status(401, _)) => Err(RpcHttpFailure::AuthRejected),
+        Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
+            RpcHttpFailure::Other(format!(
+                "RPC HTTP {status} with unreadable response body ({method}): {e}"
+            ))
+        }),
+        Err(e) => Err(RpcHttpFailure::Other(format!(
+            "RPC transport error ({method}): {e}"
+        ))),
+    }
+}
+
+fn retry_cookie_auth_after_rejection(
+    url: &str,
+    previous_auth: &str,
+    method: &str,
+    params: &[serde_json::Value],
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    std::thread::sleep(Duration::from_millis(350));
+    let (fresh_auth, fresh_mode) = rpc_auth()?;
+    if fresh_mode != RpcAuthMode::Cookie {
+        return Err(format!(
+            "RPC authentication rejected ({method}). Core no longer reports cookie auth as available."
+        ));
+    }
+
+    if fresh_auth == previous_auth {
+        return Err(format!(
+            "RPC authentication rejected ({method}). Core may still be rotating the RPC cookie."
+        ));
+    }
+
+    let raw = send_rpc_request(
+        url,
+        &fresh_auth,
+        method,
+        params,
+        connect_timeout,
+        read_timeout,
+    )
+    .map_err(|e| e.into_message(method))?;
+    parse_rpc_response(raw, method)
 }
 
 impl RpcContext {
@@ -167,45 +278,27 @@ impl RpcContext {
         connect_timeout: Duration,
         read_timeout: Duration,
     ) -> Result<serde_json::Value, String> {
-        let body = serde_json::json!({
-            "jsonrpc": "1.0",
-            "id": "commander",
-            "method": method,
-            "params": params,
-        });
-
-        let response_result = ureq::AgentBuilder::new()
-            .timeout_connect(connect_timeout)
-            .timeout_read(read_timeout)
-            .build()
-            .post(&self.url)
-            .set("Authorization", &self.auth)
-            .set("Content-Type", "application/json")
-            .send_json(&body);
-
-        let raw: serde_json::Value = match response_result {
-            Ok(resp) => resp
-                .into_json()
-                .map_err(|e| format!("RPC parse error ({method}): {e}"))?,
-            Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
-                format!("RPC HTTP {status} with unreadable response body ({method}): {e}")
-            })?,
-            Err(e) => return Err(format!("RPC transport error ({method}): {e}")),
-        };
-
-        if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
-            let msg = err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown RPC error");
-            return Err(format!("RPC error ({method}): {msg}"));
+        match send_rpc_request(
+            &self.url,
+            &self.auth,
+            method,
+            params,
+            connect_timeout,
+            read_timeout,
+        ) {
+            Ok(raw) => parse_rpc_response(raw, method),
+            Err(RpcHttpFailure::AuthRejected) if self.auth_mode == RpcAuthMode::Cookie => {
+                retry_cookie_auth_after_rejection(
+                    &self.url,
+                    &self.auth,
+                    method,
+                    params,
+                    connect_timeout,
+                    read_timeout,
+                )
+            }
+            Err(e) => Err(e.into_message(method)),
         }
-
-        let result = raw
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        Ok(result)
     }
 }
 
@@ -277,49 +370,30 @@ pub(crate) fn call_rpc_wallet_with_timeouts(
 
     let base_url = rpc_url()?;
     let wallet_url = format!("{base_url}/wallet/{wallet_name}");
-    let (auth, _auth_mode) = rpc_auth()?;
+    let (auth, auth_mode) = rpc_auth()?;
+    let method_label = format!("{method} on wallet {wallet_name}");
 
-    let body = serde_json::json!({
-        "jsonrpc": "1.0",
-        "id": "commander",
-        "method": method,
-        "params": params,
-    });
-
-    let response_result = ureq::AgentBuilder::new()
-        .timeout_connect(connect_timeout)
-        .timeout_read(read_timeout)
-        .build()
-        .post(&wallet_url)
-        .set("Authorization", &auth)
-        .set("Content-Type", "application/json")
-        .send_json(&body);
-
-    let raw: serde_json::Value = match response_result {
-        Ok(resp) => resp
-            .into_json()
-            .map_err(|e| format!("RPC parse error ({method} on wallet {wallet_name}): {e}"))?,
-        Err(ureq::Error::Status(status, resp)) => resp.into_json().map_err(|e| {
-            format!("RPC HTTP {status} with unreadable response body ({method} on wallet {wallet_name}): {e}")
-        })?,
-        Err(e) => return Err(format!("RPC transport error ({method} on wallet {wallet_name}): {e}")),
-    };
-
-    if let Some(err) = raw.get("error").filter(|e| !e.is_null()) {
-        let msg = err
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown RPC error");
-        return Err(format!(
-            "RPC error ({method} on wallet {wallet_name}): {msg}"
-        ));
+    match send_rpc_request(
+        &wallet_url,
+        &auth,
+        &method_label,
+        params,
+        connect_timeout,
+        read_timeout,
+    ) {
+        Ok(raw) => parse_rpc_response(raw, &method_label),
+        Err(RpcHttpFailure::AuthRejected) if auth_mode == RpcAuthMode::Cookie => {
+            retry_cookie_auth_after_rejection(
+                &wallet_url,
+                &auth,
+                &method_label,
+                params,
+                connect_timeout,
+                read_timeout,
+            )
+        }
+        Err(e) => Err(e.into_message(&method_label)),
     }
-
-    let result = raw
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    Ok(result)
 }
 
 fn rpc_command_with_result(method: &str, params: &[serde_json::Value]) -> RpcResult {

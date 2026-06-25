@@ -78,8 +78,8 @@ fn probe_node_ready_for_stratum(timeout: Duration) -> Result<(), String> {
         match crate::modules::rpc::call_rpc_with_timeouts(
             "getblockchaininfo",
             &[],
-            Duration::from_millis(800),
-            Duration::from_millis(2_500),
+            Duration::from_secs(3),
+            Duration::from_secs(8),
         ) {
             Ok(info) => {
                 let ibd = info
@@ -96,7 +96,7 @@ fn probe_node_ready_for_stratum(timeout: Duration) -> Result<(), String> {
             }
             Err(err) => {
                 last_error = err;
-                thread::sleep(Duration::from_millis(750));
+                thread::sleep(Duration::from_millis(1_000));
             }
         }
     }
@@ -171,7 +171,7 @@ pub fn start_stratum_server(
     }
 
     {
-        match probe_node_ready_for_stratum(Duration::from_secs(12)) {
+        match probe_node_ready_for_stratum(Duration::from_secs(30)) {
             Ok(()) => {
                 if let Ok(mut state) = global_state().lock() {
                     state.node_rpc_ok = true;

@@ -463,8 +463,7 @@
         }
         for (const msg of msgs) {
             if (isControlCommandMessage(msg)) continue;
-            const decoded = decodeCache[msg.message];
-            if (!decoded?.is_short_message || decoded?.is_h0xc_chat_message !== true) continue;
+            if (!isDisplayableH0xCMessage(msg)) continue;
             const rn = deriveRootNameFn(msg.asset_name);
             if (!rn) continue;
             const t = parseTime(msg.time);
@@ -628,6 +627,12 @@
         }
     }
 
+    function isDisplayableH0xCMessage(/** @type {AssetMessage} */ msg) {
+        const dec = decodeCache[msg.message];
+        if (dec?.is_h0xc_chat_message === true) return true;
+        return isH0xCAsset(msg.asset_name) && dec?.is_short_message === true && !!dec.text;
+    }
+
     let searchUserFilter = "";
     let searchChannelFilter = "";
     let historyOverride = false;
@@ -654,8 +659,7 @@
         }).filter((msg) => {
             return !isControlCommandMessage(msg);
         }).filter((msg) => {
-            const dec = decodeCache[msg.message];
-            return dec?.is_short_message === true && dec?.is_h0xc_chat_message === true;
+            return isDisplayableH0xCMessage(msg);
         });
         if (tagBlockedChannels.size > 0) {
             msgs = msgs.filter((msg) => {

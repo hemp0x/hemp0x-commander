@@ -679,20 +679,18 @@
       dispatchToast(`Failed: ${e}`, "error");
     }
   }
-  function saveLog() {
+  async function saveLog() {
     try {
-      const blob = new Blob([logText], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "hemp0x_debug.log";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      dispatchToast("Log Downloaded", "success");
+      const savedPath = await core.invoke("dialog_write_text_file", {
+        content: logText || "",
+        defaultPath: "hemp0x-debug.log",
+        title: "Save Hemp0x Core Log",
+        filters: [["Log files", "log", "txt"], ["All files", "*"]],
+      });
+      dispatchToast(`Log saved to ${savedPath}`, "success");
     } catch (e) {
-      dispatchToast("Save failed", "error");
+      if (String(e || "").includes("No file selected")) return;
+      dispatchToast(`Save failed: ${e}`, "error");
     }
   }
 

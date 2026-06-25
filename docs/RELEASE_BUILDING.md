@@ -96,3 +96,44 @@ Commander's **Extract Binaries** button (SYSTEM tab) copies the resolved `hemp0x
 - No release signing or notarization
 - No remote checksum verification service
 - No bundled Core Next data directory (users maintain their own `~/.hemp0x`)
+
+## 6. Release Trust and Antivirus Notes
+
+Commander is a Tauri 2 / WebView2 application. On Windows it launches the
+system `msedgewebview2.exe` runtime and writes its cache, Crashpad, and
+BrowserMetrics data under
+`%LOCALAPPDATA%\io.hemp0x.commander\EBWebView\`. The following are expected,
+normal WebView2/Edge runtime behavior and are not Commander network
+activity: Edge/WebView2 child processes, `EdgeUpdate`, EBWebView cache and
+Crashpad files, Edge registry reads, the `ChromeProcessSingletonStartup`
+and `OneSettingQueryMutex` mutexes, and Edge runtime background DNS/TLS
+such as `edge.microsoft.com`, DigiCert OCSP/CRL (`*.akahost.net`), and the
+`easyauth.edgebrowser.microsoft-*-falcon.io` endpoints. Commander's own
+outbound network is restricted to local Core RPC, local Tauri IPC, and the
+user-configured IPFS gateways / pinning providers; no other external
+domains are contacted by the app, and the frontend CSP forbids direct
+outbound fetch.
+
+Static strings that appear in `hemp0x-commander.exe` (such as
+`html4/loose.dtd`, `digicert.com`, and `docs.rs`) come from reputable
+Rust crate data embedded in the binary: the Brotli static dictionary, the
+`rustls`/`webpki-roots` CA root metadata, and `rustls`/`getrandom` error
+doc URLs. They are not executable callbacks or network targets.
+
+For the final public release:
+
+- Publish SHA256 checksums for every distributed archive alongside the
+  download (the release-candidate workflow already produces `*.zip.sha256`
+  files).
+- Code-sign the Windows portable EXE and any installer artifacts with an
+  EV or OV certificate if at all possible; this is the most effective
+  false-positive reducer for SmartScreen and ML-based antivirus engines.
+- Keep release metadata (`Cargo.toml` and `tauri.conf.json` `bundle`
+  block) populated and consistent so the binary is not clustered with
+  unsigned, unconfigured Tauri/Electron templates.
+- If antivirus detections remain after signing, submit false-positive
+  reports to the detecting vendors (e.g. Trapmine, Acronis) with the
+  signed binary, checksum, and a link to the public source repository.
+- Do not add packers, obfuscation, anti-debugging, anti-analysis, or
+  binary shielding to reduce detections; these reliably increase
+  detections and are explicitly avoided.

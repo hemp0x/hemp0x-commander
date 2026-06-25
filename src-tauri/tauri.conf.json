@@ -27,6 +27,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Hemp0x",
+    "homepage": "https://hemp0x.com",
+    "category": "Finance",
+    "short-description": "Hemp0x Commander wallet",
+    "long-description": "Secure, non-custodial wallet manager for the Hemp0x blockchain.",
+    "copyright": "Copyright (c) Hemp0x Core Team",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

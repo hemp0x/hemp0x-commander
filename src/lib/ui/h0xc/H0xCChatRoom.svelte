@@ -308,7 +308,12 @@
             const channels = uniqueH0xCChannels();
             let allMsgs = [];
             let anyChannelLoaded = false;
-            if (channels.length > 0) {
+            // Guests have no identity channel of their own and rely on the global
+            // H0xC feed. Per-channel fetches are keyed off the discovery cache, which
+            // for a fresh/incomplete guest omits not-yet-discovered channels (e.g. a
+            // GRIDSHADE/H0XC channel). Always use the global view for guests so public
+            // H0xC messages are visible even before discovery populates participants.
+            if (!isGuest && channels.length > 0) {
                 const MAX_CONCURRENT = 4;
                 for (let i = 0; i < channels.length; i += MAX_CONCURRENT) {
                     const batch = channels.slice(i, i + MAX_CONCURRENT);
@@ -323,7 +328,7 @@
                     }
                 }
             }
-            if (!anyChannelLoaded) {
+            if (isGuest || !anyChannelLoaded) {
                 try {
                     allMsgs = await core.invoke("view_asset_messages");
                 } catch {

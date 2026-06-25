@@ -1,10 +1,10 @@
 [package]
 name = "hemp0x-commander"
 version = "2.0.0"
-description = "A Tauri App"
+description = "Hemp0x Commander - secure non-custodial wallet manager for the Hemp0x blockchain"
 authors = ["Hemp0x Core Team"]
-license = ""
-repository = ""
+license = "MIT"
+repository = "https://github.com/hemp0x/hemp0x-commander"
 edition = "2021"
 rust-version = "1.77.2"
 default-run = "hemp0x-commander"

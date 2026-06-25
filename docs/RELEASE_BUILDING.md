@@ -8,7 +8,9 @@ This document covers repeatable local build steps for Hemp0x Commander 2.0.0.
 - Rust stable (via rustup, 1.77.2+)
 - Git
 - Core Next release artifacts (acquired separately from the Hemp0x Core Next repository)
-- Linux host for AppImage builds; Windows host for portable EXE builds
+- Linux host for AppImage builds
+- Linux host with the staged MSVC cross-build toolchain for Windows portable
+  prerelease builds, or a Windows host for native portable EXE builds
 
 ## 1. Stage Core Next Binaries
 
@@ -38,6 +40,8 @@ Staged binary files are gitignored. They are not intended to be committed to the
 
 ### Linux AppImage
 
+#### Standard Tauri AppImage
+
 ```bash
 npm install
 npm run tauri build -- -b appimage
@@ -51,7 +55,50 @@ The AppImage bundles the Core Next binaries as Tauri `externalBin` resources. At
 
 **Known issue**: On newer Linux distributions (glibc >= 2.39), the linuxdeploy bundling step may fail during the library `strip` phase due to `.relr.dyn` section support in system libraries that the bundled linuxdeploy `strip` doesn't recognize. Workaround: manually run linuxdeploy with a newer version, or build inside a Docker container with an older glibc.
 
+#### Universal AppImage Path
+
+Commander 1.2 and 1.3 used a smaller universal AppImage path for broad Linux
+compatibility. Keep this path available for the 2.0 release if the standard
+Tauri AppImage is too large or fails on older distributions.
+
+The working model is:
+
+1. Build the app in a controlled Ubuntu container rather than on a rolling
+   distro host.
+2. Let Tauri assemble an AppDir with the Linux Core Next sidecars in
+   `usr/bin`.
+3. Remove duplicate or unneeded payload from the AppDir, such as docs,
+   bundled driver directories, `libLLVM*`, nested duplicate `lib/` trees, and
+   generated introspection data.
+4. Strip ELF binaries and shared libraries with `strip --strip-unneeded`.
+5. Repack the payload with `mksquashfs` using zstd compression level 22.
+6. Reuse the known-good older AppImage runtime header from the 1.2 universal
+   AppImage so the final artifact works on systems without `libfuse2`.
+
+The existing reference script is `scripts/build_linux_universal.sh`. It still
+contains 1.3-era names and assumptions, so treat it as the documented
+procedure, not a finished 2.0 release command. Before using it for 2.0:
+
+- Update the version and output filename to 2.0.0.
+- Stage all three Linux Core Next sidecars: `hemp0xd`, `hemp0x-cli`, and
+  `hemp0x-tx`.
+- Confirm `LEGACY_APPIMAGE_PATH` points to the known-good 1.2 universal
+  AppImage runtime source.
+- Build inside the intended container image and test the output on at least
+  one modern distro and one older LTS distro.
+
+Expected output shape:
+
+```text
+release/Hemp0x_Commander_2.0.0_Universal_Linux.AppImage
+```
+
+This universal path is release engineering, not app logic. Do not replace it
+with packers, binary shielding, or installer wrappers to reduce size.
+
 ### Windows Portable EXE
+
+#### Native Windows Build
 
 On Windows, with the binaries staged:
 
@@ -70,6 +117,58 @@ For distribution, zip the following files together:
 
 Do not publish NSIS/MSI installer artifacts for Commander 2.0.0 unless the release
 scope changes.
+
+#### Linux-to-Windows MSVC Cross-Build
+
+The prerelease Windows portable build can also be produced from the Linux
+workspace using the staged `clang`/`xwin` toolchain under `untracked/`. This
+keeps the source tree in one place while producing MSVC-ABI Windows binaries.
+
+Preconditions:
+
+- `src-tauri/binaries/` contains the Windows MSVC Core Next sidecars:
+  - `hemp0xd-x86_64-pc-windows-msvc.exe`
+  - `hemp0x-cli-x86_64-pc-windows-msvc.exe`
+  - `hemp0x-tx-x86_64-pc-windows-msvc.exe`
+- `untracked/bin/cargo-xwin-runner` exists.
+- `untracked/toolchains/clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04`
+  exists.
+
+Build command:
+
+```bash
+set -euo pipefail
+export LLVM_DIR="$PWD/untracked/toolchains/clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04"
+export PATH="$LLVM_DIR/bin:$PATH"
+export LIBCLANG_PATH="$LLVM_DIR/lib"
+export LD_LIBRARY_PATH="$PWD/untracked/toolchains/compat-libs:${LD_LIBRARY_PATH:-}"
+
+npm run tauri build -- \
+  --runner "$PWD/untracked/bin/cargo-xwin-runner" \
+  --target x86_64-pc-windows-msvc \
+  --no-bundle \
+  -- --no-default-features
+```
+
+Output:
+
+```text
+src-tauri/target/x86_64-pc-windows-msvc/release/hemp0x-commander.exe
+```
+
+Package the portable prerelease as a zip with clean filenames:
+
+- `hemp0x-commander.exe`
+- `hemp0xd.exe`
+- `hemp0x-cli.exe`
+- `hemp0x-tx.exe`
+- `README-PRERELEASE.txt`
+
+Also publish a `.zip.sha256` file. The prerelease README should include the
+build commit, build timestamp, bundled Core Next version, SHA256 verification
+steps, the Microsoft WebView2 runtime requirement, and a clear note that
+unsigned prerelease builds can trigger SmartScreen or antivirus false
+positives.
 
 ## 3. Runtime Binary Resolution
 

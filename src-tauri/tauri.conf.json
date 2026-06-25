@@ -18,7 +18,7 @@
         "fullscreen": false,
         "transparent": false,
         "dragDropEnabled": false,
-        "additional-browser-args": "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --metrics-recording-only --no-first-run --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        "additionalBrowserArgs": "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --metrics-recording-only --no-first-run --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ],
     "security": {
@@ -31,8 +31,8 @@
     "publisher": "Hemp0x",
     "homepage": "https://hemp0x.com",
     "category": "Finance",
-    "short-description": "Hemp0x Commander wallet",
-    "long-description": "Secure, non-custodial wallet manager for the Hemp0x blockchain.",
+    "shortDescription": "Hemp0x Commander wallet",
+    "longDescription": "Secure, non-custodial wallet manager for the Hemp0x blockchain.",
     "copyright": "Copyright (c) Hemp0x Core Team",
     "icon": [
       "icons/32x32.png",

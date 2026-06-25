@@ -304,7 +304,18 @@
   async function saveConfig() {
     try {
       await core.invoke("write_config", { contents: configText });
-      dispatchToast("Configuration saved. Restart Core to activate raw-editor changes.", "success");
+      dispatchToast("Configuration saved.", "success");
+      const restartNow = await ask(
+        "Restart Core now so the raw configuration changes take effect?",
+        { title: "Restart Core", kind: "info" },
+      );
+      if (restartNow) {
+        try {
+          await restartCoreAfterConfigChange(null);
+        } catch (err) {
+          dispatchToast(`Configuration saved, but Core restart failed: ${err}`, "error");
+        }
+      }
     } catch (err) {
       dispatchToast(`Failed to save config: ${err}`, "error");
     }

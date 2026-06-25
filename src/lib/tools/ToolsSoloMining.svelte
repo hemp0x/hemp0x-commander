@@ -26,6 +26,8 @@
     let loadingAddresses = false;
     let addressesError = "";
     let showChange = false;
+    let rpcPortIssue = "";
+    let rpcPortRepairing = false;
 
     /** @type {ReturnType<typeof setInterval> | undefined} */
     let pollTimer;
@@ -67,6 +69,92 @@
         try {
             bindCandidates = await core.invoke("get_stratum_bind_candidates");
         } catch (e) {}
+    }
+
+    function activeConfigValue(text, key) {
+        const wanted = key.toLowerCase();
+        for (const line of String(text || "").split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith("#")) continue;
+            const eq = trimmed.indexOf("=");
+            if (eq <= 0) continue;
+            if (trimmed.slice(0, eq).trim().toLowerCase() === wanted) {
+                return trimmed.slice(eq + 1).trim();
+            }
+        }
+        return "";
+    }
+
+    function setConfigValue(text, key, value) {
+        const lines = String(text || "").split(/\r?\n/);
+        const wanted = key.toLowerCase();
+        let changed = false;
+        const next = lines.map((line) => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith("#")) return line;
+            const eq = trimmed.indexOf("=");
+            if (eq <= 0) return line;
+            if (trimmed.slice(0, eq).trim().toLowerCase() !== wanted) return line;
+            changed = true;
+            return `${key}=${value}`;
+        });
+        if (!changed) {
+            if (next.length > 0 && next[next.length - 1].trim() !== "") next.push("");
+            next.push(`${key}=${value}`);
+        }
+        return next.join("\n");
+    }
+
+    async function refreshRpcPortStatus() {
+        if (!tauriReady) return;
+        try {
+            const conf = await core.invoke("read_config");
+            const rpcport = activeConfigValue(conf, "rpcport");
+            if (!rpcport) {
+                rpcPortIssue = "Solo mining needs rpcport=42068 in hemp.conf so Commander and Core use the same local RPC endpoint.";
+            } else if (rpcport !== "42068") {
+                rpcPortIssue = `Solo mining expects rpcport=42068. The active config currently uses rpcport=${rpcport}.`;
+            } else {
+                rpcPortIssue = "";
+            }
+        } catch {
+            rpcPortIssue = "Commander could not read hemp.conf to verify rpcport=42068.";
+        }
+    }
+
+    async function repairRpcPortAndRestart() {
+        if (!tauriReady || rpcPortRepairing) return;
+        rpcPortRepairing = true;
+        try {
+            const conf = await core.invoke("read_config");
+            const updated = setConfigValue(conf, "rpcport", "42068");
+            await core.invoke("write_config", { contents: updated });
+            showToast("rpcport=42068 saved. Restarting Core...", "info");
+            try {
+                await core.invoke("stop_node");
+            } catch {}
+            for (let i = 0; i < 60; i++) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                try {
+                    const info = await core.invoke("get_data_folder_info");
+                    if (!info?.lock_exists) break;
+                } catch {
+                    break;
+                }
+            }
+            await core.invoke("start_node");
+            const ready = await core.invoke("wait_for_daemon_ready", { timeoutMs: 120000 });
+            if (!ready?.ready) {
+                throw new Error(ready?.rpc_error || "Core did not become ready after restart.");
+            }
+            await refreshRpcPortStatus();
+            await pollStatus();
+            showToast("Core restarted with rpcport=42068", "success");
+        } catch (e) {
+            showToast(`RPC port repair failed: ${e}`, "error");
+        } finally {
+            rpcPortRepairing = false;
+        }
     }
 
     async function generateNewAddress() {
@@ -243,6 +331,11 @@
     async function startServer() {
         if (!tauriReady) return;
         validationError = "";
+        await refreshRpcPortStatus();
+        if (rpcPortIssue) {
+            showToast(rpcPortIssue, "warning");
+            return;
+        }
         const addr = activePayoutAddress.trim();
         if (!addr) {
             showToast("Select or enter a payout address", "error");
@@ -369,6 +462,7 @@
         await pollStatus();
         await loadWalletAddresses();
         await loadBindCandidates();
+        await refreshRpcPortStatus();
         document.addEventListener("click", handleClickOutside);
         document.addEventListener("keydown", handleKeydown);
     });
@@ -411,7 +505,22 @@
         </p>
     {/if}
 
-    {#if isRunning && !nodeAvailable}
+    {#if rpcPortIssue}
+        <div class="alert-panel alert-warn node-down-banner">
+            <div class="alert-header">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <span>RPC PORT REQUIRED</span>
+            </div>
+            <p class="alert-message">{rpcPortIssue}</p>
+            <button class="repair-rpc-btn" on:click={repairRpcPortAndRestart} disabled={rpcPortRepairing}>
+                {rpcPortRepairing ? "UPDATING..." : "ADD RPCPORT AND RESTART CORE"}
+            </button>
+        </div>
+    {:else if isRunning && !nodeAvailable}
         <div class="alert-panel alert-warn node-down-banner">
             <div class="alert-header">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -1544,6 +1653,29 @@
         margin: 0;
         word-break: break-all;
         line-height: 1.4;
+    }
+    .repair-rpc-btn {
+        align-self: flex-start;
+        margin-top: 0.15rem;
+        padding: 0.42rem 0.75rem;
+        border: 1.5px solid rgba(0, 255, 65, 0.75);
+        border-radius: 5px;
+        background: rgba(0, 255, 65, 0.08);
+        color: var(--color-primary);
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.9px;
+        text-transform: uppercase;
+        cursor: pointer;
+    }
+    .repair-rpc-btn:hover:not(:disabled) {
+        background: rgba(0, 255, 65, 0.14);
+        box-shadow: 0 0 14px rgba(0, 255, 65, 0.18);
+    }
+    .repair-rpc-btn:disabled {
+        opacity: 0.45;
+        cursor: wait;
     }
 
     /* Worker panel */

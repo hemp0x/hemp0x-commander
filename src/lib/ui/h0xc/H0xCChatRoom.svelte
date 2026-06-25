@@ -336,8 +336,15 @@
                 }
             }
             const prevMessages = messages;
+            const rawMessageCount = Array.isArray(allMsgs) ? allMsgs.length : 0;
+            let feedDiagnostic = "";
             messages = (Array.isArray(allMsgs) ? allMsgs : [])
                 .filter((/** @type {AssetMessage} */ m) => isH0xCAsset(m.asset_name));
+            if (rawMessageCount === 0) {
+                feedDiagnostic = "Core returned no asset messages. If this node is new or recovering, wait for message indexes to catch up and refresh.";
+            } else if (messages.length === 0) {
+                feedDiagnostic = `Core returned ${rawMessageCount} asset message record(s), but none were H0xC channels.`;
+            }
             const seenKeys = new Set();
             messages = messages.filter((/** @type {AssetMessage} */ m) => {
                 const key = m.txid
@@ -398,6 +405,7 @@
             if (info.warnings && info.warnings.length > 0) warns.push(...info.warnings);
             if (!info.messaging_active) warns.push("Messaging is not fully active.");
             if (!info.caches_available) warns.push("Message caches are unavailable; some messages may be missing.");
+            if (feedDiagnostic) warns.push(feedDiagnostic);
             if (warns.length > 0) messagesWarn = warns.join(" ");
 
             maybeCheckChannelTags();
@@ -1873,7 +1881,11 @@
                 <div class="chat-empty">
                     <div class="empty-big">◈</div>
                     <div class="empty-line">No messages in H0XC yet.</div>
-                    <div class="empty-line sub">Messages load from subscribed channels via Core. Use Discover to find new H0XC participants.</div>
+                    {#if messages.length > 0 && filteredMessages.length === 0}
+                        <div class="empty-line sub">Core loaded {messages.length} H0xC message record(s), but none decoded as displayable chat under the current filters.</div>
+                    {:else}
+                        <div class="empty-line sub">Messages load from Core's local message index. Use Discover to find H0XC participants.</div>
+                    {/if}
                     {#if settings.discoveryEnabled}
                         <button class="empty-discover" on:click={() => discover(false, true)}>Discover</button>
                     {:else}

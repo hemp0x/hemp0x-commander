@@ -203,6 +203,7 @@ fn request_stop_for_context(conf: &Path, datadir: &Path, timeout: Duration) -> R
 
 fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
     if !daemon_process_running() {
+        cleanup_stale_runtime_files();
         return Ok(());
     }
 
@@ -252,6 +253,7 @@ fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
         ));
     }
 
+    cleanup_stale_runtime_files();
     Ok(())
 }
 
@@ -431,6 +433,8 @@ fn start_node_inner(wallet_name: Option<&str>) -> Result<(), String> {
         }
     }
 
+    cleanup_stale_runtime_files_for_dir(&dir);
+
     let settings: crate::modules::models::AppSettings = load_app_settings()?;
     let custom_bin_dir = settings.custom_core_binary_dir.clone();
 
@@ -515,12 +519,21 @@ pub async fn stop_node() -> Result<(), String> {
 
 pub fn stop_node_blocking() -> Result<(), String> {
     if !daemon_process_running() {
+        cleanup_stale_runtime_files();
         return Ok(());
     }
 
     match run_cli(&[String::from("stop")]) {
-        Ok(_) => Ok(()),
-        Err(e) if !daemon_process_running() => Ok(()),
+        Ok(_) => {
+            if !daemon_process_running() {
+                cleanup_stale_runtime_files();
+            }
+            Ok(())
+        }
+        Err(e) if !daemon_process_running() => {
+            cleanup_stale_runtime_files();
+            Ok(())
+        }
         Err(e) => Err(e),
     }
 }
@@ -584,6 +597,7 @@ fn stop_daemon_for_wallet_restart(timeout: Duration) -> Result<(), String> {
         ));
     }
 
+    cleanup_stale_runtime_files();
     Ok(())
 }
 
@@ -707,13 +721,38 @@ pub fn wait_for_lock_release(dir: &Path) {
         if !lock_path.exists() {
             break;
         }
+        if !daemon_process_running() {
+            cleanup_stale_runtime_files_for_dir(dir);
+            break;
+        }
         thread::sleep(Duration::from_millis(500));
+    }
+}
+
+pub fn cleanup_stale_runtime_files() {
+    if let Ok(dir) = data_dir() {
+        cleanup_stale_runtime_files_for_dir(&dir);
+    }
+}
+
+fn cleanup_stale_runtime_files_for_dir(dir: &Path) {
+    if daemon_process_running() {
+        return;
+    }
+    for name in [".cookie", ".lock"] {
+        let path = dir.join(name);
+        if path.exists() && path.is_file() {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
 pub fn stop_node_internal() {
     let _ = run_cli(&[String::from("stop")]);
     thread::sleep(Duration::from_secs(2));
+    if !daemon_process_running() {
+        cleanup_stale_runtime_files();
+    }
 }
 
 #[tauri::command]

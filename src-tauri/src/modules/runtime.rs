@@ -419,6 +419,7 @@ pub fn get_daemon_ownership() -> DaemonOwnership {
 
 #[tauri::command]
 pub fn exit_commander(app: tauri::AppHandle) {
+    crate::modules::process::cleanup_stale_runtime_files();
     app.exit(0);
 }
 

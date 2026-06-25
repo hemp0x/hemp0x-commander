@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::modules::files::load_app_settings_impl;
 use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
-use crate::modules::utils::{resolve_bin, resolve_bin_with_override};
+use crate::modules::utils::{hide_console_window, resolve_bin, resolve_bin_with_override};
 
 const REQUIRED_CORE_NEXT_COMMIT: &str = "10dc5599b";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.8.0.0";
@@ -233,7 +233,9 @@ pub fn get_daemon_process_identity() -> DaemonProcessIdentity {
 }
 
 fn command_version(path: &str) -> Result<String, String> {
-    let output = Command::new(path)
+    let mut cmd = Command::new(path);
+    hide_console_window(&mut cmd);
+    let output = cmd
         .arg("-version")
         .output()
         .map_err(|e| e.to_string())?;
@@ -413,6 +415,11 @@ pub fn get_daemon_ownership() -> DaemonOwnership {
     DaemonOwnership {
         commander_owns: owns,
     }
+}
+
+#[tauri::command]
+pub fn exit_commander(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[derive(Clone, Serialize)]

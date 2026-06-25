@@ -1,5 +1,22 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+pub fn hide_console_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
 
 pub fn bin_name(name: &str) -> String {
     if cfg!(windows) {

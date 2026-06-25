@@ -48,6 +48,24 @@ fn rpc_auth_for_paths(
     cookie_path: &std::path::Path,
     config_path: &std::path::Path,
 ) -> Result<(String, RpcAuthMode), String> {
+    let config = if config_path.exists() {
+        Some(parse_config(config_path)?)
+    } else {
+        None
+    };
+
+    if let Some(config) = config.as_ref() {
+        let user = config.get("rpcuser");
+        let pass = config.get("rpcpassword");
+        if let (Some(u), Some(p)) = (user, pass) {
+            let auth = format!("{u}:{p}");
+            return Ok((
+                format!("Basic {}", BASE64_STANDARD.encode(auth.as_bytes())),
+                RpcAuthMode::LegacyUserpass,
+            ));
+        }
+    }
+
     if cookie_path.exists() {
         let cookie = fs::read_to_string(cookie_path)
             .map_err(|e| format!("Failed to read RPC cookie: {e}"))?;
@@ -60,23 +78,11 @@ fn rpc_auth_for_paths(
         }
     }
 
-    let config = if config_path.exists() {
-        parse_config(config_path)?
-    } else {
+    if config.is_none() {
         return Err(
             "RPC authentication unavailable: no cookie file and no rpcuser/rpcpassword in hemp.conf"
                 .to_string(),
         );
-    };
-    let user = config.get("rpcuser");
-    let pass = config.get("rpcpassword");
-
-    if let (Some(u), Some(p)) = (user, pass) {
-        let auth = format!("{u}:{p}");
-        return Ok((
-            format!("Basic {}", BASE64_STANDARD.encode(auth.as_bytes())),
-            RpcAuthMode::LegacyUserpass,
-        ));
     }
 
     Err(
@@ -89,14 +95,14 @@ fn rpc_auth_for_paths(
 pub fn get_rpc_auth_status() -> RpcAuthInfo {
     let (cookie_exists, legacy_exists) = detect_auth_sources();
 
-    let (auth_mode, warning) = if cookie_exists {
-        (RpcAuthMode::Cookie, String::new())
-    } else if legacy_exists {
+    let (auth_mode, warning) = if legacy_exists {
         (
             RpcAuthMode::LegacyUserpass,
             "Legacy RPC password auth is active. Cookie auth is recommended for Commander v2 and Core Next."
                 .to_string(),
         )
+    } else if cookie_exists {
+        (RpcAuthMode::Cookie, String::new())
     } else {
         (RpcAuthMode::Unavailable, String::new())
     };
@@ -839,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_cookie_preferred_over_userpass_when_both_exist() {
+    fn auth_userpass_preferred_when_active_static_credentials_exist() {
         let tmp = make_temp_dir();
         let cookie_path = temp_cookie_path(&tmp);
         let config_path = temp_config_path(&tmp);
@@ -855,7 +861,7 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
 
         let (header, mode) = result.unwrap();
-        assert_eq!(mode, RpcAuthMode::Cookie);
+        assert_eq!(mode, RpcAuthMode::LegacyUserpass);
         assert!(header.starts_with("Basic "));
     }
 

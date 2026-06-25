@@ -15,7 +15,8 @@ use crate::modules::files::{
 use crate::modules::models::*;
 use crate::modules::rpc;
 use crate::modules::utils::{
-    parse_balances, resolve_bin, resolve_bin_with_override, split_args, version_is_old,
+    hide_console_window, parse_balances, resolve_bin, resolve_bin_with_override, split_args,
+    version_is_old,
 };
 
 // --- SHELL STATE ---
@@ -1444,6 +1445,7 @@ pub fn execute_ping(host: String) -> Result<String, String> {
         cmd = Command::new("ping");
         cmd.args(["-c", "3", &host]);
     }
+    hide_console_window(&mut cmd);
 
     let output = cmd.output().map_err(|e| e.to_string())?;
 
@@ -1658,22 +1660,24 @@ fn run_shell_command_blocking(command: &str) -> Result<String, String> {
     state.cwd = cwd.clone();
     drop(state);
 
-    let mut child = if cfg!(windows) {
-        Command::new("cmd")
-            .current_dir(&cwd)
+    let mut command = if cfg!(windows) {
+        let mut cmd = Command::new("cmd");
+        cmd.current_dir(&cwd)
             .args(&["/C", &line])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        hide_console_window(&mut cmd);
+        cmd
     } else {
-        Command::new("bash")
-            .current_dir(&cwd)
+        let mut cmd = Command::new("bash");
+        cmd.current_dir(&cwd)
             .args(&["-lc", &line])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-    .map_err(|e| e.to_string())?;
+            .stderr(Stdio::piped());
+        cmd
+    };
+
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
 
     let started = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(60);

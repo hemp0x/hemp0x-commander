@@ -322,6 +322,21 @@
     ]);
   }
 
+  async function exitCommanderProcess() {
+    closeCleanupComplete = true;
+    showClosePrompt = false;
+    closeCleanupInProgress = true;
+    try {
+      await core.invoke("exit_commander");
+    } catch {
+      try {
+        await getCurrentWindow().close();
+      } catch {
+        // The backend exit command is authoritative; this is only a fallback.
+      }
+    }
+  }
+
   async function closeStopDaemon() {
     closePromptStatus = "Stopping daemon...";
     closeCleanupInProgress = true;
@@ -350,8 +365,7 @@
     } catch {
       // best-effort cleanup
     }
-    closeCleanupComplete = true;
-    await getCurrentWindow().close();
+    await exitCommanderProcess();
   }
 
   async function closeLeaveDaemon() {
@@ -367,8 +381,7 @@
     } catch {
       // best-effort cleanup
     }
-    closeCleanupComplete = true;
-    await getCurrentWindow().close();
+    await exitCommanderProcess();
   }
 
   function closeCancel() {
@@ -1055,14 +1068,17 @@
     if (tauriReady) {
       // Handle close event for daemon lifecycle
       getCurrentWindow().onCloseRequested(async (event) => {
-        if (appSettings.keep_daemon_running_on_close) {
-          return;
-        }
         if (closeCleanupComplete) {
           return;
         }
         event.preventDefault();
         if (closeCleanupInProgress) {
+          return;
+        }
+
+        if (appSettings.keep_daemon_running_on_close) {
+          closePromptStatus = "Closing Commander...";
+          await closeLeaveDaemon();
           return;
         }
 
@@ -1079,8 +1095,8 @@
           closePromptStatus = "";
           showClosePrompt = true;
         } else {
-          closeCleanupComplete = true;
-          await getCurrentWindow().close();
+          closePromptStatus = "Closing Commander...";
+          await exitCommanderProcess();
         }
       });
 

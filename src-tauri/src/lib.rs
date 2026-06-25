@@ -210,6 +210,7 @@ pub fn run() {
             runtime::take_daemon_ownership,
             runtime::get_daemon_ownership,
             runtime::release_daemon_ownership,
+            runtime::exit_commander,
             runtime::identify_running_daemon,
             runtime::wait_for_daemon_ready,
             runtime::get_daemon_process_identity,

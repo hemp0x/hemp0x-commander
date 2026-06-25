@@ -4883,9 +4883,17 @@ fn get_i64_ci(value: &serde_json::Value, key: &str) -> Option<i64> {
     get_ci(value, key).and_then(|v| v.as_i64())
 }
 
+fn get_str_any<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| get_str_ci(value, key))
+}
+
+fn get_i64_any(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| get_i64_ci(value, key))
+}
+
 fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
-    let expire_time = get_str_ci(value, "Expire Time").map(|s| s.to_string());
-    let expire_utc_time = get_i64_ci(value, "Expire UTC Time");
+    let expire_time = get_str_any(value, &["Expire Time", "expire_time"]).map(|s| s.to_string());
+    let expire_utc_time = get_i64_any(value, &["Expire UTC Time", "expire_utc_time"]);
     let txid = get_str_ci(value, "txid")
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
@@ -4905,11 +4913,19 @@ fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
     AssetMessageEntry {
-        asset_name: get_str_ci(value, "Asset Name").unwrap_or("").to_string(),
-        message: get_str_ci(value, "Message").unwrap_or("").to_string(),
-        time: get_str_ci(value, "Time").unwrap_or("").to_string(),
-        block_height: get_i64_ci(value, "Block Height").unwrap_or(0),
-        status: get_str_ci(value, "Status").unwrap_or("UNKNOWN").to_string(),
+        asset_name: get_str_any(value, &["Asset Name", "asset_name", "asset"])
+            .unwrap_or("")
+            .to_string(),
+        message: get_str_any(value, &["Message", "message", "ipfs_hash"])
+            .unwrap_or("")
+            .to_string(),
+        time: get_str_any(value, &["Time", "time", "time_string"])
+            .unwrap_or("")
+            .to_string(),
+        block_height: get_i64_any(value, &["Block Height", "block_height", "height"]).unwrap_or(0),
+        status: get_str_any(value, &["Status", "status"])
+            .unwrap_or("UNKNOWN")
+            .to_string(),
         expire_time,
         expire_utc_time,
         txid,
@@ -7461,6 +7477,30 @@ mod tests {
         assert_eq!(entry.message, "QmHash");
         assert_eq!(entry.block_height, 77);
         assert_eq!(entry.expire_utc_time, Some(1737500000));
+    }
+
+    #[test]
+    fn parses_message_entry_snake_case_core_keys() {
+        let json = serde_json::json!({
+          "asset_name": "GRIDSHADE/H0XC",
+          "message": "68656c6c6f",
+          "time": "2026-06-25 03:00:00",
+          "block_height": 420,
+          "status": "CONFIRMED",
+          "expire_utc_time": 0,
+          "sender_address": "RXqC5wZ6wLq4FavsWJC4La9ZyYTPtgoVfL"
+        });
+        let entry = parse_message_entry(&json);
+        assert_eq!(entry.asset_name, "GRIDSHADE/H0XC");
+        assert_eq!(entry.message, "68656c6c6f");
+        assert_eq!(entry.time, "2026-06-25 03:00:00");
+        assert_eq!(entry.block_height, 420);
+        assert_eq!(entry.status, "CONFIRMED");
+        assert_eq!(entry.expire_utc_time, Some(0));
+        assert_eq!(
+            entry.sender_address,
+            Some("RXqC5wZ6wLq4FavsWJC4La9ZyYTPtgoVfL".to_string())
+        );
     }
 
     #[test]

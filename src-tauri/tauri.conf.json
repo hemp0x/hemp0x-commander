@@ -17,7 +17,8 @@
         "resizable": true,
         "fullscreen": false,
         "transparent": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additional-browser-args": "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --metrics-recording-only --no-first-run --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ],
     "security": {

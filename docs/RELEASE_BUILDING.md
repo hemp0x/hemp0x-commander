@@ -114,6 +114,13 @@ user-configured IPFS gateways / pinning providers; no other external
 domains are contacted by the app, and the frontend CSP forbids direct
 outbound fetch.
 
+Windows builds pass conservative WebView2 startup flags in
+`src-tauri/tauri.conf.json` to reduce runtime background networking and
+component-update noise while keeping GPU acceleration enabled for UI
+responsiveness. These flags do not replace code signing and cannot guarantee
+that a system WebView2 runtime will never touch Microsoft-owned services, but
+they keep Commander's own webview surface focused on the local app.
+
 Static strings that appear in `hemp0x-commander.exe` (such as
 `html4/loose.dtd`, `digicert.com`, and `docs.rs`) come from reputable
 Rust crate data embedded in the binary: the Brotli static dictionary, the

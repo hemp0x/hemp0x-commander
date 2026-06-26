@@ -942,6 +942,15 @@
       if (!readiness.ready) {
         daemonStatusMessage = "Still starting";
         lastError = readiness.rpc_error || "Core has not answered RPC yet.";
+        try {
+          const status = await core.invoke("get_daemon_repair_status");
+          const hint = status?.log_hint || status?.phase || "";
+          if (hint && hint !== "Idle") {
+            daemonPollProgress = hint;
+          }
+        } catch {
+          // Best-effort startup hint only.
+        }
         if (!/connection failed|actively refused|no cookie file|rpc authentication unavailable/i.test(lastError)) {
           addRuntimeNotification("Daemon still starting", lastError, "warning");
         }

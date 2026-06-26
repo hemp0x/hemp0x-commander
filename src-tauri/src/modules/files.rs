@@ -2633,6 +2633,35 @@ fn read_log_recent_lines(path: &Path, max_lines: usize) -> Vec<String> {
 fn parse_log_hint(lines: &[String]) -> Option<String> {
     for line in lines.iter().rev() {
         let lower = line.to_lowercase();
+        if lower.contains("init message: init message channels")
+            || lower.contains("scanning asset transactions")
+        {
+            return Some("Scanning asset transactions".to_string());
+        }
+        if lower.contains("rescan") || lower.contains("rescanning") {
+            if let Some(progress) = extract_progress_percent(&lower) {
+                return Some(format!("Rescanning wallet ({progress})"));
+            }
+            return Some("Rescanning wallet".to_string());
+        }
+        if lower.contains("loading addresses from dns seeds") {
+            return Some("Loading DNS seed peers".to_string());
+        }
+        if lower.contains("0 addresses found from dns seeds") {
+            return Some("DNS seeds returned no peers; waiting for fixed seeds".to_string());
+        }
+        if lower.contains("adding fixed seed nodes") {
+            return Some("Adding fixed seed peers".to_string());
+        }
+        if lower.contains("invalid or missing peers.dat") {
+            return Some("Rebuilding peer database".to_string());
+        }
+        if lower.contains("timeout downloading block") {
+            return Some("Peer block download timed out".to_string());
+        }
+        if lower.contains("connect() to") && lower.contains("failed") {
+            return Some("Trying alternate peers".to_string());
+        }
         if lower.contains("reindexing") {
             return Some("Reindexing block data".to_string());
         }
@@ -2656,6 +2685,24 @@ fn parse_log_hint(lines: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_progress_percent(line: &str) -> Option<String> {
+    let marker = "progress=";
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    let value = rest[..end].parse::<f64>().ok()?;
+    if value <= 1.0 {
+        Some(format!("{:.2}%", value * 100.0))
+    } else {
+        Some(format!("{:.2}%", value))
+    }
 }
 
 #[tauri::command]
@@ -3661,6 +3708,41 @@ mod tests {
         settings.insert("addnode".to_string(), "[2001:db8::1]:42069".to_string());
         let (errors, _) = validate_config_settings(&settings);
         assert!(errors.is_empty(), "IPv6 addnode should be valid");
+    }
+
+    #[test]
+    fn parse_log_hint_detects_snapshot_message_scan() {
+        let lines = vec![
+            "2026-06-25 init message: Init Message Channels - Scanning Asset Transactions"
+                .to_string(),
+        ];
+        assert_eq!(
+            parse_log_hint(&lines),
+            Some("Scanning asset transactions".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_log_hint_detects_rescan_progress() {
+        let lines = vec![
+            "2026-06-25 init message: Rescanning wallet progress=0.421".to_string(),
+        ];
+        assert_eq!(
+            parse_log_hint(&lines),
+            Some("Rescanning wallet (42.10%)".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_log_hint_detects_p2p_block_timeout() {
+        let lines = vec![
+            "2026-06-25 Timeout downloading block 000000abc from peer=2, disconnecting"
+                .to_string(),
+        ];
+        assert_eq!(
+            parse_log_hint(&lines),
+            Some("Peer block download timed out".to_string())
+        );
     }
 
     #[test]

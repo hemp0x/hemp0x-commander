@@ -1189,12 +1189,6 @@
                     <span class="btn-icon">⚙</span> ADVANCED
                 </button>
             </div>
-            <div class="header-status">
-                <span class="pulse-dot" class:online={nodeOnline}></span>
-                <span class="status-label"
-                    >{nodeOnline ? "CONNECTED" : "OFFLINE"}</span
-                >
-            </div>
         </header>
 
         <!-- CONTENT -->
@@ -1533,40 +1527,46 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 0.75rem;
         padding: 5px 1rem; /* Added vertical padding for button glows/borders */
         background: rgba(0, 0, 0, 0.4);
         border-bottom: 1px solid rgba(0, 255, 65, 0.1);
         flex-shrink: 0;
     }
 
-    .header-status {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 0.65rem;
-        color: #555;
-        letter-spacing: 1px;
-    }
     .header-left {
         display: flex;
         align-items: center;
+        flex: 0 0 auto;
     }
     .header-options {
-        margin-left: 1rem;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin-left: 0;
         display: flex;
         align-items: center;
         gap: 0.4rem;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        overflow: hidden;
     }
     .type-filter {
         display: flex;
+        flex: 0 1 auto;
+        min-width: 0;
         gap: 4px;
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 6px;
         padding: 3px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        white-space: nowrap;
+    }
+    .type-filter::-webkit-scrollbar {
+        display: none;
     }
     .type-chip {
+        flex: 0 0 auto;
         background: transparent;
         border: 1px solid transparent;
         color: #666;
@@ -1601,11 +1601,15 @@
         cursor: not-allowed;
     }
     .toggle-hidden {
+        flex: 0 0 48px;
+        width: 48px;
+        height: 32px;
         cursor: pointer;
         display: flex;
         align-items: center;
+        justify-content: center;
         background: rgba(255, 255, 255, 0.05);
-        padding: 4px 8px;
+        padding: 0;
         border-radius: 4px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         transition: all 0.2s;
@@ -1653,10 +1657,12 @@
         text-shadow: 0 0 18px rgba(0, 255, 65, 0.7);
     }
     .header-actions {
+        flex: 0 0 auto;
         display: flex;
         gap: 0.5rem;
-        margin-left: auto;
+        margin-left: 0;
         margin-right: 1rem;
+        flex-wrap: nowrap;
     }
     .header-btn {
         background: rgba(0, 255, 65, 0.08);
@@ -1690,16 +1696,31 @@
     .btn-icon {
         font-size: 0.9rem;
     }
-    .pulse-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: #333;
-        animation: pulse 2s infinite;
-    }
-    .pulse-dot.online {
-        background: var(--color-primary);
-        box-shadow: 0 0 8px var(--color-primary);
+    @media (max-width: 1100px) {
+        .panel-header {
+            gap: 0.5rem;
+            padding-inline: 0.75rem;
+        }
+        .header-title {
+            max-width: 7rem;
+            line-height: 1.2;
+        }
+        .type-filter {
+            gap: 2px;
+            padding: 2px;
+        }
+        .type-chip {
+            padding: 4px 6px;
+            font-size: 0.52rem;
+        }
+        .toggle-hidden {
+            flex-basis: 44px;
+            width: 44px;
+        }
+        .header-actions {
+            gap: 0.4rem;
+            margin-right: 0.5rem;
+        }
     }
     @keyframes pulse {
         0%,

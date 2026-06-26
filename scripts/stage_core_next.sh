@@ -24,6 +24,9 @@ WINDOWS_ARCHIVE="hemp0x-core-next-4.8.0.0-w64-mingw32.zip"
 SUMS_FILE="SHA256SUMS"
 
 LINUX_TRIPLE="x86_64-unknown-linux-gnu"
+# Tauri names Windows externalBin sidecars with Commander's target triple.
+# Core Next currently ships static MinGW-w64 executables, which are staged under
+# this suffix because Commander is built as x86_64-pc-windows-msvc.
 WINDOWS_TRIPLE="x86_64-pc-windows-msvc"
 
 BINARIES=("hemp0xd" "hemp0x-cli" "hemp0x-tx")

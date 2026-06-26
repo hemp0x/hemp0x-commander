@@ -111,9 +111,9 @@ The `--no-bundle` flag skips installer generation (no NSIS/MSI), producing only 
 
 For distribution, zip the following files together:
 - `hemp0x-commander.exe`
-- `hemp0xd-x86_64-pc-windows-msvc.exe`
-- `hemp0x-cli-x86_64-pc-windows-msvc.exe`
-- `hemp0x-tx-x86_64-pc-windows-msvc.exe`
+- `hemp0xd.exe`
+- `hemp0x-cli.exe`
+- `hemp0x-tx.exe`
 
 Do not publish NSIS/MSI installer artifacts for Commander 2.0.0 unless the release
 scope changes.
@@ -126,10 +126,13 @@ keeps the source tree in one place while producing MSVC-ABI Windows binaries.
 
 Preconditions:
 
-- `src-tauri/binaries/` contains the Windows MSVC Core Next sidecars:
+- `src-tauri/binaries/` contains the Windows Core Next sidecars with the
+  Tauri target suffix:
   - `hemp0xd-x86_64-pc-windows-msvc.exe`
   - `hemp0x-cli-x86_64-pc-windows-msvc.exe`
   - `hemp0x-tx-x86_64-pc-windows-msvc.exe`
+  These sidecars may be static MinGW-w64 Core builds. Commander does not link
+  against them; it launches them as external executables.
 - `untracked/bin/cargo-xwin-runner` exists.
 - `untracked/toolchains/clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04`
   exists.

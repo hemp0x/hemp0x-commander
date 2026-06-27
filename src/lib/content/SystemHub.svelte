@@ -2706,8 +2706,9 @@
      does not overlap the adjacent input field. */
   .sh-controls-grid-wide {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 0.4rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 16rem));
+    justify-content: start;
+    gap: 0.55rem;
   }
 
   /* TOGGLE ROW */
@@ -2776,10 +2777,11 @@
     flex-direction: column;
     align-items: stretch;
     justify-content: center;
-    padding: 0.35rem 0.5rem;
+    padding: 0.42rem 0.55rem;
     background: rgba(0, 0, 0, 0.25);
     border-radius: 4px;
-    gap: 0.2rem;
+    gap: 0.32rem;
+    min-width: 0;
   }
   /* Horizontal variant for rows that pair a label + input + sibling button
      (e.g. the addnode row). Keeps the label and control on one line. */
@@ -2798,8 +2800,9 @@
     text-overflow: ellipsis;
   }
   .sh-num-input {
-    width: 100%;
-    padding: 0.25rem 0.4rem;
+    width: 8.5rem;
+    max-width: 100%;
+    padding: 0.28rem 0.75rem 0.28rem 0.45rem;
     background: #111;
     border: 1px solid rgba(0, 255, 65, 0.15);
     border-radius: 3px;
@@ -2808,6 +2811,7 @@
     font-family: var(--font-mono, monospace);
     text-align: right;
     outline: none;
+    color-scheme: dark;
   }
   .sh-num-input:focus {
     border-color: var(--color-primary);
@@ -2825,7 +2829,7 @@
     -moz-appearance: textfield;
   }
   .sh-num-input::-webkit-inner-spin-button {
-    margin-right: 2px;
+    margin-left: 0.35rem;
   }
   .sh-text-input {
     width: 180px;

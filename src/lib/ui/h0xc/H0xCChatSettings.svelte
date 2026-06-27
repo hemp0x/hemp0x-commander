@@ -152,7 +152,6 @@
                             on:change={(e) => setHistoryWindow(e.currentTarget.value)}
                         />
                         <span class="sett-number-unit">days</span>
-                        <button class="sett-expiry-btn history-all-btn" class:active={draft.historyDays === 0} on:click={() => setHistoryWindow(0)}>All</button>
                     </div>
                     <p class="sett-hint">How far back to show messages in the chat feed. Set 0 for all history. Older messages are filtered in the UI only. Nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
                 </div>
@@ -570,11 +569,14 @@
     .sett-number-row {
         display: flex;
         align-items: center;
-        gap: 0.4rem;
+        gap: 0.45rem;
     }
     .history-window-input {
-        max-width: 7rem;
+        width: 6.5rem;
+        max-width: 6.5rem;
+        padding-right: 0.65rem;
         text-align: right;
+        color-scheme: dark;
     }
     .sett-number-unit {
         color: #888;
@@ -582,10 +584,6 @@
         font-family: var(--font-mono);
         text-transform: uppercase;
         letter-spacing: 0.4px;
-    }
-    .history-all-btn {
-        flex: 0 0 auto;
-        min-width: 4.5rem;
     }
     .sett-expiry-btn {
         flex: 1;

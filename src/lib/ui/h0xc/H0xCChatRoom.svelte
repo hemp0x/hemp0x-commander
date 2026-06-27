@@ -867,6 +867,18 @@
     let rescanPollTimer = null;
     const RESCAN_POLL_MS = 3000;
 
+    async function refreshMessageIndexState() {
+        const result = await fetchMessageIndexState();
+        if (!result) {
+            messageIndexUnavailable = true;
+            messageIndexMissing = false;
+            return;
+        }
+        messageIndex = result.mi;
+        messageIndexUnavailable = !result.messagingAvailable;
+        messageIndexMissing = result.messagingAvailable && !result.mi;
+    }
+
     function startRescanPolling() {
         stopRescanPolling();
         const poll = async () => {
@@ -875,15 +887,7 @@
                 return;
             }
             try {
-                const result = await fetchMessageIndexState();
-                if (!result) {
-                    messageIndexUnavailable = true;
-                    messageIndexMissing = false;
-                    return;
-                }
-                messageIndex = result.mi;
-                messageIndexUnavailable = !result.messagingAvailable;
-                messageIndexMissing = result.messagingAvailable && !result.mi;
+                await refreshMessageIndexState();
                 if (messageIndex && !messageIndex.rescan_in_progress && !rescanBusy) {
                     // Rescan finished: stop polling and reload messages once.
                     stopRescanPolling();
@@ -921,7 +925,9 @@
         try {
             const result = await startMessageRescan();
             if (result?.success) {
-                rescanResult = result.raw || "Message history recovery started.";
+                rescanResult = summarizeRescanResult(result.raw, "Message history recovery complete.");
+                await refreshMessageIndexState();
+                loadMessages();
             } else {
                 rescanError = result?.error || "Message history recovery did not start.";
                 // A rescan may already be running (Core guard): keep polling.
@@ -941,6 +947,40 @@
                 setTimeout(() => { rescanResult = ""; }, 8000);
             }
         }
+    }
+
+    function summarizeRescanResult(raw, fallback) {
+        const text = String(raw || "").trim();
+        if (!text) return fallback;
+        try {
+            const parsed = JSON.parse(text);
+            const scanned = Number(parsed.scanned_blocks ?? parsed.blocks_scanned ?? 0);
+            const found = Number(parsed.messages_found ?? 0);
+            const added = Number(parsed.messages_added ?? 0);
+            const parts = [fallback];
+            if (scanned > 0) parts.push(`${scanned.toLocaleString()} block${scanned === 1 ? "" : "s"} scanned.`);
+            if (found > 0) parts.push(`${found.toLocaleString()} message${found === 1 ? "" : "s"} found.`);
+            if (added > 0) parts.push(`${added.toLocaleString()} added.`);
+            return parts.join(" ");
+        } catch {
+            if (text.length > 180 || text.startsWith("{") || text.startsWith("[")) return fallback;
+            return text;
+        }
+    }
+
+    function rescanProgressText() {
+        if (messageIndex?.rescan_in_progress) {
+            const cur = Number(messageIndex.rescan_current_height || 0);
+            const stop = Number(messageIndex.rescan_stop_height || 0);
+            const found = Number(messageIndex.rescan_messages_found || 0);
+            if (cur > 0 && stop > 0) {
+                const pct = Math.max(0, Math.min(100, (cur / stop) * 100));
+                return `Recovering H0XC history ${cur.toLocaleString()} / ${stop.toLocaleString()} (${pct.toFixed(1)}%).${found ? ` ${found.toLocaleString()} found.` : ""}`;
+            }
+            return "Recovering H0XC history. Commander will stay responsive.";
+        }
+        if (rescanBusy) return "Starting H0XC history recovery...";
+        return "";
     }
 
     function messageIndexGap() {
@@ -973,7 +1013,7 @@
             const result = await startMessageRescan({ startHeight, stopHeight });
             if (result?.success) {
                 if (!silent) {
-                    rescanResult = result.raw || `Message index catch-up scanned ${gap} blocks.`;
+                    rescanResult = summarizeRescanResult(result.raw, `Message index catch-up scanned ${gap} block${gap === 1 ? "" : "s"}.`);
                     setTimeout(() => { rescanResult = ""; }, 6000);
                 }
                 return true;
@@ -1822,6 +1862,22 @@
         try { await navigator.clipboard.writeText(text); } catch {}
     }
 
+    function openExplorer(target) {
+        const value = String(target || "").trim();
+        if (!value) return;
+        window.dispatchEvent(
+            new CustomEvent("commander-open-explorer", {
+                detail: { target: value },
+            }),
+        );
+    }
+
+    function messageStatusLabel(status) {
+        const value = String(status || "").trim();
+        if (!value || value.toUpperCase() === "UNREAD") return "";
+        return value;
+    }
+
     function isOwnMessage(msg) {
         const msgRoot = deriveRootNameFn(msg.asset_name);
         return msgRoot.toUpperCase() === rootName().toUpperCase();
@@ -2232,6 +2288,9 @@
             </span>
             {#if rescanResult}
                 <span class="msg-index-ok" title={rescanResult}>{rescanResult}</span>
+            {/if}
+            {#if rescanProgressText()}
+                <span class="msg-index-ok muted" title={rescanProgressText()}>{rescanProgressText()}</span>
             {/if}
             {#if rescanError}
                 <span class="msg-index-err" title={rescanError}>{rescanError}</span>
@@ -2775,6 +2834,7 @@
                             <span class="msg-detail-label">TXID</span>
                             <span class="msg-detail-val mono">{msgDetail.msg.txid}</span>
                             <button class="msg-detail-copy" on:click={() => copyText(msgDetail.msg.txid)} title="Copy txid">Copy</button>
+                            <button class="msg-detail-action icon" on:click={() => openExplorer(msgDetail.msg.txid)} title="Open transaction in Explorer" aria-label="Open transaction in Explorer">⌕</button>
                         </div>
                     {/if}
                     {#if msgDetail.msg.block_hash}
@@ -2832,10 +2892,10 @@
                             <span class="msg-detail-val dim">No expiration</span>
                         </div>
                     {/if}
-                    {#if msgDetail.msg.status}
+                    {#if messageStatusLabel(msgDetail.msg.status)}
                         <div class="msg-detail-row">
                             <span class="msg-detail-label">STATUS</span>
-                            <span class="msg-detail-val">{msgDetail.msg.status}</span>
+                            <span class="msg-detail-val">{messageStatusLabel(msgDetail.msg.status)}</span>
                         </div>
                     {/if}
                     {#if !isGuest && msgDetail.msg.txid}
@@ -3020,6 +3080,10 @@
     }
     .msg-index-btn.ghost:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.25); }
     .msg-index-ok { color: var(--color-primary); }
+    .msg-index-ok.muted {
+        color: #8fcf9a;
+        opacity: 0.86;
+    }
     .msg-index-err { color: #ff5555; }
     .msg-index-helper {
         margin: 0.3rem 0.5rem;
@@ -3457,6 +3521,16 @@
     }
     .msg-detail-action:hover {
         background: rgba(68, 136, 255, 0.15);
+    }
+    .msg-detail-action.icon {
+        width: 1.45rem;
+        height: 1.35rem;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        line-height: 1;
     }
     .msg-detail-actions {
         justify-content: flex-end;

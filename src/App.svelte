@@ -2189,6 +2189,16 @@ rpccookiefile=...</pre>
 </main>
 
 <style lang="css">
+  :global(input[type="number"]) {
+    color-scheme: dark;
+  }
+  :global(input[type="number"]::-webkit-inner-spin-button),
+  :global(input[type="number"]::-webkit-outer-spin-button) {
+    opacity: 1;
+    margin-left: 0.22rem;
+    cursor: pointer;
+  }
+
   /* --- LAYOUT SHELL --- */
   .shell {
     display: flex;

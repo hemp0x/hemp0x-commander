@@ -1,9 +1,9 @@
 <script>
-  import { onMount, createEventDispatcher } from "svelte";
+  import { onMount, onDestroy, createEventDispatcher } from "svelte";
   import { fade, fly } from "svelte/transition";
   import { core } from "@tauri-apps/api";
   import { save, open, ask } from "@tauri-apps/plugin-dialog";
-  import { systemHubSection } from "../stores/systemHub.js";
+  import { systemConfigUnsaved, systemHubSection } from "../stores/systemHub.js";
   import {
     fetchMessageIndexState,
     messageIndexStatusLabel as sharedMessageIndexStatusLabel,
@@ -438,6 +438,7 @@
 
   $: configHasUnsavedChanges =
     configText !== configSavedText || guidedDirtyKeys.size > 0 || guidedPreset !== "custom";
+  $: systemConfigUnsaved.set(activeSection === "config" && configHasUnsavedChanges);
 
   const CORE_DEFAULTS = {
     server: true, listen: true, daemon: false,
@@ -1079,6 +1080,10 @@
       stopRepairPolling();
       stopMsgRescanPolling();
     };
+  });
+
+  onDestroy(() => {
+    systemConfigUnsaved.set(false);
   });
 
   // Refresh message-index state when the repair tab becomes visible.
@@ -2802,7 +2807,7 @@
   .sh-num-input {
     width: 8.5rem;
     max-width: 100%;
-    padding: 0.28rem 0.75rem 0.28rem 0.45rem;
+    padding: 0.28rem 0.62rem 0.28rem 0.45rem;
     background: #111;
     border: 1px solid rgba(0, 255, 65, 0.15);
     border-radius: 3px;
@@ -2817,19 +2822,16 @@
     border-color: var(--color-primary);
     box-shadow: 0 0 4px rgba(0, 255, 65, 0.15);
   }
-  /* Style the native number-input spin buttons to match the app theme
-     instead of the default white OS arrows. */
   .sh-num-input::-webkit-inner-spin-button,
   .sh-num-input::-webkit-outer-spin-button {
     opacity: 1;
-    filter: invert(1) hue-rotate(80deg) saturate(3);
     cursor: pointer;
   }
   .sh-num-input {
     -moz-appearance: textfield;
   }
   .sh-num-input::-webkit-inner-spin-button {
-    margin-left: 0.35rem;
+    margin-left: 0.22rem;
   }
   .sh-text-input {
     width: 180px;

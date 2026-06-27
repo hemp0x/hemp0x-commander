@@ -22,7 +22,7 @@
   import { nodeStatus, daemonRuntime } from "../stores.js";
   import { addToastNotification } from "./stores/notifications.js";
   import { cidViewerTarget, ipfsHubSection } from "./stores/contentLibrary.js";
-  import { systemHubSection } from "./stores/systemHub.js";
+  import { systemConfigUnsaved, systemHubSection } from "./stores/systemHub.js";
 
   const primaryTabs = ["WALLET", "SYSTEM", "HISTORY", "EXPLORER", "CONSOLE", "ADVANCED"];
   const advancedTabs = ["CONSOLIDATE", "RAW TX", "SOLO MINING", "IPFS"];
@@ -48,8 +48,23 @@
         ? "ADVANCED"
         : activeSubTab;
 
-  function selectPrimaryTab(tab) {
-    activeSubTab = tab === "ADVANCED" ? lastAdvancedTab : tab;
+  async function confirmLeaveSystemConfig() {
+    if (activeSubTab !== "SYSTEM" || $systemHubSection !== "config" || !$systemConfigUnsaved) return true;
+    return await ask(
+      "Discard unsaved configuration changes?",
+      { title: "Unsaved Configuration", kind: "warning" },
+    );
+  }
+
+  async function switchSubTab(tab) {
+    if (tab === activeSubTab) return;
+    if (!(await confirmLeaveSystemConfig())) return;
+    activeSubTab = tab;
+  }
+
+  async function selectPrimaryTab(tab) {
+    const nextTab = tab === "ADVANCED" ? lastAdvancedTab : tab;
+    await switchSubTab(nextTab);
   }
 
   function openLibraryFromPicker() {
@@ -167,7 +182,7 @@
             <button
               class="advanced-tab-btn"
               class:active={activeSubTab === tab}
-              on:click={() => (activeSubTab = tab)}
+              on:click={() => switchSubTab(tab)}
             >
               {tab}
             </button>
@@ -197,7 +212,7 @@
           {:else if activeSubTab === "HISTORY"}
             <ToolsHistory
               on:toast={(e) => showToast(e.detail.msg, e.detail.type, e.detail.notify !== false)}
-              on:switch={(e) => (activeSubTab = e.detail)}
+              on:switch={(e) => switchSubTab(e.detail)}
             />
           {:else if activeSubTab === "JOURNAL"}
             <ToolsJournal

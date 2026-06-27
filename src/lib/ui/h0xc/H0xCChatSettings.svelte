@@ -40,19 +40,28 @@
     /** @type {typeof settings} */
     let draft = { ...settings };
     let draftTagsText = "";
+    let wasShown = false;
+    let draftDirty = false;
 
     function settingsChanged() {
         const savedTags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags.join(", ") : "#SPAM";
-        return JSON.stringify(draft) !== JSON.stringify(settings) || draftTagsText !== savedTags;
+        return draftDirty || JSON.stringify(draft) !== JSON.stringify(settings) || draftTagsText !== savedTags;
     }
 
     function syncFromSettings() {
         draft = { ...settings };
         const tags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags : ["#SPAM"];
         draftTagsText = tags.join(", ");
+        draftDirty = false;
     }
 
-    $: if (show) syncFromSettings();
+    $: if (show && !wasShown) {
+        syncFromSettings();
+        wasShown = true;
+    }
+    $: if (!show && wasShown) {
+        wasShown = false;
+    }
 
     function close() {
         if (settingsChanged() && !window.confirm("Close chat settings without saving changes?")) {
@@ -80,6 +89,7 @@
         draft.historyDays = Number.isFinite(parsed)
             ? Math.max(0, Math.min(3650, Math.floor(parsed)))
             : 90;
+        draftDirty = true;
         draft = draft;
     }
 
@@ -149,6 +159,7 @@
                             min="0"
                             max="3650"
                             step="1"
+                            on:input={(e) => setHistoryWindow(e.currentTarget.value)}
                             on:change={(e) => setHistoryWindow(e.currentTarget.value)}
                         />
                         <span class="sett-number-unit">days</span>
@@ -557,6 +568,17 @@
     }
     .cyber-input:focus { border-color: var(--color-primary); }
     .cyber-input::placeholder { color: #555; }
+    .cyber-input[type="number"] {
+        padding-right: 0.62rem;
+        text-align: right;
+        color-scheme: dark;
+    }
+    .cyber-input[type="number"]::-webkit-inner-spin-button,
+    .cyber-input[type="number"]::-webkit-outer-spin-button {
+        opacity: 1;
+        margin-left: 0.22rem;
+        cursor: pointer;
+    }
     .tags-input {
         resize: vertical;
         min-height: 2.2rem;
@@ -574,9 +596,15 @@
     .history-window-input {
         width: 6.5rem;
         max-width: 6.5rem;
-        padding-right: 0.65rem;
+        padding-right: 0.72rem;
         text-align: right;
         color-scheme: dark;
+    }
+    .history-window-input::-webkit-inner-spin-button,
+    .history-window-input::-webkit-outer-spin-button {
+        opacity: 1;
+        margin-left: 0.22rem;
+        cursor: pointer;
     }
     .sett-number-unit {
         color: #888;

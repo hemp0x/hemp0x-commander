@@ -1066,8 +1066,7 @@
 
     function isDisplayableH0xCMessage(/** @type {AssetMessage} */ msg) {
         const dec = decodeCache[msg.message];
-        if (dec?.is_h0xc_chat_message === true) return true;
-        return isH0xCAsset(msg.asset_name) && dec?.is_short_message === true && !!dec.text;
+        return dec?.is_h0xc_chat_message === true;
     }
 
     /** @param {AssetMessage} msg */
@@ -2402,7 +2401,7 @@
                     <div class="empty-big">◈</div>
                     <div class="empty-line">No messages in H0XC yet.</div>
                     {#if messages.length > 0 && filteredMessages.length === 0}
-                        <div class="empty-line sub">Core loaded {messages.length} H0xC message record(s), but none decoded as displayable chat under the current filters.</div>
+                        <div class="empty-line sub">Core loaded {messages.length} H0XC channel record(s), but none are launch-format H0XC chat messages under the current filters.</div>
                     {:else}
                         <div class="empty-line sub">Messages load from Core's local message index. Use Discover to find H0XC participants.</div>
                     {/if}

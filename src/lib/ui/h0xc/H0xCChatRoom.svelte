@@ -484,9 +484,7 @@
             let feedDiagnostic = "";
             messages = (Array.isArray(allMsgs) ? allMsgs : [])
                 .filter((/** @type {AssetMessage} */ m) => isH0xCAsset(m.asset_name));
-            if (rawMessageCount === 0) {
-                feedDiagnostic = "Core returned no asset messages. If this node is new or recovering, wait for message indexes to catch up and refresh.";
-            } else if (messages.length === 0) {
+            if (rawMessageCount > 0 && messages.length === 0) {
                 feedDiagnostic = `Core returned ${rawMessageCount} asset message record(s), but none were H0xC channels.`;
             }
             messages = dedupClientSide(messages);

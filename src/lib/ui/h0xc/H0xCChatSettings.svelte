@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher } from "svelte";
     import { fade } from "svelte/transition";
+    import { ask } from "@tauri-apps/plugin-dialog";
 
     export let show = false;
     /** @type {{ messageExpiryDefault: number, autoDiscovery: boolean, pollingIntervalSeconds: number, autoBlockTags: string[], discoveryEnabled: boolean, muteNotifications: boolean, discoveryScanLimit: number, historyDays: number, showExpired: boolean, hideStaleUsers: boolean, staleUserDays: number, communityReportAutoHide: boolean, communityReportMinReports: number, communityReportMinRatio: number, communityReportWindowDays: number, showBroadcastPreview: boolean }} */
@@ -41,18 +42,31 @@
     let draft = { ...settings };
     let draftTagsText = "";
     let wasShown = false;
-    let draftDirty = false;
+
+    function normalizedSettings(value) {
+        return {
+            ...value,
+            messageExpiryDefault: Number(value.messageExpiryDefault) || 0,
+            pollingIntervalSeconds: Number(value.pollingIntervalSeconds) || 30,
+            discoveryScanLimit: Number(value.discoveryScanLimit) || 2000,
+            historyDays: Math.max(0, Number(value.historyDays) || 0),
+            staleUserDays: Number(value.staleUserDays) || 90,
+            communityReportMinReports: Number(value.communityReportMinReports) || 3,
+            communityReportMinRatio: Number(value.communityReportMinRatio) || 0.4,
+            communityReportWindowDays: Number(value.communityReportWindowDays) || 30,
+            autoBlockTags: Array.isArray(value.autoBlockTags) ? value.autoBlockTags : ["#SPAM"],
+        };
+    }
 
     function settingsChanged() {
         const savedTags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags.join(", ") : "#SPAM";
-        return draftDirty || JSON.stringify(draft) !== JSON.stringify(settings) || draftTagsText !== savedTags;
+        return JSON.stringify(normalizedSettings(draft)) !== JSON.stringify(normalizedSettings(settings)) || draftTagsText !== savedTags;
     }
 
     function syncFromSettings() {
         draft = { ...settings };
         const tags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags : ["#SPAM"];
         draftTagsText = tags.join(", ");
-        draftDirty = false;
     }
 
     $: if (show && !wasShown) {
@@ -63,8 +77,8 @@
         wasShown = false;
     }
 
-    function close() {
-        if (settingsChanged() && !window.confirm("Close chat settings without saving changes?")) {
+    async function close() {
+        if (settingsChanged() && !(await ask("Close chat settings without saving changes?", { title: "Unsaved Chat Settings", kind: "warning" }))) {
             return;
         }
         dispatch("close");
@@ -89,7 +103,6 @@
         draft.historyDays = Number.isFinite(parsed)
             ? Math.max(0, Math.min(3650, Math.floor(parsed)))
             : 90;
-        draftDirty = true;
         draft = draft;
     }
 
@@ -569,8 +582,9 @@
     .cyber-input:focus { border-color: var(--color-primary); }
     .cyber-input::placeholder { color: #555; }
     .cyber-input[type="number"] {
-        padding-right: 0.62rem;
+        padding-right: 0.56rem;
         text-align: right;
+        color: var(--color-primary);
         color-scheme: dark;
     }
     .cyber-input[type="number"]::-webkit-inner-spin-button,
@@ -596,7 +610,7 @@
     .history-window-input {
         width: 6.5rem;
         max-width: 6.5rem;
-        padding-right: 0.72rem;
+        padding-right: 0.56rem;
         text-align: right;
         color-scheme: dark;
     }

@@ -332,6 +332,7 @@
       configSavedText = configText;
       guidedPreset = "custom";
       guidedDirtyKeys = new Set();
+      await hydrateGuidedControls();
       dispatchToast("Configuration saved.", "success");
       const restartNow = await ask(
         "Restart Core now so the raw configuration changes take effect?",
@@ -435,9 +436,10 @@
   let guidedPreviewLoading = false;
   let guidedApplyLoading = false;
   let guidedDirtyKeys = new Set();
+  let guidedBaseline = null;
 
   $: configHasUnsavedChanges =
-    configText !== configSavedText || guidedDirtyKeys.size > 0 || guidedPreset !== "custom";
+    configText !== configSavedText || guidedControlsChanged();
   $: systemConfigUnsaved.set(activeSection === "config" && configHasUnsavedChanges);
 
   const CORE_DEFAULTS = {
@@ -446,6 +448,42 @@
     txindex: false, addressindex: false, assetindex: false,
     timestampindex: false, spentindex: false, messageindex: false,
   };
+
+  function snapshotGuidedControls() {
+    return {
+      server: !!guidedControls.server,
+      listen: !!guidedControls.listen,
+      daemon: !!guidedControls.daemon,
+      dbcache: Number(guidedControls.dbcache) || 0,
+      maxconnections: Number(guidedControls.maxconnections) || 0,
+      prune: Number(guidedControls.prune) || 0,
+      txindex: !!guidedControls.txindex,
+      addressindex: !!guidedControls.addressindex,
+      assetindex: !!guidedControls.assetindex,
+      timestampindex: !!guidedControls.timestampindex,
+      spentindex: !!guidedControls.spentindex,
+      messageindex: !!guidedControls.messageindex,
+      zmqpubrawtx: String(guidedControls.zmqpubrawtx || "").trim(),
+      addnode: [...(guidedControls.addnodeList || [])].map((entry) => String(entry).trim()).filter(Boolean).sort(),
+    };
+  }
+
+  function guidedControlsChanged() {
+    if (!guidedBaseline) return false;
+    return JSON.stringify(snapshotGuidedControls()) !== JSON.stringify(guidedBaseline);
+  }
+
+  function refreshGuidedDirtyKeys() {
+    if (!guidedBaseline) return;
+    const current = snapshotGuidedControls();
+    const dirty = new Set();
+    for (const key of Object.keys(current)) {
+      if (JSON.stringify(current[key]) !== JSON.stringify(guidedBaseline[key])) {
+        dirty.add(key);
+      }
+    }
+    guidedDirtyKeys = dirty;
+  }
 
   async function hydrateGuidedControls() {
     try {
@@ -476,6 +514,7 @@
       guidedControls.addnodeList = nodes;
       guidedControls.addnodeEntry = "";
       guidedDirtyKeys = new Set();
+      guidedBaseline = snapshotGuidedControls();
     } catch {
       // Keep defaults
     }
@@ -502,7 +541,8 @@
   }
 
   function markGuidedDirty(key) {
-    guidedDirtyKeys = new Set([...guidedDirtyKeys, key]);
+    refreshGuidedDirtyKeys();
+    if (!guidedBaseline) guidedDirtyKeys = new Set([...guidedDirtyKeys, key]);
     invalidatePreview();
   }
 
@@ -543,7 +583,7 @@
         zmqpubrawtx: "",
       };
     }
-    guidedDirtyKeys = new Set();
+    refreshGuidedDirtyKeys();
     invalidatePreview({ resetPreset: false });
   }
 

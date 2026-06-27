@@ -439,7 +439,7 @@
   let guidedBaseline = null;
 
   $: configHasUnsavedChanges =
-    configText !== configSavedText || guidedControlsChanged();
+    configText !== configSavedText || guidedDirtyKeys.size > 0;
   $: systemConfigUnsaved.set(activeSection === "config" && configHasUnsavedChanges);
 
   const CORE_DEFAULTS = {
@@ -466,11 +466,6 @@
       zmqpubrawtx: String(guidedControls.zmqpubrawtx || "").trim(),
       addnode: [...(guidedControls.addnodeList || [])].map((entry) => String(entry).trim()).filter(Boolean).sort(),
     };
-  }
-
-  function guidedControlsChanged() {
-    if (!guidedBaseline) return false;
-    return JSON.stringify(snapshotGuidedControls()) !== JSON.stringify(guidedBaseline);
   }
 
   function refreshGuidedDirtyKeys() {

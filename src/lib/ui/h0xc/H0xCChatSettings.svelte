@@ -41,6 +41,11 @@
     let draft = { ...settings };
     let draftTagsText = "";
 
+    function settingsChanged() {
+        const savedTags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags.join(", ") : "#SPAM";
+        return JSON.stringify(draft) !== JSON.stringify(settings) || draftTagsText !== savedTags;
+    }
+
     function syncFromSettings() {
         draft = { ...settings };
         const tags = Array.isArray(settings.autoBlockTags) ? settings.autoBlockTags : ["#SPAM"];
@@ -50,6 +55,9 @@
     $: if (show) syncFromSettings();
 
     function close() {
+        if (settingsChanged() && !window.confirm("Close chat settings without saving changes?")) {
+            return;
+        }
         dispatch("close");
     }
 
@@ -64,6 +72,14 @@
 
     function setExpiry(days) {
         draft.messageExpiryDefault = days;
+        draft = draft;
+    }
+
+    function setHistoryWindow(value) {
+        const parsed = Number(value);
+        draft.historyDays = Number.isFinite(parsed)
+            ? Math.max(0, Math.min(3650, Math.floor(parsed)))
+            : 90;
         draft = draft;
     }
 
@@ -125,13 +141,20 @@
 
                 <div class="sett-section">
                     <span class="sett-label">CHAT HISTORY WINDOW</span>
-                    <div class="sett-expiry-row">
-                        <button class="sett-expiry-btn" class:active={draft.historyDays === 30} on:click={() => { draft.historyDays = 30; draft = draft; }}>30 Days</button>
-                        <button class="sett-expiry-btn" class:active={draft.historyDays === 90} on:click={() => { draft.historyDays = 90; draft = draft; }}>90 Days</button>
-                        <button class="sett-expiry-btn" class:active={draft.historyDays === 180} on:click={() => { draft.historyDays = 180; draft = draft; }}>180 Days</button>
-                        <button class="sett-expiry-btn" class:active={draft.historyDays === 0} on:click={() => { draft.historyDays = 0; draft = draft; }}>All</button>
+                    <div class="sett-number-row">
+                        <input
+                            type="number"
+                            class="cyber-input history-window-input"
+                            bind:value={draft.historyDays}
+                            min="0"
+                            max="3650"
+                            step="1"
+                            on:change={(e) => setHistoryWindow(e.currentTarget.value)}
+                        />
+                        <span class="sett-number-unit">days</span>
+                        <button class="sett-expiry-btn history-all-btn" class:active={draft.historyDays === 0} on:click={() => setHistoryWindow(0)}>All</button>
                     </div>
-                    <p class="sett-hint">How far back to show messages in the chat feed. Older messages are filtered in the UI only. Nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
+                    <p class="sett-hint">How far back to show messages in the chat feed. Set 0 for all history. Older messages are filtered in the UI only. Nothing is deleted from the chain. You can also click "Load older messages" in the chat to extend the view.</p>
                 </div>
 
                 <div class="sett-section">
@@ -543,6 +566,26 @@
     .sett-expiry-row {
         display: flex;
         gap: 0.3rem;
+    }
+    .sett-number-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .history-window-input {
+        max-width: 7rem;
+        text-align: right;
+    }
+    .sett-number-unit {
+        color: #888;
+        font-size: 0.58rem;
+        font-family: var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+    .history-all-btn {
+        flex: 0 0 auto;
+        min-width: 4.5rem;
     }
     .sett-expiry-btn {
         flex: 1;

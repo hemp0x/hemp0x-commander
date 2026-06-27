@@ -12,7 +12,7 @@ use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
 use crate::modules::utils::{hide_console_window, resolve_bin, resolve_bin_with_override};
 
-const REQUIRED_CORE_NEXT_COMMIT: &str = "e21f5842c";
+const REQUIRED_CORE_NEXT_COMMIT: &str = "6c18fe5a2";
 const REQUIRED_CORE_BASE_VERSION: &str = "4.8.0.0";
 const DEFAULT_RPC_PORT: u16 = 42068;
 const DEFAULT_P2P_PORT: u16 = 42069;
@@ -450,6 +450,8 @@ pub struct CoreNextCapabilities {
     pub snapshots: bool,
     pub has_view_channel_messages: bool,
     pub has_message_txid_lookup: bool,
+    pub has_message_index: bool,
+    pub has_rescan_messages: bool,
     pub detected_rpc_names: Vec<String>,
 }
 
@@ -465,6 +467,8 @@ impl Default for CoreNextCapabilities {
             snapshots: false,
             has_view_channel_messages: false,
             has_message_txid_lookup: false,
+            has_message_index: false,
+            has_rescan_messages: false,
             detected_rpc_names: Vec::new(),
         }
     }
@@ -495,6 +499,10 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
     let has_view_channel_messages = lower.contains("viewchannelmessages");
     let has_message_txid_lookup = lower.contains("getmessagetxid");
 
+    // Message index (Core Next v4.8.0.0+): full message index + recovery RPCs.
+    let has_message_index = lower.contains("viewindexedmessagechannels");
+    let has_rescan_messages = lower.contains("rescanmessages");
+
     let rpc_names: Vec<String> = lower
         .lines()
         .filter(|line| {
@@ -506,6 +514,8 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
                 || line.contains("viewallmessagechannels")
                 || line.contains("viewchannelmessages")
                 || line.contains("getmessagetxid")
+                || line.contains("viewindexedmessagechannels")
+                || line.contains("rescanmessages")
                 || line.contains("listrestrictedassets")
                 || line.contains("issuerestrictedasset")
                 || line.contains("listqualifiers")
@@ -530,6 +540,8 @@ pub(crate) fn parse_capabilities_from_help(help_text: &str) -> CoreNextCapabilit
         snapshots,
         has_view_channel_messages,
         has_message_txid_lookup,
+        has_message_index,
+        has_rescan_messages,
         detected_rpc_names: rpc_names,
     }
 }
@@ -881,6 +893,10 @@ restorewalletmigration \"filename\" ( \"walletname\" )
 getmessaginginfo
 viewallmessages ( count \"asset_name\" \"address\" )
 viewallmessagechannels
+viewchannelmessages \"channel\" ( count ) ( offset ) ( start_height ) ( stop_height )
+getmessagetxid \"channel\" timestamp \"message_hash\"
+viewindexedmessagechannels ( \"pattern\" ) ( count ) ( offset )
+rescanmessages ( start_height ) ( stop_height ) ( \"channel\" )
 
 == Restricted Assets ==
 listrestrictedassets ( \"asset_name\" )
@@ -912,7 +928,17 @@ generatetoaddress nblocks address (maxtries)
     #[test]
     fn detects_messaging() {
         let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.help_probe_success);
         assert!(caps.messaging);
+    }
+
+    #[test]
+    fn detects_message_index_capabilities() {
+        let caps = parse_capabilities_from_help(synthetic_help());
+        assert!(caps.has_message_index);
+        assert!(caps.has_rescan_messages);
+        assert!(caps.has_view_channel_messages);
+        assert!(caps.has_message_txid_lookup);
     }
 
     #[test]
@@ -1031,7 +1057,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_matches_required_hash() {
-        let raw = "Hemp0x Core Daemon version v4.8.0.0-e21f5842c";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-6c18fe5a2";
         let result = parse_commit_hash(raw);
         assert_eq!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }
@@ -1045,7 +1071,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_does_not_match_required_hash_as_substring() {
-        let raw = "Hemp0x Core Daemon version v4.8.0.0-00e21f5842cff";
+        let raw = "Hemp0x Core Daemon version v4.8.0.0-006c18fe5a2ff";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }

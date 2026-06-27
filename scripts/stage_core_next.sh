@@ -8,19 +8,19 @@ set -euo pipefail
 #
 # Environment overrides:
 #   CORE_NEXT_ARTIFACT_DIR  Path to the directory containing the release archives and SHA256SUMS.
-#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0/
+#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-messageindex/
 #   STAGING_DIR             Destination directory for staged binaries.
 #                           Default: <repo root>/src-tauri/binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0"
+DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-messageindex"
 ARTIFACT_DIR="${CORE_NEXT_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
 STAGING_DIR="${STAGING_DIR:-$REPO_ROOT/src-tauri/binaries}"
 
-LINUX_ARCHIVE="hemp0x-core-next-4.8.0.0-linux-gnu.tar.gz"
-WINDOWS_ARCHIVE="hemp0x-core-next-4.8.0.0-w64-mingw32.zip"
+LINUX_ARCHIVE="hemp0x-core-next-v4.8.0.0-linux-x86_64.tar.gz"
+WINDOWS_ARCHIVE="hemp0x-core-next-v4.8.0.0-win64.zip"
 SUMS_FILE="SHA256SUMS"
 
 LINUX_TRIPLE="x86_64-unknown-linux-gnu"

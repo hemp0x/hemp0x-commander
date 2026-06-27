@@ -326,6 +326,7 @@ const SINGLETON_KEYS: &[&str] = &[
     "assetindex",
     "timestampindex",
     "spentindex",
+    "messageindex",
     "zmqpubrawtx",
     "zmqpubhashblock",
     "zmqpubhashtx",
@@ -1082,6 +1083,7 @@ pub fn parse_current_config() -> Result<HashMap<String, String>, String> {
                     | "assetindex"
                     | "timestampindex"
                     | "spentindex"
+                    | "messageindex"
                     | "zmqpubrawtx"
             )
         })
@@ -1414,6 +1416,12 @@ pub fn get_config_help_reference() -> Result<Vec<ConfigHelpSection>, String> {
                     description: "Spent output index. Changing requires -reindex-chainstate.".to_string(),
                     default_value: "0".to_string(),
                     commander_relevance: "Used by UTXO management and consolidation tools.".to_string(),
+                },
+                ConfigHelpEntry {
+                    key: "messageindex".to_string(),
+                    description: "Index all valid on-chain asset messages so community chat can discover and recover history. Recommended for H0XC chat. Uses local Core data only. 0=off (default), 1=full index. Changing requires a daemon restart.".to_string(),
+                    default_value: "0".to_string(),
+                    commander_relevance: "Recommended for H0XC community chat. After enabling, run RECOVER H0XC HISTORY (rescanmessages) once to backfill. Historical message recovery is limited on pruned nodes because older blocks may not be available locally.".to_string(),
                 },
             ],
         },
@@ -3416,6 +3424,18 @@ mod tests {
     }
 
     #[test]
+    fn apply_changes_adds_messageindex() {
+        let original = "# header\nserver=1\n";
+        let mut changes = HashMap::new();
+        changes.insert("messageindex".to_string(), Some("1".to_string()));
+        let result = apply_config_changes(original, &changes);
+        assert!(
+            result.contains("messageindex=1"),
+            "messageindex should be written when enabled from guided config"
+        );
+    }
+
+    #[test]
     fn apply_changes_does_not_duplicate_keys() {
         let original = "server=1\ntxindex=0\n";
         let mut changes = HashMap::new();
@@ -3903,6 +3923,36 @@ mod tests {
 
         let on_disk = fs::read_to_string(&cfg).unwrap();
         assert!(on_disk.contains("server=0"), "config should be updated");
+        drop(guard);
+    }
+
+    #[test]
+    fn apply_guided_config_writes_messageindex() {
+        let _lock = lock_cfg_test();
+        let guard = isolate_data_dir_for_config_test();
+        let cfg = guard.target.join("hemp.conf");
+        fs::write(&cfg, "# test\nserver=1\n").unwrap();
+
+        let mut changes = HashMap::new();
+        changes.insert("messageindex".to_string(), Some("1".to_string()));
+        let preview = preview_config_changes(changes.clone()).unwrap();
+
+        assert!(
+            preview
+                .changes
+                .iter()
+                .any(|change| change.key == "messageindex" && change.new_value.as_deref() == Some("1")),
+            "preview should report messageindex change"
+        );
+
+        let result = apply_guided_config(changes, preview.preview_token.clone());
+        assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+
+        let on_disk = fs::read_to_string(&cfg).unwrap();
+        assert!(
+            on_disk.contains("messageindex=1"),
+            "guided apply should write messageindex to hemp.conf"
+        );
         drop(guard);
     }
 

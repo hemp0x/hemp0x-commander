@@ -27,6 +27,47 @@ const HC_MAGIC_1: u8 = 0x43; // 'C'
 const HC_FORMAT_VERSION: u8 = 0x01;
 const HC_PAYLOAD_MAX: usize = 25;
 
+/// Message magic-byte classification for on-chain asset messages.
+///
+/// This keeps the three H0XC-related message paths distinguishable so the
+/// frontend/backend filters can route messages correctly:
+/// - `Hs` (HS, 0x48 0x53): normal short message. Belongs in the normal asset
+///   message inbox, NOT H0XC chat.
+/// - `Hx` (HX, 0x48 0x58): H0XC chat short message. Belongs in H0XC chat,
+///   NOT the normal asset inbox.
+/// - `Hc` (HC, 0x48 0x43): H0XC control frame (delete/leave/report/status).
+///   Hidden from normal chat display by default; applies moderation effects.
+/// - `Other`: anything else (raw IPFS hash, legacy message, etc.).
+///
+/// This is a pure helper over the leading two bytes of a message hex string
+/// and does not decode or validate the frame. It exists so the
+/// HS/HX/HC distinction can be unit-tested directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MessageMagicKind {
+    Hs,
+    Hx,
+    Hc,
+    Other,
+}
+
+/// Classify a message by its leading two magic bytes, given as a hex string.
+/// Tolerates whitespace, mixed case, and short/empty input (returns `Other`).
+pub fn classify_message_magic(hex: &str) -> MessageMagicKind {
+    let trimmed = hex.trim().to_lowercase();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 4 {
+        return MessageMagicKind::Other;
+    }
+    // Compare the first two hex byte pairs (4 chars) directly as ASCII.
+    let prefix = &trimmed[..4];
+    match prefix {
+        "4853" => MessageMagicKind::Hs,
+        "4858" => MessageMagicKind::Hx,
+        "4843" => MessageMagicKind::Hc,
+        _ => MessageMagicKind::Other,
+    }
+}
+
 const CMD_DELETE: u8 = 0x01;
 const CMD_LEAVE: u8 = 0x07;
 const CMD_STATUS: u8 = 0x08;
@@ -641,6 +682,64 @@ mod tests {
 
     fn frame_from_bytes(frame: &[u8; 32]) -> String {
         bytes_to_hex(frame)
+    }
+
+    // --- Message magic classification (HS/HX/HC invariants) ---
+
+    #[test]
+    fn classify_hs_normal_short_message() {
+        // HS = 0x48 0x53 -> normal asset inbox short message, not H0XC chat.
+        assert_eq!(classify_message_magic("4853"), MessageMagicKind::Hs);
+        assert_eq!(classify_message_magic("4853abcd1234"), MessageMagicKind::Hs);
+    }
+
+    #[test]
+    fn classify_hx_h0xc_chat_message() {
+        // HX = 0x48 0x58 -> H0XC chat short message, excluded from normal inbox.
+        assert_eq!(classify_message_magic("4858"), MessageMagicKind::Hx);
+        assert_eq!(classify_message_magic("4858deadbeef"), MessageMagicKind::Hx);
+    }
+
+    #[test]
+    fn classify_hc_control_frame() {
+        // HC = 0x48 0x43 -> H0XC control frame, hidden from chat by default.
+        assert_eq!(classify_message_magic("4843"), MessageMagicKind::Hc);
+        assert_eq!(classify_message_magic("4843010117"), MessageMagicKind::Hc);
+    }
+
+    #[test]
+    fn classify_other_for_non_magic_messages() {
+        // Raw IPFS hashes / legacy messages have no HS/HX/HC magic.
+        assert_eq!(classify_message_magic("QmZPGfJojdTzaqCWJu2m3krark38X1rqEHBo4SjeqHKB26"), MessageMagicKind::Other);
+        assert_eq!(classify_message_magic("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"), MessageMagicKind::Other);
+        assert_eq!(classify_message_magic("deadbeef"), MessageMagicKind::Other);
+    }
+
+    #[test]
+    fn classify_tolerates_whitespace_case_and_short_input() {
+        assert_eq!(classify_message_magic("  4858  "), MessageMagicKind::Hx);
+        assert_eq!(classify_message_magic("4858"), MessageMagicKind::Hx);
+        assert_eq!(classify_message_magic("48"), MessageMagicKind::Other);
+        assert_eq!(classify_message_magic(""), MessageMagicKind::Other);
+    }
+
+    #[test]
+    fn classify_distinguishes_chat_from_normal_from_control() {
+        // The three H0XC paths must remain mutually distinguishable.
+        let hs = classify_message_magic("4853");
+        let hx = classify_message_magic("4858");
+        let hc = classify_message_magic("4843");
+        assert_ne!(hs, hx);
+        assert_ne!(hs, hc);
+        assert_ne!(hx, hc);
+    }
+
+    #[test]
+    fn classify_hc_control_frame_matches_encoded_delete() {
+        // A real encoded delete control frame must classify as HC.
+        let txid = "84c1a733c585ba40d8798a3c67a4a3d5155c4d306274ac2971be8cd8c09a311a";
+        let hex = make_valid_delete_frame(txid);
+        assert_eq!(classify_message_magic(&hex), MessageMagicKind::Hc);
     }
 
     #[test]

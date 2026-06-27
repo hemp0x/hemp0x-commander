@@ -21,6 +21,14 @@
     import { addNotification } from "../../stores/notifications.js";
     import { deriveRootNameFn, isH0xCAsset } from "../../stores/h0xc.js";
     import {
+        fetchMessageIndexState,
+        isNearTipMessageIndexLag,
+        messageIndexStatusLabel as sharedMessageIndexStatusLabel,
+        messageIndexStatusText as sharedMessageIndexStatusText,
+        startMessageRescan,
+        openSystemConfig,
+    } from "../../stores/messageIndex.js";
+    import {
         interpretControlMessages,
         isControlCommandMessage,
         isDecodedLeaveCommandMessage,
@@ -100,6 +108,25 @@
     let showRefreshIndicator = false;
     /** @type {ReturnType<typeof setTimeout> | null} */
     let refreshIndicatorTimer = null;
+    const MESSAGE_INDEX_BACKFILL_WARNING_PREFIX = "Full message indexing is enabled";
+    let messageIndexBackfillWarning = "";
+
+    // Message index state (Core Next v4.8.0.0+). Populated from get_messaginginfo
+    // so the UI can show disabled / needs-recovery / recovering / synced / pruned.
+    /** @type {null | { enabled: boolean, mode: string, synced: boolean, synced_height: number, best_height: number, needs_rescan: boolean, rescan_in_progress: boolean, rescan_start_height: number, rescan_stop_height: number, rescan_current_height: number, rescan_scanned_blocks: number, rescan_messages_found: number, rescan_messages_added: number, rescan_last_error: string|null, pruned: boolean, pruned_limitation: string|null }}
+     */
+    let messageIndex = null;
+    let messageIndexUnavailable = false;
+    let messageIndexMissing = false;
+    let messageIndexConfigured = false;
+    let rescanBusy = false;
+    let rescanError = "";
+    let rescanResult = "";
+    let showEnableHelper = false;
+    let autoCatchupBusy = false;
+    let lastAutoCatchupAt = 0;
+    const NEAR_TIP_AUTO_CATCHUP_MAX_BLOCKS = 500;
+    const AUTO_CATCHUP_COOLDOWN_MS = 15000;
 
     /** @type {Record<string, DecodeResult>} */
     let decodeCache = {};
@@ -287,10 +314,76 @@
 
     async function loadChannelMessages(channel) {
         try {
-            return await core.invoke("view_channel_messages", { channel });
+            // Prefer the paginated, index-aware channel read so we never dump
+            // the entire message DB and stay responsive on large histories.
+            return await core.invoke("view_channel_messages_paged", {
+                channel,
+                count: 200,
+                offset: 0,
+            });
         } catch {
-            return null;
+            // Fall back to the legacy non-paginated call for older Core builds.
+            try {
+                return await core.invoke("view_channel_messages", { channel });
+            } catch {
+                return null;
+            }
         }
+    }
+
+    /**
+     * Read H0XC messages from the indexed message DB using a paginated,
+     * pattern-filtered global call. Returns null if the indexed RPC is not
+     * available (older Core build or messaging not yet active).
+     *
+     * Prefers stricter patterns (e.g. assets ending in /H0XC or .H0XC) that
+     * only match sub-assets ending in H0XC. Falls back to the broad pattern
+     * if Core rejects strict patterns, then applies the in-memory
+     * isH0xCAsset filter in the caller.
+     */
+    async function loadIndexedH0xCMessages() {
+        const strictPatterns = ["*/H0XC", "*/H0XC!", "*.H0XC", "*.H0XC!"];
+        const allMsgs = [];
+        const seenKeys = new Set();
+        let strictWorked = false;
+
+        for (const pattern of strictPatterns) {
+            try {
+                const batch = await core.invoke("view_asset_messages_paged", {
+                    count: 200,
+                    offset: 0,
+                    pattern,
+                });
+                if (Array.isArray(batch) && batch.length > 0) {
+                    strictWorked = true;
+                    for (const m of batch) {
+                        const key = `${m.asset_name}|${m.time}|${m.message}`;
+                        if (seenKeys.has(key)) continue;
+                        seenKeys.add(key);
+                        allMsgs.push(m);
+                    }
+                }
+            } catch {
+                // Pattern unsupported by this Core build; try next.
+            }
+        }
+
+        if (strictWorked) return allMsgs;
+
+        // Fall back to broad pattern + in-memory isH0xCAsset filter in caller.
+        try {
+            const broad = await core.invoke("view_asset_messages_paged", {
+                count: 200,
+                offset: 0,
+                pattern: "*H0XC*",
+            });
+            if (Array.isArray(broad) && broad.length > 0) {
+                return broad;
+            }
+        } catch {
+            // indexed RPC unavailable
+        }
+        return null;
     }
 
     async function loadMessages() {
@@ -298,8 +391,18 @@
         messagesLoading = true;
         messagesError = "";
         messagesWarn = "";
+        messageIndexBackfillWarning = "";
         try {
             const info = await core.invoke("get_messaging_info");
+            messageIndex = info?.message_index || null;
+            if (messageIndex?.enabled) messageIndexConfigured = true;
+            messageIndexUnavailable = !info || (!messageIndex && !info.enabled && !info.messaging_active);
+            messageIndexMissing = !!(info && (info.enabled || info.messaging_active) && !info.message_index);
+            if (isNearTipMessageIndexLag(messageIndex)) {
+                maybeAutoCatchupMessageIndex({ silent: true }).then((ran) => {
+                    if (ran && chatVisible) setTimeout(() => loadMessages(), 1200);
+                });
+            }
             if (!info.enabled) {
                 messages = [];
                 messagesError = "Messaging is not enabled on this node.";
@@ -308,13 +411,22 @@
             const channels = uniqueH0xCChannels();
             let allMsgs = [];
             let anyChannelLoaded = false;
-            // Guests have no identity channel of their own and rely on the global
-            // H0xC feed. Per-channel fetches are keyed off the discovery cache, which
-            // for a fresh/incomplete guest omits not-yet-discovered channels (e.g. a
-            // GRIDSHADE/H0XC channel). Always use the global view for guests so public
-            // H0xC messages are visible even before discovery populates participants.
+
+            // 1. Prefer the indexed, pattern-filtered global read. This discovers
+            //    public H0XC messages without requiring manual subscriptions and
+            //    bounds the response via pagination.
+            const indexed = await loadIndexedH0xCMessages();
+            if (Array.isArray(indexed) && indexed.length > 0) {
+                allMsgs = indexed.slice();
+                anyChannelLoaded = true;
+            }
+
+            // 2. For non-guests with known channels, also pull per-channel pages
+            //    and merge+dedup with the indexed read so subscription-only
+            //    messages still appear if the index is incomplete.
             if (!isGuest && channels.length > 0) {
                 const MAX_CONCURRENT = 4;
+                const channelMsgs = [];
                 for (let i = 0; i < channels.length; i += MAX_CONCURRENT) {
                     const batch = channels.slice(i, i + MAX_CONCURRENT);
                     const results = await Promise.allSettled(
@@ -322,17 +434,49 @@
                     );
                     for (const r of results) {
                         if (r.status === "fulfilled" && Array.isArray(r.value)) {
-                            allMsgs.push(...r.value);
+                            channelMsgs.push(...r.value);
                             anyChannelLoaded = true;
                         }
                     }
                 }
+                if (channelMsgs.length > 0) {
+                    if (allMsgs.length > 0) {
+                        // Dedup by txid+vout / channel+time+message via the backend.
+                        try {
+                            allMsgs = await core.invoke("merge_asset_messages", {
+                                primary: allMsgs,
+                                extra: channelMsgs,
+                            });
+                        } catch {
+                            // Backend merge unavailable: naive client-side concat+dedup.
+                            allMsgs = dedupClientSide([...allMsgs, ...channelMsgs]);
+                        }
+                    } else {
+                        allMsgs = channelMsgs;
+                    }
+                }
             }
+
+            // 3. Guests, or when nothing else loaded: legacy global read.
             if (isGuest || !anyChannelLoaded) {
                 try {
-                    allMsgs = await core.invoke("view_asset_messages");
+                    const legacy = await core.invoke("view_asset_messages");
+                    if (Array.isArray(legacy) && legacy.length > 0) {
+                        if (allMsgs.length > 0) {
+                            try {
+                                allMsgs = await core.invoke("merge_asset_messages", {
+                                    primary: allMsgs,
+                                    extra: legacy,
+                                });
+                            } catch {
+                                allMsgs = dedupClientSide([...allMsgs, ...legacy]);
+                            }
+                        } else {
+                            allMsgs = legacy;
+                        }
+                    }
                 } catch {
-                    allMsgs = [];
+                    // leave allMsgs as-is
                 }
             }
             const prevMessages = messages;
@@ -345,16 +489,14 @@
             } else if (messages.length === 0) {
                 feedDiagnostic = `Core returned ${rawMessageCount} asset message record(s), but none were H0xC channels.`;
             }
-            const seenKeys = new Set();
-            messages = messages.filter((/** @type {AssetMessage} */ m) => {
-                const key = m.txid
-                    ? `txid:${m.txid}`
-                    : `${m.asset_name}|${m.message}|${m.time}|${m.block_height}`;
-                if (seenKeys.has(key)) return false;
-                seenKeys.add(key);
-                return true;
-            });
+            messages = dedupClientSide(messages);
             const controlResult = await interpretControlMessages(messages);
+            // NOTE: interpretControlMessages only sees control frames that are in the
+            // currently loaded batch (max 200 indexed + per-channel pages). A delete
+            // or leave control frame older than the page window will not hide its
+            // target. Per-channel reads mitigate this for known participants; unknown
+            // channels may show messages that a control frame outside the page would
+            // otherwise hide. This is an intentional bounded-read trade-off.
             hiddenTxids = controlResult.hiddenTxids;
             const leaveMessageKeys = controlResult.leaveMessageKeys || new Set();
             // Rejoin: the most recent message per channel wins.
@@ -402,7 +544,16 @@
             }
 
             const warns = [];
-            if (info.warnings && info.warnings.length > 0) warns.push(...info.warnings);
+            if (info.warnings && info.warnings.length > 0) {
+                for (const warning of info.warnings) {
+                    const text = String(warning || "");
+                    if (text.startsWith(MESSAGE_INDEX_BACKFILL_WARNING_PREFIX)) {
+                        messageIndexBackfillWarning = text;
+                    } else {
+                        warns.push(text);
+                    }
+                }
+            }
             if (!info.messaging_active) warns.push("Messaging is not fully active.");
             if (!info.caches_available) warns.push("Message caches are unavailable; some messages may be missing.");
             if (feedDiagnostic) warns.push(feedDiagnostic);
@@ -602,6 +753,246 @@
         return `${msg.asset_name}|${msg.time}|${msg.message}`;
     }
 
+    /**
+     * Client-side dedup fallback used when the backend merge command is
+     * unavailable. Mirrors the backend identity priority:
+     *   1. txid + vout
+     *   2. txid + channel + time + message  (vout missing)
+     *   3. channel + time + message         (no txid)
+     *   4. asset_name + time + message      (no txid, no channel)
+     *
+     * Never dedup by txid alone: a tx can carry multiple distinct message
+     * outputs and Core may omit vout for some views.
+     */
+    function dedupClientSide(/** @type {AssetMessage[]} */ msgs) {
+        const seen = new Set();
+        const out = [];
+        for (const m of msgs) {
+            let key;
+            if (m.txid) {
+                if (m.vout !== undefined && m.vout !== null) {
+                    key = `tv:${m.txid}:${m.vout}`;
+                } else {
+                    key = `tcm:${m.txid}|${m.channel || ""}|${m.time}|${m.message}`;
+                }
+            } else if (m.channel) {
+                key = `cm:${m.channel}|${m.time}|${m.message}`;
+            } else {
+                key = `am:${m.asset_name}|${m.time}|${m.message}`;
+            }
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(m);
+        }
+        return out;
+    }
+
+    // Message-index status: delegate to the shared helpers so H0XC chat and
+    // System > Repair show identical status/labels.
+    function messageIndexStatusLabel() {
+        if (messageIndexBackfillWarning && isNearTipMessageIndexLag(messageIndex)) return "catching-up";
+        if (messageIndexBackfillWarning || shouldShowMessageIndexRecoveryFallback()) return "needs-recovery";
+        return sharedMessageIndexStatusLabel(messageIndex, messageIndexUnavailable, messageIndexMissing);
+    }
+
+    function messageIndexStatusText() {
+        if (messageIndexBackfillWarning && isNearTipMessageIndexLag(messageIndex)) {
+            const synced = Number(messageIndex?.synced_height || 0);
+            const best = Number(messageIndex?.best_height || 0);
+            const gap = best > synced ? best - synced : 0;
+            return {
+                label: "MESSAGE INDEX CATCHING UP",
+                hint: gap > 0
+                    ? `Message index is ${gap} block${gap === 1 ? "" : "s"} behind the chain tip. Refresh Messages will catch up the missing window.`
+                    : "Message index is catching up. Refresh Messages will check again.",
+                action: "",
+            };
+        }
+        if (messageIndexBackfillWarning) {
+            return {
+                label: "HISTORY NEEDS RECOVERY",
+                hint: messageIndexBackfillWarning,
+                action: "recover",
+            };
+        }
+        if (shouldShowMessageIndexRecoveryFallback()) {
+            return {
+                label: "HISTORY NEEDS RECOVERY",
+                hint: "Full message indexing is enabled but the message index is not ready yet. Refresh messages or run Recover H0XC History to backfill history.",
+                action: "recover",
+            };
+        }
+        const status = sharedMessageIndexStatusText(messageIndex, messageIndexUnavailable, messageIndexMissing);
+        if (status.label === "MESSAGE RPC UNAVAILABLE" && messages.length > 0) {
+            return {
+                label: "",
+                hint: "",
+                action: "",
+            };
+        }
+        return status;
+    }
+
+    function shouldShowMessageIndexRecoveryFallback() {
+        if (!messageIndexConfigured) return false;
+        if (messageIndex?.enabled && (messageIndex.needs_rescan || !messageIndex.synced)) return true;
+        return messageIndexUnavailable || messageIndexMissing;
+    }
+
+    async function loadMessageIndexConfigFlag() {
+        try {
+            const cfg = await core.invoke("parse_current_config");
+            const raw = String(cfg?.messageindex ?? "").trim().toLowerCase();
+            messageIndexConfigured = raw === "1" || raw === "true" || raw === "yes";
+        } catch {
+            // Keep runtime state from getmessaginginfo if config parsing is unavailable.
+        }
+    }
+
+    $: messageIndexStatusInputs = [
+        messageIndex,
+        messageIndexUnavailable,
+        messageIndexMissing,
+        messageIndexConfigured,
+        messageIndexBackfillWarning,
+        messages.length,
+    ];
+    $: miStatusLabel = (messageIndexStatusInputs, messageIndexStatusLabel());
+    $: miStatusText = (messageIndexStatusInputs, messageIndexStatusText());
+    $: showMessageIndexBar = !!miStatusText.label && miStatusLabel !== "synced" && miStatusLabel !== "catching-up";
+
+    // --- Rescan progress polling (#3) ---
+    // Lightly poll get_messaginginfo while a rescan is in progress so the
+    // status bar updates without freezing the UI. Stops when the rescan
+    // completes, errors, the chat closes, or the component is destroyed.
+    /** @type {ReturnType<typeof setInterval> | null} */
+    let rescanPollTimer = null;
+    const RESCAN_POLL_MS = 3000;
+
+    function startRescanPolling() {
+        stopRescanPolling();
+        const poll = async () => {
+            if (!chatVisible) {
+                stopRescanPolling();
+                return;
+            }
+            try {
+                const result = await fetchMessageIndexState();
+                if (!result) {
+                    messageIndexUnavailable = true;
+                    messageIndexMissing = false;
+                    return;
+                }
+                messageIndex = result.mi;
+                messageIndexUnavailable = !result.messagingAvailable;
+                messageIndexMissing = result.messagingAvailable && !result.mi;
+                if (messageIndex && !messageIndex.rescan_in_progress && !rescanBusy) {
+                    // Rescan finished: stop polling and reload messages once.
+                    stopRescanPolling();
+                    loadMessages();
+                }
+            } catch {
+                // keep last known state
+            }
+        };
+        rescanPollTimer = setInterval(poll, RESCAN_POLL_MS);
+        poll();
+    }
+
+    function stopRescanPolling() {
+        if (rescanPollTimer) {
+            clearInterval(rescanPollTimer);
+            rescanPollTimer = null;
+        }
+    }
+
+    async function runRescan() {
+        if (rescanBusy) return;
+        // If Core already reports a rescan in progress, do not start another.
+        if (messageIndex?.rescan_in_progress) {
+            startRescanPolling();
+            return;
+        }
+        rescanBusy = true;
+        rescanError = "";
+        rescanResult = "";
+        // Start polling immediately so the UI shows live progress during the
+        // long Core rescanmessages call. If Core's call blocks until the rescan
+        // completes, polling still catches the final state when it returns.
+        startRescanPolling();
+        try {
+            const result = await startMessageRescan();
+            if (result?.success) {
+                rescanResult = result.raw || "Message history recovery started.";
+            } else {
+                rescanError = result?.error || "Message history recovery did not start.";
+                // A rescan may already be running (Core guard): keep polling.
+                if (rescanError.toLowerCase().includes("already in progress")) {
+                    rescanError = "";
+                } else {
+                    // Rescan failed for a reason other than in-progress:
+                    // keep the error but let the polling continue so the
+                    // UI updates if a background rescan is actually active.
+                }
+            }
+        } catch (err) {
+            rescanError = String(err);
+        } finally {
+            rescanBusy = false;
+            if (rescanResult) {
+                setTimeout(() => { rescanResult = ""; }, 8000);
+            }
+        }
+    }
+
+    function messageIndexGap() {
+        if (!messageIndex?.enabled) return 0;
+        const synced = Number(messageIndex.synced_height || 0);
+        const best = Number(messageIndex.best_height || 0);
+        return best > synced ? best - synced : 0;
+    }
+
+    async function maybeAutoCatchupMessageIndex(options = {}) {
+        const silent = options.silent !== false;
+        const gap = messageIndexGap();
+        if (
+            autoCatchupBusy
+            || rescanBusy
+            || messageIndex?.rescan_in_progress
+            || !isNearTipMessageIndexLag(messageIndex)
+            || gap <= 0
+            || gap > NEAR_TIP_AUTO_CATCHUP_MAX_BLOCKS
+            || Date.now() - lastAutoCatchupAt < AUTO_CATCHUP_COOLDOWN_MS
+        ) {
+            return false;
+        }
+        autoCatchupBusy = true;
+        lastAutoCatchupAt = Date.now();
+        if (!silent) startRescanPolling();
+        try {
+            const startHeight = Math.max(0, Number(messageIndex.synced_height || 0) + 1);
+            const stopHeight = Number(messageIndex.best_height || 0);
+            const result = await startMessageRescan({ startHeight, stopHeight });
+            if (result?.success) {
+                if (!silent) {
+                    rescanResult = result.raw || `Message index catch-up scanned ${gap} blocks.`;
+                    setTimeout(() => { rescanResult = ""; }, 6000);
+                }
+                return true;
+            }
+            const err = String(result?.error || "");
+            if (!silent && !err.toLowerCase().includes("already in progress")) {
+                rescanError = err || "Message index catch-up did not start.";
+            }
+            return false;
+        } catch (err) {
+            if (!silent) rescanError = String(err);
+            return false;
+        } finally {
+            autoCatchupBusy = false;
+        }
+    }
+
     function isNotificationSuppressed(/** @type {string} */ rootName, /** @type {string} */ channelName) {
         if (settings.muteNotifications) return true;
         const upper = rootName.toUpperCase();
@@ -639,6 +1030,14 @@
         const dec = decodeCache[msg.message];
         if (dec?.is_h0xc_chat_message === true) return true;
         return isH0xCAsset(msg.asset_name) && dec?.is_short_message === true && !!dec.text;
+    }
+
+    /** @param {AssetMessage} msg */
+    function isMessageExpired(msg) {
+        const raw = msg.expire_utc_time ?? msg.expire_time;
+        if (raw == null) return false;
+        const exp = parseTime(raw);
+        return exp <= Date.now();
     }
 
     let searchUserFilter = "";
@@ -746,8 +1145,10 @@
         return new Date(ms).toLocaleString();
     }
 
-    function refresh() {
+    async function refresh() {
         showCount = pageSize;
+        await loadMessageIndexConfigFlag();
+        await maybeAutoCatchupMessageIndex({ silent: true });
         loadMessages();
     }
 
@@ -794,10 +1195,21 @@
         try {
             const rpcLimit = large ? Math.min(settings.discoveryScanLimit || 2000, 2000) : 200;
             let raw;
+            // Prefer the indexed channel discovery RPC so guests/non-subscribers
+            // can see public H0XC channels without manual subscriptions. Fall back
+            // to the asset listing and legacy channel list for older Core builds.
             try {
-                raw = await core.invoke("list_network_assets", { pattern: "*.H0XC", verbose: true, limit: rpcLimit });
+                raw = await core.invoke("view_indexed_message_channels", {
+                    pattern: "*.H0XC",
+                    count: rpcLimit,
+                    offset: 0,
+                });
             } catch {
-                raw = await core.invoke("view_message_channels");
+                try {
+                    raw = await core.invoke("list_network_assets", { pattern: "*.H0XC", verbose: true, limit: rpcLimit });
+                } catch {
+                    raw = await core.invoke("view_message_channels");
+                }
             }
 
             if (discoveryAbort) {
@@ -1297,7 +1709,7 @@
 
     onMount(() => {
         document.addEventListener("visibilitychange", onVisibilityChange);
-        loadMessages();
+        loadMessageIndexConfigFlag().finally(() => loadMessages());
         startPolling();
         startBackgroundDiscovery();
     });
@@ -1314,6 +1726,7 @@
         }
         stopPolling();
         stopBackgroundDiscovery();
+        stopRescanPolling();
         discoveryAbort = true;
     });
 
@@ -1797,6 +2210,56 @@
             {/if}
         </div>
     </div>
+    {#if showMessageIndexBar}
+        <div class="msg-index-bar" data-status={miStatusText.label}>
+            <span class="msg-index-dot" data-state={miStatusLabel}></span>
+            <span class="msg-index-label">{miStatusText.label}</span>
+            {#if miStatusText.hint}
+                <span class="msg-index-hint" title={miStatusText.hint}>{miStatusText.hint}</span>
+            {/if}
+            <span class="msg-index-actions">
+                {#if miStatusText.action === "enable"}
+                    <button class="msg-index-btn ghost" on:click={() => (showEnableHelper = !showEnableHelper)} disabled={rescanBusy} title="Show setup steps">
+                        SETUP
+                    </button>
+                {/if}
+                {#if miStatusText.action === "recover"}
+                    <button class="msg-index-btn" on:click={runRescan} disabled={rescanBusy || messagesLoading} title="Backfill H0XC message history from blocks (rescanmessages)">
+                        {rescanBusy ? "RECOVERING..." : "RECOVER H0XC HISTORY"}
+                    </button>
+                {/if}
+                <button class="msg-index-btn ghost" on:click={refresh} disabled={messagesLoading} title="Refresh messages (paginated)">
+                    REFRESH MESSAGES
+                </button>
+            </span>
+            {#if rescanResult}
+                <span class="msg-index-ok" title={rescanResult}>{rescanResult}</span>
+            {/if}
+            {#if rescanError}
+                <span class="msg-index-err" title={rescanError}>{rescanError}</span>
+            {/if}
+        </div>
+    {/if}
+    {#if showEnableHelper}
+        <div class="msg-index-helper" transition:fade={{ duration: 100 }}>
+            <div class="msg-index-helper-title">H0XC Message Index</div>
+            <p>Indexes public on-chain asset messages for H0XC community chat. Recommended for full community chat history. Requires Core restart.</p>
+            <ol>
+                <li><strong>Open System Config</strong> below.</li>
+                <li><strong>Enable H0XC Message Index</strong> in System Config.</li>
+                <li>Apply and <strong>Restart Core</strong>.</li>
+                <li>Return here and click <strong>Recover H0XC History</strong> once.</li>
+            </ol>
+            <p class="msg-index-helper-warn">Historical message recovery is limited on pruned nodes because older blocks may not be available locally.</p>
+            <div class="msg-index-helper-actions">
+                <button class="msg-index-btn" on:click={openSystemConfig}>Open System Config</button>
+                <button class="msg-index-btn" on:click={runRescan} disabled={rescanBusy || messagesLoading}>
+                    {rescanBusy ? "Recovering..." : "Recover H0XC History"}
+                </button>
+                <button class="msg-index-btn ghost" on:click={() => (showEnableHelper = false)}>Got it</button>
+            </div>
+        </div>
+    {/if}
     <div class="chat-status-bar">
         {#if tagLookupPending}
             <span class="status-pill">Tags...</span>
@@ -1931,6 +2394,9 @@
                                 <span class="msg-needs-pack" title="This message requires a matching table pack to decode. Raw hex: {row.msg.message.slice(0, 16)}...">[needs matching table pack]</span>
                             {:else}
                                 <span class="msg-hex">{row.msg.message.slice(0, 10)}...{row.msg.message.slice(-6)}</span>
+                            {/if}
+                            {#if settings.showExpired && isMessageExpired(row.msg)}
+                                <span class="expired-pill">Expired</span>
                             {/if}
                         </span>
                     </div>
@@ -2358,6 +2824,14 @@
                         <div class="msg-detail-row">
                             <span class="msg-detail-label">EXPIRES</span>
                             <span class="msg-detail-val">{formatFullTime(msgDetail.msg.expire_utc_time ?? msgDetail.msg.expire_time)}</span>
+                            {#if isMessageExpired(msgDetail.msg) && settings.showExpired}
+                                <span class="expired-badge">Expired</span>
+                            {/if}
+                        </div>
+                    {:else}
+                        <div class="msg-detail-row">
+                            <span class="msg-detail-label">EXPIRES</span>
+                            <span class="msg-detail-val dim">No expiration</span>
                         </div>
                     {/if}
                     {#if msgDetail.msg.status}
@@ -2480,6 +2954,96 @@
         background: rgba(0, 0, 0, 0.15);
         min-height: 1.4rem;
     }
+    .msg-index-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.25rem 0.5rem;
+        border-bottom: 1px solid rgba(0, 255, 65, 0.1);
+        background: rgba(0, 0, 0, 0.25);
+        font-size: 0.52rem;
+    }
+    .msg-index-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #555;
+        flex-shrink: 0;
+    }
+    .msg-index-dot[data-state="synced"] { background: var(--color-primary); box-shadow: 0 0 6px var(--color-primary); }
+    .msg-index-dot[data-state="recovering"] { background: #ffaa00; box-shadow: 0 0 6px #ffaa00; animation: mi-pulse 1.2s infinite ease-in-out; }
+    @keyframes mi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .msg-index-dot[data-state="catching-up"] { background: #ffaa00; box-shadow: 0 0 6px #ffaa00; animation: mi-pulse 1.2s infinite ease-in-out; }
+    .msg-index-dot[data-state="needs-recovery"] { background: #ffaa00; }
+    .msg-index-dot[data-state="disabled"] { background: #555; }
+    .msg-index-dot[data-state="pruned"] { background: #ff5555; }
+    .msg-index-dot[data-state="unavailable"] { background: #ff5555; }
+    .msg-index-dot[data-state="unsupported"] { background: #ffaa00; }
+    .msg-index-label {
+        color: #aaa;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        font-family: var(--font-mono);
+    }
+    .msg-index-hint {
+        color: #777;
+        flex: 1 1 200px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .msg-index-actions {
+        display: flex;
+        gap: 0.25rem;
+        flex-wrap: wrap;
+    }
+    .msg-index-btn {
+        border: 1px solid rgba(0, 255, 65, 0.3);
+        border-radius: 4px;
+        background: rgba(0, 255, 65, 0.06);
+        color: var(--color-primary);
+        font-family: var(--font-mono);
+        font-size: 0.5rem;
+        cursor: pointer;
+        padding: 0.15rem 0.35rem;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: all 0.15s;
+    }
+    .msg-index-btn:hover:not(:disabled) { background: rgba(0, 255, 65, 0.14); }
+    .msg-index-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg-index-btn.ghost {
+        background: transparent;
+        border-color: rgba(255, 255, 255, 0.12);
+        color: #aaa;
+    }
+    .msg-index-btn.ghost:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.25); }
+    .msg-index-ok { color: var(--color-primary); }
+    .msg-index-err { color: #ff5555; }
+    .msg-index-helper {
+        margin: 0.3rem 0.5rem;
+        padding: 0.5rem 0.6rem;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(0, 255, 65, 0.15);
+        border-radius: 6px;
+        color: #bbb;
+        font-size: 0.58rem;
+        line-height: 1.5;
+    }
+    .msg-index-helper-title {
+        color: var(--color-primary);
+        font-weight: 700;
+        font-size: 0.62rem;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.25rem;
+    }
+    .msg-index-helper p { margin: 0.2rem 0; color: #999; }
+    .msg-index-helper ol { margin: 0.2rem 0 0.4rem 1rem; color: #aaa; }
+    .msg-index-helper-warn { color: #ffcc00; }
+    .msg-index-helper-actions { display: flex; gap: 0.4rem; margin-top: 0.3rem; }
     .status-pill {
         font-size: 0.48rem;
         color: #888;
@@ -2901,6 +3465,33 @@
         padding-top: 0.3rem;
         border-top: 1px solid rgba(255, 255, 255, 0.06);
         margin-top: 0.15rem;
+    }
+    .expired-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.08rem 0.35rem;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.25);
+        border-radius: 3px;
+        color: #ff6666;
+        font-size: 0.48rem;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        flex-shrink: 0;
+    }
+    .expired-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.05rem 0.3rem;
+        background: rgba(255, 85, 85, 0.08);
+        border: 1px solid rgba(255, 85, 85, 0.22);
+        border-radius: 3px;
+        color: #ff6666;
+        font-size: 0.45rem;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        margin-left: 0.35rem;
+        vertical-align: middle;
     }
     .msg-detail-delete {
         background: rgba(255, 60, 60, 0.08);

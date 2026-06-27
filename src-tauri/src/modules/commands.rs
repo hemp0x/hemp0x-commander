@@ -4897,6 +4897,9 @@ fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
     let txid = get_str_ci(value, "txid")
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
+    let vout = get_ci(value, "vout")
+        .and_then(|v| v.as_i64())
+        .filter(|n| *n >= 0);
     let channel = get_str_ci(value, "channel")
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
@@ -4929,6 +4932,7 @@ fn parse_message_entry(value: &serde_json::Value) -> AssetMessageEntry {
         expire_time,
         expire_utc_time,
         txid,
+        vout,
         channel,
         authority_asset,
         authority_address,
@@ -4961,7 +4965,63 @@ fn boolish_ci(value: &serde_json::Value, key: &str) -> bool {
     match get_ci(value, key) {
         Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
         Some(v) if v.is_number() => v.as_i64().unwrap_or(0) != 0,
+        Some(v) if v.is_string() => matches!(
+            v.as_str().unwrap_or("").trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         _ => false,
+    }
+}
+
+fn boolish_any_ci(value: &serde_json::Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| boolish_ci(value, key))
+}
+
+fn message_index_backfill_warning(warnings: &[String]) -> Option<String> {
+    warnings
+        .iter()
+        .find(|warning| {
+            warning
+                .to_ascii_lowercase()
+                .contains("full message indexing is enabled")
+        })
+        .cloned()
+}
+
+fn parse_message_index_state(value: &serde_json::Value) -> MessageIndexState {
+    let pruned_limitation = get_str_ci(value, "pruned_limitation")
+        .or_else(|| get_str_ci(value, "prune_warning"))
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+    MessageIndexState {
+        enabled: boolish_any_ci(
+            value,
+            &[
+                "messageindex",
+                "message_index",
+                "message_index_enabled",
+                "full_message_index",
+            ],
+        ),
+        mode: get_str_ci(value, "message_index_mode")
+            .unwrap_or("")
+            .to_string(),
+        synced: boolish_ci(value, "message_index_synced"),
+        synced_height: get_i64_ci(value, "message_index_synced_height").unwrap_or(0),
+        best_height: get_i64_ci(value, "message_index_best_height").unwrap_or(0),
+        needs_rescan: boolish_ci(value, "message_index_needs_rescan"),
+        rescan_in_progress: boolish_ci(value, "message_rescan_in_progress"),
+        rescan_start_height: get_i64_ci(value, "message_rescan_start_height").unwrap_or(0),
+        rescan_stop_height: get_i64_ci(value, "message_rescan_stop_height").unwrap_or(0),
+        rescan_current_height: get_i64_ci(value, "message_rescan_current_height").unwrap_or(0),
+        rescan_scanned_blocks: get_i64_ci(value, "message_rescan_scanned_blocks").unwrap_or(0),
+        rescan_messages_found: get_i64_ci(value, "message_rescan_messages_found").unwrap_or(0),
+        rescan_messages_added: get_i64_ci(value, "message_rescan_messages_added").unwrap_or(0),
+        rescan_last_error: get_str_ci(value, "message_rescan_last_error")
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty()),
+        pruned: boolish_ci(value, "pruned"),
+        pruned_limitation,
     }
 }
 
@@ -4975,6 +5035,22 @@ fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
         })
         .unwrap_or_default();
 
+    let message_index = parse_message_index_state(value);
+    let mut message_index = message_index;
+    if let Some(warning) = message_index_backfill_warning(&warnings) {
+        message_index.enabled = true;
+        message_index.needs_rescan = true;
+        message_index.synced = false;
+        if message_index.mode.is_empty() {
+            message_index.mode = "all".to_string();
+        }
+        if message_index.rescan_last_error.is_none()
+            && warning.to_ascii_lowercase().contains("error")
+        {
+            message_index.rescan_last_error = Some(warning);
+        }
+    }
+
     MessagingInfo {
         enabled: boolish_ci(value, "enabled"),
         messaging_active: boolish_ci(value, "messaging_active"),
@@ -4987,6 +5063,43 @@ fn parse_messaging_info(value: &serde_json::Value) -> MessagingInfo {
         dirty_cache_size_bytes: get_i64_ci(value, "dirty_cache_size_bytes").unwrap_or(0),
         wallet_available: boolish_ci(value, "wallet_available"),
         warnings,
+        message_index,
+    }
+}
+
+/// Construct a disabled MessagingInfo with a single explanatory warning. Used
+/// for legacy/empty/error fallback paths so the message-index block reports a
+/// consistent "disabled" state to the frontend.
+fn config_message_index_enabled() -> bool {
+    config_path()
+        .ok()
+        .and_then(|cfg| parse_config(&cfg).ok())
+        .and_then(|cfg| cfg.get("messageindex").cloned())
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn disabled_messaging_info(warning: String) -> MessagingInfo {
+    let mut message_index = MessageIndexState::default();
+    if config_message_index_enabled() {
+        message_index.enabled = true;
+        message_index.mode = "all".to_string();
+        message_index.needs_rescan = true;
+        message_index.synced = false;
+    }
+    MessagingInfo {
+        enabled: false,
+        messaging_active: false,
+        restricted_active: false,
+        activation_block: 0,
+        databases_available: false,
+        caches_available: false,
+        message_count: 0,
+        channel_count: 0,
+        dirty_cache_size_bytes: 0,
+        wallet_available: false,
+        warnings: vec![warning],
+        message_index,
     }
 }
 
@@ -5004,7 +5117,7 @@ fn legacy_messaging_info() -> Result<MessagingInfo, String> {
       let channels_value: serde_json::Value = serde_json::from_str(&channels_raw).map_err(|e| e.to_string())?;
       let message_count = parse_message_list(&messages_value).len() as i64;
       let channel_count = parse_channel_name_list(&channels_value).len() as i64;
-      Ok(MessagingInfo {
+      let mut info = MessagingInfo {
         enabled: true,
         messaging_active: true,
         restricted_active: true,
@@ -5016,24 +5129,18 @@ fn legacy_messaging_info() -> Result<MessagingInfo, String> {
         dirty_cache_size_bytes: 0,
         wallet_available: true,
         warnings: vec!["This Core build exposes legacy asset messaging RPCs but does not expose getmessaginginfo. Commander will use the legacy message commands.".to_string()],
-      })
+        message_index: MessageIndexState::default(),
+      };
+      info.message_index.enabled = false;
+      info.message_index.mode = "legacy".to_string();
+      Ok(info)
     }
     (Err(messages_err), Err(channels_err))
       if is_method_not_found(&messages_err) && is_method_not_found(&channels_err) =>
     {
-      Ok(MessagingInfo {
-        enabled: false,
-        messaging_active: false,
-        restricted_active: false,
-        activation_block: 0,
-        databases_available: false,
-        caches_available: false,
-        message_count: 0,
-        channel_count: 0,
-        dirty_cache_size_bytes: 0,
-        wallet_available: false,
-        warnings: vec!["This Core build does not expose asset messaging RPCs. Start a messaging-capable Hemp0x Core build, then refresh Commander.".to_string()],
-      })
+      Ok(disabled_messaging_info(
+        "This Core build does not expose asset messaging RPCs. Start a messaging-capable Hemp0x Core build, then refresh Commander.".to_string()
+      ))
     }
     (Err(err), _) | (_, Err(err)) => Err(err),
   }
@@ -5049,37 +5156,17 @@ pub fn get_messaging_info() -> Result<MessagingInfo, String> {
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Ok(MessagingInfo {
-      enabled: false,
-      messaging_active: false,
-      restricted_active: false,
-      activation_block: 0,
-      databases_available: false,
-      caches_available: false,
-      message_count: 0,
-      channel_count: 0,
-      dirty_cache_size_bytes: 0,
-      wallet_available: false,
-      warnings: vec!["Core returned an empty response when probing messaging. The daemon may be starting up or messaging RPCs are unavailable.".to_string()],
-    });
+        return Ok(disabled_messaging_info(
+            "Core returned an empty response when probing messaging. The daemon may be starting up or messaging RPCs are unavailable.".to_string()
+        ));
     }
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(value) => Ok(parse_messaging_info(&value)),
         Err(e) => {
             let snippet: String = trimmed.chars().take(200).collect();
-            Ok(MessagingInfo {
-        enabled: false,
-        messaging_active: false,
-        restricted_active: false,
-        activation_block: 0,
-        databases_available: false,
-        caches_available: false,
-        message_count: 0,
-        channel_count: 0,
-        dirty_cache_size_bytes: 0,
-        wallet_available: false,
-        warnings: vec![format!("Core returned an unexpected response when probing messaging. JSON parse error: {e}. Raw (truncated): {snippet}")],
-      })
+            Ok(disabled_messaging_info(format!(
+                "Core returned an unexpected response when probing messaging. JSON parse error: {e}. Raw (truncated): {snippet}"
+            )))
         }
     }
 }
@@ -5135,6 +5222,324 @@ pub fn view_message_channels() -> Result<Vec<String>, String> {
     let value: serde_json::Value = serde_json::from_str(trimmed)
     .map_err(|e| format!("Core returned an unexpected response for viewallmessagechannels. JSON parse error: {e}. Raw (truncated): {}", trimmed.chars().take(200).collect::<String>()))?;
     Ok(parse_channel_name_list(&value))
+}
+
+// ---------------------------------------------------------------------------
+// Message Index (Core Next v4.8.0.0+)
+// ---------------------------------------------------------------------------
+//
+// These commands use the paginated/extended message RPCs so H0XC chat can
+// discover channels and read history without dumping the entire message DB or
+// requiring users to manually subscribe. They are additive: the legacy
+// `view_asset_messages`/`view_channel_messages`/`view_message_channels`
+// commands above remain unchanged for compatibility.
+
+/// Maximum single page of messages Commander will request from Core in one
+/// paginated call. Keeps individual RPC responses bounded so the UI never
+/// freezes on an unbounded message dump.
+const MESSAGE_PAGE_MAX: i64 = 500;
+
+fn clamp_message_page(count: Option<i64>) -> i64 {
+    count.unwrap_or(200).clamp(1, MESSAGE_PAGE_MAX)
+}
+
+fn clamp_offset(offset: Option<i64>) -> i64 {
+    offset.unwrap_or(0).max(0)
+}
+
+fn optional_json_string(value: Option<String>) -> serde_json::Value {
+    match value {
+        Some(s) => serde_json::Value::String(s),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn parse_message_list_from_cli(raw: &str, rpc_label: &str) -> Result<Vec<AssetMessageEntry>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+        format!(
+            "Core returned an unexpected response for {rpc_label}. JSON parse error: {e}. Raw (truncated): {}",
+            trimmed.chars().take(200).collect::<String>()
+        )
+    })?;
+    Ok(parse_message_list(&value))
+}
+
+/// Discover channels present in Core's full message index.
+///
+/// `viewindexedmessagechannels ("pattern") (count) (offset)` returns either an
+/// array of channel name strings or an object with a `channels`/`names` array.
+/// Parse defensively; Core's exact JSON shape may vary between builds.
+#[tauri::command]
+pub fn view_indexed_message_channels(
+    pattern: Option<String>,
+    count: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<String>, String> {
+    ensure_config()?;
+    let count = clamp_message_page(count);
+    let offset = clamp_offset(offset);
+    let pattern_arg = pattern
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_default();
+    let mut args = vec![
+        String::from("viewindexedmessagechannels"),
+        pattern_arg,
+        count.to_string(),
+        offset.to_string(),
+    ];
+    // Drop trailing empty positional args so the RPC stays simple when the
+    // caller omits the pattern. Core treats omitted trailing args with
+    // defaults, so trimming empties is safe.
+    while args.last().map(|s| s.is_empty()).unwrap_or(false) && args.len() > 1 {
+        args.pop();
+    }
+    let raw = run_cli(&args)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+        format!(
+            "Core returned an unexpected response for viewindexedmessagechannels. JSON parse error: {e}. Raw (truncated): {}",
+            trimmed.chars().take(200).collect::<String>()
+        )
+    })?;
+    Ok(parse_channel_name_list(&value))
+}
+
+/// Paginated global message read.
+///
+/// `viewallmessages ( count ) ( offset ) ( "channel/pattern" ) ( start_height ) ( stop_height )`
+#[tauri::command]
+pub fn view_asset_messages_paged(
+    count: Option<i64>,
+    offset: Option<i64>,
+    pattern: Option<String>,
+    start_height: Option<i64>,
+    stop_height: Option<i64>,
+) -> Result<Vec<AssetMessageEntry>, String> {
+    ensure_config()?;
+    let count = clamp_message_page(count);
+    let offset = clamp_offset(offset);
+
+    let mut params: Vec<serde_json::Value> = vec![
+        serde_json::Value::Number(serde_json::value::Number::from(count)),
+        serde_json::Value::Number(serde_json::value::Number::from(offset)),
+        optional_json_string(pattern),
+    ];
+    if let Some(start) = start_height {
+        params.push(serde_json::Value::Number(serde_json::value::Number::from(start)));
+        if let Some(stop) = stop_height {
+            params.push(serde_json::Value::Number(serde_json::value::Number::from(stop)));
+        }
+    }
+    let raw = rpc::call_rpc("viewallmessages", &params)?;
+    let raw_str = match raw {
+        serde_json::Value::String(ref s) => s.clone(),
+        other => other.to_string(),
+    };
+    parse_message_list_from_cli(&raw_str, "viewallmessages (paged)")
+}
+
+/// Channel-scoped paginated message read.
+///
+/// `viewchannelmessages "channel" ( count ) ( offset ) ( start_height ) ( stop_height )`
+#[tauri::command]
+pub fn view_channel_messages_paged(
+    channel: String,
+    count: Option<i64>,
+    offset: Option<i64>,
+    start_height: Option<i64>,
+    stop_height: Option<i64>,
+) -> Result<Vec<AssetMessageEntry>, String> {
+    ensure_config()?;
+    let channel = validate_channel_name(&channel)?;
+    let count = clamp_message_page(count);
+    let offset = clamp_offset(offset);
+
+    let mut params: Vec<serde_json::Value> = vec![
+        serde_json::Value::String(channel),
+        serde_json::Value::Number(serde_json::value::Number::from(count)),
+        serde_json::Value::Number(serde_json::value::Number::from(offset)),
+    ];
+    if let Some(start) = start_height {
+        params.push(serde_json::Value::Number(serde_json::value::Number::from(start)));
+        if let Some(stop) = stop_height {
+            params.push(serde_json::Value::Number(serde_json::value::Number::from(stop)));
+        }
+    }
+    let raw = rpc::call_rpc("viewchannelmessages", &params)?;
+    let raw_str = match raw {
+        serde_json::Value::String(ref s) => s.clone(),
+        other => other.to_string(),
+    };
+    parse_message_list_from_cli(&raw_str, "viewchannelmessages (paged)")
+}
+
+/// Deduplicate asset message entries by stable identity, preserving first-seen
+/// order. Used when merging indexed and legacy message reads.
+///
+/// Identity priority:
+///   1. `txid + vout` when both are present
+///   2. else `channel + timestamp + message_hash` (here: `message`)
+///   3. else fall back to `asset_name + time + message`
+fn dedup_asset_messages(messages: Vec<AssetMessageEntry>) -> Vec<AssetMessageEntry> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(messages.len());
+    for msg in messages {
+        // Identity priority:
+        //   1. txid + vout  (most precise; a tx can carry multiple message outputs)
+        //   2. txid + channel + time + message  (txid present but vout omitted by Core)
+        //   3. channel + time + message         (no txid at all)
+        //   4. asset_name + time + message      (no txid and no channel)
+        //
+        // Never dedup by txid alone: a future/edge transaction can contain
+        // multiple distinct message outputs, and Core may omit vout for some
+        // message views. Including channel/time/message keeps distinct outputs
+        // on the same tx from collapsing into one row.
+        let key = match (&msg.txid, &msg.vout) {
+            (Some(txid), Some(vout)) => format!("tv:{txid}:{vout}"),
+            (Some(txid), None) => {
+                let channel = msg.channel.as_deref().unwrap_or("");
+                format!("tcm:{txid}|{channel}|{}|{}", msg.time, msg.message)
+            }
+            _ => {
+                let channel = msg.channel.as_deref();
+                match channel {
+                    Some(ch) if !ch.is_empty() => {
+                        format!("cm:{ch}|{}|{}", msg.time, msg.message)
+                    }
+                    _ => format!("am:{}|{}|{}", msg.asset_name, msg.time, msg.message),
+                }
+            }
+        };
+        if seen.insert(key) {
+            out.push(msg);
+        }
+    }
+    out
+}
+
+/// Merge two message lists and deduplicate by stable identity. Preserves
+/// `primary` order, appends non-duplicate `extra` entries in their order.
+fn merge_and_dedup_messages(
+    primary: Vec<AssetMessageEntry>,
+    extra: Vec<AssetMessageEntry>,
+) -> Vec<AssetMessageEntry> {
+    let mut combined = primary;
+    combined.extend(extra);
+    dedup_asset_messages(combined)
+}
+
+/// Merge two lists of asset message entries and deduplicate by stable identity
+/// (`txid+vout` when present, else `channel|time|message`). Frontends that read
+/// from both indexed and legacy Core RPCs can pass both lists here to get a
+/// single deduplicated, order-preserving result.
+#[tauri::command]
+pub fn merge_asset_messages(
+    primary: Vec<AssetMessageEntry>,
+    extra: Vec<AssetMessageEntry>,
+) -> Vec<AssetMessageEntry> {
+    merge_and_dedup_messages(primary, extra)
+}
+
+/// Run `rescanmessages ( start_height ) ( stop_height ) ( "channel" )` to
+/// backfill the message index.
+///
+/// A full rescan can run far longer than the default 15s RPC read timeout, so
+/// this dispatches the call with a generous read timeout. The call itself still
+/// runs on a blocking task when invoked through the Tauri async runtime (the
+/// frontend calls this command via `invoke`, which Tauri runs off the UI
+/// thread). A rescan returns a status string; Core guards concurrent rescans.
+#[tauri::command]
+pub async fn rescan_messages(
+    start_height: Option<i64>,
+    stop_height: Option<i64>,
+    channel: Option<String>,
+) -> Result<MessageRescanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || rescan_messages_blocking(start_height, stop_height, channel))
+        .await
+        .map_err(|e| format!("Rescan task failed: {e}"))?
+}
+
+fn rescan_messages_blocking(
+    start_height: Option<i64>,
+    stop_height: Option<i64>,
+    channel: Option<String>,
+) -> Result<MessageRescanResult, String> {
+    ensure_config()?;
+    let mut params: Vec<serde_json::Value> = Vec::new();
+    if let Some(start) = start_height {
+        if start < 0 {
+            return Err("Rescan start height cannot be negative".to_string());
+        }
+        params.push(serde_json::Value::Number(serde_json::value::Number::from(start)));
+        if let Some(stop) = stop_height {
+            if stop < 0 {
+                return Err("Rescan stop height cannot be negative".to_string());
+            }
+            params.push(serde_json::Value::Number(serde_json::value::Number::from(stop)));
+            if let Some(ref ch) = channel {
+                let ch = validate_channel_name(ch)?;
+                params.push(serde_json::Value::String(ch));
+            } else {
+                // Preserve positional order: stop_height present, channel omitted.
+                params.push(serde_json::Value::Null);
+            }
+        } else if let Some(ref ch) = channel {
+            // Channel without stop_height: pass null stop, then channel.
+            params.push(serde_json::Value::Null);
+            let ch = validate_channel_name(ch)?;
+            params.push(serde_json::Value::String(ch));
+        }
+    } else if let Some(ref ch) = channel {
+        // No start_height: pass null start, null stop, then channel.
+        params.push(serde_json::Value::Null);
+        params.push(serde_json::Value::Null);
+        let ch = validate_channel_name(ch)?;
+        params.push(serde_json::Value::String(ch));
+    }
+
+    let result = rpc::call_rpc_with_timeouts(
+        "rescanmessages",
+        &params,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30 * 60),
+    );
+
+    match result {
+        Ok(value) => {
+            let raw = match &value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            Ok(MessageRescanResult {
+                success: true,
+                raw,
+                error: String::new(),
+            })
+        }
+        Err(err) => {
+            let lower = err.to_lowercase();
+            // Core guards concurrent rescans with a clear error; surface it as
+            // a soft failure (success=false) rather than a hard RPC error so
+            // the UI can show "a rescan is already in progress".
+            if lower.contains("already in progress") || lower.contains("rescan already") {
+                Ok(MessageRescanResult {
+                    success: false,
+                    raw: String::new(),
+                    error: err,
+                })
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -6055,25 +6460,27 @@ mod tests {
     use super::{
         address_index_state, asset_balance_from_listmyassets, build_ipfs_gateway_url,
         build_issue_unique_args, build_reissue_args, build_reissue_preview,
-        clamp_fee_rate_sat_per_byte, collect_selected_safe_utxos, derive_authority_asset,
-        detect_duplicate_inputs, estimate_consolidation_round_count, estimate_fee_from_bytes,
-        estimate_legacy_tx_bytes, format_hemp_amount, h0xc_resolve_authority_addresses,
+        clamp_fee_rate_sat_per_byte, collect_selected_safe_utxos, dedup_asset_messages,
+        derive_authority_asset, detect_duplicate_inputs, estimate_consolidation_round_count,
+        estimate_fee_from_bytes, estimate_legacy_tx_bytes, format_hemp_amount,
+        h0xc_resolve_authority_addresses,
         hemp_to_sat, is_h0xc_channel, is_unavailable_method_error, is_utxo_unsafe_for_hemp,
-        max_policy_inputs, message_authority_asset_name, migration_rpc_readiness_error,
-        normalize_cli_txid, should_auto_ban_peer,
+        max_policy_inputs, merge_and_dedup_messages, message_authority_asset_name,
+        migration_rpc_readiness_error, normalize_cli_txid, should_auto_ban_peer,
         normalize_raw_tx_outputs, normalize_unique_asset_inputs, parse_channel_name_list,
-        parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_list,
-        parse_messaging_info, parse_non_negative_amount, parse_output_sum, parse_positive_amount,
-        parse_transaction_detail, recommended_consolidation_fee_rate_sat_per_byte, sat_to_hemp,
-        validate_address_label, validate_asset_name, validate_asset_transfer_preview_fields,
-        validate_channel_name, validate_explorer_address_input, validate_explorer_txid,
-        validate_fee_rate_sat_per_byte, validate_ipfs_hash, validate_ipfs_reference,
-        validate_message_expire_time, validate_migration_passphrase, validate_migration_path,
-        validate_migration_wallet_name, validate_qualifier_name, validate_raw_tx_hex,
-        validate_restricted_name, validate_send_preview_fields, validate_tx_input,
-        validate_verifier_string, AddressIndexState,
+        parse_estimatesmartfee_sat_per_byte, parse_message_entry, parse_message_index_state,
+        parse_message_list, parse_messaging_info, parse_non_negative_amount, parse_output_sum,
+        parse_positive_amount, parse_transaction_detail,
+        recommended_consolidation_fee_rate_sat_per_byte, sat_to_hemp, validate_address_label,
+        validate_asset_name, validate_asset_transfer_preview_fields, validate_channel_name,
+        validate_explorer_address_input, validate_explorer_txid, validate_fee_rate_sat_per_byte,
+        validate_ipfs_hash, validate_ipfs_reference, validate_message_expire_time,
+        validate_migration_passphrase, validate_migration_path, validate_migration_wallet_name,
+        validate_qualifier_name, validate_raw_tx_hex, validate_restricted_name,
+        validate_send_preview_fields, validate_tx_input, validate_verifier_string,
+        AddressIndexState,
     };
-    use crate::modules::models::RawTxInput;
+    use crate::modules::models::{AssetMessageEntry, RawTxInput};
     use std::collections::HashMap;
 
     #[test]
@@ -7651,6 +8058,281 @@ mod tests {
         assert_eq!(info.warnings, vec!["ok"]);
     }
 
+    // --- Message Index Parsing Tests ---
+
+    #[test]
+    fn parses_message_index_state_full() {
+        let json = serde_json::json!({
+          "messageindex": 1,
+          "message_index_mode": "all",
+          "message_index_synced": true,
+          "message_index_synced_height": 270144,
+          "message_index_best_height": 270200,
+          "message_index_needs_rescan": false,
+          "message_rescan_in_progress": true,
+          "message_rescan_start_height": 0,
+          "message_rescan_stop_height": 270144,
+          "message_rescan_current_height": 120000,
+          "message_rescan_scanned_blocks": 120000,
+          "message_rescan_messages_found": 4321,
+          "message_rescan_messages_added": 4300,
+          "message_rescan_last_error": "",
+          "pruned": false
+        });
+        let st = parse_message_index_state(&json);
+        assert!(st.enabled);
+        assert_eq!(st.mode, "all");
+        assert!(st.synced);
+        assert_eq!(st.synced_height, 270144);
+        assert_eq!(st.best_height, 270200);
+        assert!(!st.needs_rescan);
+        assert!(st.rescan_in_progress);
+        assert_eq!(st.rescan_current_height, 120000);
+        assert_eq!(st.rescan_messages_found, 4321);
+        assert!(st.rescan_last_error.is_none());
+        assert!(!st.pruned);
+    }
+
+    #[test]
+    fn parses_message_index_state_missing_optional_fields() {
+        // Older Core builds omit message-index fields entirely.
+        let json = serde_json::json!({
+          "enabled": true,
+          "messaging_active": true
+        });
+        let st = parse_message_index_state(&json);
+        assert!(!st.enabled);
+        assert_eq!(st.mode, "");
+        assert!(!st.synced);
+        assert_eq!(st.synced_height, 0);
+        assert_eq!(st.best_height, 0);
+        assert!(!st.rescan_in_progress);
+        assert!(st.rescan_last_error.is_none());
+    }
+
+    #[test]
+    fn parses_message_index_state_pruned_with_limitation() {
+        let json = serde_json::json!({
+          "messageindex": 1,
+          "message_index_mode": "all",
+          "pruned": true,
+          "pruned_limitation": "Historical message recovery is limited on pruned nodes."
+        });
+        let st = parse_message_index_state(&json);
+        assert!(st.enabled);
+        assert!(st.pruned);
+        assert_eq!(
+            st.pruned_limitation.as_deref(),
+            Some("Historical message recovery is limited on pruned nodes.")
+        );
+    }
+
+    #[test]
+    fn parses_message_index_needs_rescan_numeric() {
+        let json = serde_json::json!({
+          "messageindex": 1,
+          "message_index_needs_rescan": 1
+        });
+        let st = parse_message_index_state(&json);
+        assert!(st.needs_rescan);
+    }
+
+    #[test]
+    fn parses_message_index_enabled_alias_string() {
+        let json = serde_json::json!({
+          "message_index_enabled": "true",
+          "message_index_synced": false
+        });
+        let st = parse_message_index_state(&json);
+        assert!(st.enabled);
+        assert!(!st.synced);
+    }
+
+    #[test]
+    fn parse_messaging_info_includes_message_index_block() {
+        let json = serde_json::json!({
+          "enabled": true,
+          "messaging_active": true,
+          "messageindex": 1,
+          "message_index_mode": "all",
+          "message_index_synced": true,
+          "message_index_synced_height": 100,
+          "message_index_best_height": 100
+        });
+        let info = parse_messaging_info(&json);
+        assert!(info.message_index.enabled);
+        assert_eq!(info.message_index.mode, "all");
+        assert!(info.message_index.synced);
+        assert_eq!(info.message_index.synced_height, 100);
+    }
+
+    #[test]
+    fn parse_messaging_info_promotes_backfill_warning_to_message_index_state() {
+        let json = serde_json::json!({
+          "enabled": true,
+          "messaging_active": false,
+          "warnings": [
+            "Full message indexing is enabled but the message index is behind the chain tip. Run rescanmessages to backfill history."
+          ]
+        });
+        let info = parse_messaging_info(&json);
+        assert!(info.message_index.enabled);
+        assert!(info.message_index.needs_rescan);
+        assert!(!info.message_index.synced);
+        assert_eq!(info.message_index.mode, "all");
+    }
+
+    // --- Paginated Message Parsing Tests ---
+
+    #[test]
+    fn parses_paged_viewallmessages_array() {
+        let raw = r#"[
+          {"asset_name":"ROOT/H0XC","message":"deadbeef","time":"100","block_height":10,"txid":"abc","vout":0,"channel":"ROOT/H0XC"},
+          {"asset_name":"GRID/H0XC","message":"cafe","time":"200","block_height":11,"txid":"def","vout":1,"channel":"GRID/H0XC"}
+        ]"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let list = parse_message_list(&value);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].txid.as_deref(), Some("abc"));
+        assert_eq!(list[0].vout, Some(0));
+        assert_eq!(list[1].vout, Some(1));
+        assert_eq!(list[1].channel.as_deref(), Some("GRID/H0XC"));
+    }
+
+    #[test]
+    fn parses_paged_viewchannelmessages_object() {
+        // Some Core builds wrap messages in an object with a `messages` array.
+        let raw = r#"{"messages":[{"asset_name":"ROOT/H0XC","message":"ff","time":"1","block_height":1}]}"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let list = parse_message_list(&value);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].asset_name, "ROOT/H0XC");
+    }
+
+    #[test]
+    fn parses_viewindexedmessagechannels_array_of_strings() {
+        let raw = r#"["ROOT/H0XC","GRID/H0XC","ALPHA.H0XC"]"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let list = parse_channel_name_list(&value);
+        assert_eq!(list.len(), 3);
+        assert!(list.contains(&"ROOT/H0XC".to_string()));
+        assert!(list.contains(&"ALPHA.H0XC".to_string()));
+    }
+
+    #[test]
+    fn parses_viewindexedmessagechannels_object_with_names() {
+        let raw = r#"{"names":["ROOT/H0XC"],"channel_count":1}"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let list = parse_channel_name_list(&value);
+        assert_eq!(list, vec!["ROOT/H0XC".to_string()]);
+    }
+
+    // --- Dedup Tests ---
+
+    fn msg(txid: Option<&str>, vout: Option<i64>, channel: Option<&str>, time: &str, message: &str) -> AssetMessageEntry {
+        AssetMessageEntry {
+            asset_name: "ROOT/H0XC".to_string(),
+            message: message.to_string(),
+            time: time.to_string(),
+            block_height: 0,
+            status: "OK".to_string(),
+            expire_time: None,
+            expire_utc_time: None,
+            txid: txid.map(String::from),
+            vout,
+            channel: channel.map(String::from),
+            authority_asset: None,
+            authority_address: None,
+            block_hash: None,
+            sender_address: None,
+        }
+    }
+
+    #[test]
+    fn dedup_by_txid_and_vout() {
+        let input = vec![
+            msg(Some("abc"), Some(0), Some("ROOT/H0XC"), "100", "ff"),
+            msg(Some("abc"), Some(0), Some("ROOT/H0XC"), "100", "ff"), // dup
+            msg(Some("def"), Some(1), Some("ROOT/H0XC"), "200", "aa"),
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn dedup_txid_without_vout_includes_channel_time_message() {
+        // Two messages on the same tx with no vout but different message/channel
+        // must both survive (a tx can carry multiple message outputs).
+        let input = vec![
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "100", "ff"),
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "100", "ee"), // different message
+            msg(Some("abc"), None, Some("GRID/H0XC"), "100", "ff"), // different channel
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "200", "ff"), // different time
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn dedup_txid_without_vout_exact_duplicate_collapses() {
+        // Exact duplicates (same txid/channel/time/message, no vout) still dedup.
+        let input = vec![
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "100", "ff"),
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "100", "ff"), // exact dup
+            msg(Some("abc"), None, Some("ROOT/H0XC"), "100", "ff"), // exact dup
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn dedup_without_txid_uses_channel_time_message() {
+        let input = vec![
+            msg(None, None, Some("ROOT/H0XC"), "100", "ff"),
+            msg(None, None, Some("ROOT/H0XC"), "100", "ff"), // dup
+            msg(None, None, Some("ROOT/H0XC"), "100", "aa"),  // different message
+            msg(None, None, Some("GRID/H0XC"), "100", "ff"),  // different channel
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn dedup_without_txid_or_channel_uses_asset_name_time_message() {
+        let input = vec![
+            msg(None, None, None, "100", "ff"),
+            msg(None, None, None, "100", "ff"), // dup
+            msg(None, None, None, "100", "aa"),  // different message
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn merge_and_dedup_preserves_primary_order() {
+        let primary = vec![
+            msg(Some("abc"), Some(0), Some("ROOT/H0XC"), "100", "ff"),
+        ];
+        let extra = vec![
+            msg(Some("abc"), Some(0), Some("ROOT/H0XC"), "100", "ff"), // dup of primary
+            msg(Some("def"), Some(1), Some("GRID/H0XC"), "200", "aa"), // new
+        ];
+        let out = merge_and_dedup_messages(primary, extra);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].txid.as_deref(), Some("abc"));
+        assert_eq!(out[1].txid.as_deref(), Some("def"));
+    }
+
+    #[test]
+    fn dedup_distinct_txids_different_vouts_not_merged() {
+        let input = vec![
+            msg(Some("abc"), Some(0), Some("ROOT/H0XC"), "100", "ff"),
+            msg(Some("abc"), Some(1), Some("ROOT/H0XC"), "100", "ff"),
+        ];
+        let out = dedup_asset_messages(input);
+        assert_eq!(out.len(), 2);
+    }
+
     // --- IPFS Reference Tests ---
 
     #[test]
@@ -7761,6 +8443,11 @@ mod tests {
         assert!(is_h0xc_channel("asset/h0xc"));
         assert!(is_h0xc_channel("ASSET.H0XC"));
         assert!(is_h0xc_channel("ASSET.H0XC!"));
+        // ROOT-prefixed H0XC channel forms used by community chat.
+        assert!(is_h0xc_channel("ROOT/H0XC"));
+        assert!(is_h0xc_channel("ROOT/H0XC!"));
+        assert!(is_h0xc_channel("ROOT.H0XC"));
+        assert!(is_h0xc_channel("ROOT.H0XC!"));
         assert!(!is_h0xc_channel("HEMP"));
         assert!(!is_h0xc_channel("ASSET/HEMP"));
     }

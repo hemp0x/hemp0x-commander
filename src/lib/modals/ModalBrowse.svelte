@@ -238,6 +238,8 @@
         }
     }
 
+    $: canRefreshResults = searched || !!activePattern || !!lastFetchTime || allResults.length > 0;
+
     async function refreshResults() {
         if (loading) return;
         loading = true;
@@ -350,7 +352,7 @@
             {/if}
         </div>
         <div class="header-right">
-            {#if allResults.length > 0}
+            {#if canRefreshResults}
                 <button class="icon-btn" on:click={refreshResults} disabled={loading} title="Refresh from network">↻</button>
             {/if}
             <button class="icon-btn" on:click={() => (settingsOpen = !settingsOpen)} class:active={settingsOpen} title="Browse settings">⚙</button>

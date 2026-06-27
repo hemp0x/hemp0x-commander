@@ -340,6 +340,11 @@
         return `${days}d ${hrs % 24}h`;
     }
 
+    function formatBadgeCount(count) {
+        if (!Number.isFinite(count)) return "";
+        return count > 99 ? "99+" : String(count);
+    }
+
     function refreshMessages() {
         dispatch("refresh");
     }
@@ -794,7 +799,7 @@
             >
                 <span class="toolbar-text">EXP</span>
                 {#if !showExpired && hiddenExpiredCount > 0}
-                    <span class="toolbar-badge">{hiddenExpiredCount}</span>
+                    <span class="toolbar-badge">{formatBadgeCount(hiddenExpiredCount)}</span>
                 {/if}
             </button>
             {#if selectedMessageIds.size > 0}
@@ -1130,6 +1135,8 @@
         position: relative;
         min-width: 2.3rem;
         justify-content: center;
+        overflow: visible;
+        isolation: isolate;
     }
     .expired-toggle:not(.active) {
         color: #777;
@@ -1144,19 +1151,22 @@
         position: absolute;
         top: -0.32rem;
         right: -0.32rem;
-        min-width: 0.82rem;
+        z-index: 2;
+        min-width: 0.92rem;
         height: 0.82rem;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         padding: 0 0.12rem;
         border-radius: 999px;
-        background: rgba(255, 204, 0, 0.14);
+        background: #171400;
         border: 1px solid rgba(255, 204, 0, 0.36);
         color: #ffcc00;
         font-size: 0.44rem;
         line-height: 1;
         font-weight: 700;
+        pointer-events: none;
+        box-shadow: 0 0 0 1px #050505;
     }
     .toolbar-chip {
         font-size: 0.5rem;

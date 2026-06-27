@@ -46,6 +46,12 @@
             "removetagfromaddress", "listtagsforaddress", "distributereward",
             "getdistributestatus",
         ],
+        "Asset Messaging": [
+            "getmessaginginfo", "viewallmessages", "viewallmessagechannels",
+            "viewchannelmessages", "viewindexedmessagechannels", "getmessagetxid",
+            "rescanmessages", "sendmessage",
+            "subscribetochannel", "unsubscribefromchannel", "clearmessages",
+        ],
         "Mining & Chain": [
             "getblockcount", "getbestblockhash", "getdifficulty",
             "getnetworkhashps", "getmininginfo", "getblock", "getblockhash",

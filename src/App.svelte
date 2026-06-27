@@ -1074,6 +1074,15 @@
       openVaultUnlockModal();
     };
     window.addEventListener("commander-open-vault-unlock", vaultUnlockHandler);
+    // Route Tools > System requests (e.g. H0XC chat "Open System Config") to
+    // the TOOLS tab. ViewTools listens for the same event and switches its
+    // inner SYSTEM sub-tab; this handler ensures the top-level tab also moves
+    // so the user actually lands on System when the request originates from a
+    // non-TOOLS view (e.g. the ASSETS-tab asset detail / H0XC chat).
+    const openToolsSystemHandler = () => {
+      activeTab = "TOOLS";
+    };
+    window.addEventListener("commander-open-tools-system", openToolsSystemHandler);
     if (tauriReady) {
       // Handle close event for daemon lifecycle
       getCurrentWindow().onCloseRequested(async (event) => {
@@ -1082,12 +1091,6 @@
         }
         event.preventDefault();
         if (closeCleanupInProgress) {
-          return;
-        }
-
-        if (appSettings.keep_daemon_running_on_close) {
-          closePromptStatus = "Closing Commander...";
-          await closeLeaveDaemon();
           return;
         }
 
@@ -1325,6 +1328,7 @@
       window.removeEventListener("commander-open-explorer", openExplorerHandler);
       window.removeEventListener("commander-open-asset-browser", openAssetBrowserHandler);
       window.removeEventListener("commander-open-vault-unlock", vaultUnlockHandler);
+      window.removeEventListener("commander-open-tools-system", openToolsSystemHandler);
       if (typeof unlistenNetwork === "function") unlistenNetwork();
     };
   });

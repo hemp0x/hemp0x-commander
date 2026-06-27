@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct NodeInfo {
@@ -464,7 +464,7 @@ pub struct RewardDistributionPreview {
     pub validated: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AssetMessageEntry {
     pub asset_name: String,
     pub message: String,
@@ -474,11 +474,32 @@ pub struct AssetMessageEntry {
     pub expire_time: Option<String>,
     pub expire_utc_time: Option<i64>,
     pub txid: Option<String>,
+    pub vout: Option<i64>,
     pub channel: Option<String>,
     pub authority_asset: Option<String>,
     pub authority_address: Option<String>,
     pub block_hash: Option<String>,
     pub sender_address: Option<String>,
+}
+
+#[derive(Serialize, Default)]
+pub struct MessageIndexState {
+    pub enabled: bool,
+    pub mode: String,
+    pub synced: bool,
+    pub synced_height: i64,
+    pub best_height: i64,
+    pub needs_rescan: bool,
+    pub rescan_in_progress: bool,
+    pub rescan_start_height: i64,
+    pub rescan_stop_height: i64,
+    pub rescan_current_height: i64,
+    pub rescan_scanned_blocks: i64,
+    pub rescan_messages_found: i64,
+    pub rescan_messages_added: i64,
+    pub rescan_last_error: Option<String>,
+    pub pruned: bool,
+    pub pruned_limitation: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -494,6 +515,16 @@ pub struct MessagingInfo {
     pub dirty_cache_size_bytes: i64,
     pub wallet_available: bool,
     pub warnings: Vec<String>,
+    // Message index (Core Next v4.8.0.0+). Fields default gracefully when the
+    // running Core build omits them so older builds keep working.
+    pub message_index: MessageIndexState,
+}
+
+#[derive(Serialize)]
+pub struct MessageRescanResult {
+    pub success: bool,
+    pub raw: String,
+    pub error: String,
 }
 
 #[derive(Serialize)]

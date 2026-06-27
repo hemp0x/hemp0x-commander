@@ -4,6 +4,12 @@
   import { core } from "@tauri-apps/api";
   import { save, open, ask } from "@tauri-apps/plugin-dialog";
   import { systemHubSection } from "../stores/systemHub.js";
+  import {
+    fetchMessageIndexState,
+    messageIndexStatusLabel as sharedMessageIndexStatusLabel,
+    messageIndexStatusText as sharedMessageIndexStatusText,
+    startMessageRescan,
+  } from "../stores/messageIndex.js";
   import ToolsNetwork from "../tools/ToolsNetwork.svelte";
   import HelpHitbox from "../ui/HelpHitbox.svelte";
   import { APP_VERSION } from "../constants.js";
@@ -290,9 +296,28 @@
 
   // Config tab
   let configText = "";
+  let configSavedText = "";
+  let configHasUnsavedChanges = false;
+
+  async function confirmDiscardConfigChanges() {
+    if (!configHasUnsavedChanges) return true;
+    return await ask(
+      "Discard unsaved configuration changes?",
+      { title: "Unsaved Configuration", kind: "warning" },
+    );
+  }
+
+  async function selectSection(tab) {
+    if (tab === activeSection) return;
+    if (activeSection === "config" && !(await confirmDiscardConfigChanges())) return;
+    activeSection = tab;
+  }
+
   async function loadConfig(silent = false) {
+    if (!silent && !(await confirmDiscardConfigChanges())) return;
     try {
       configText = await core.invoke("read_config");
+      configSavedText = configText;
       await hydrateGuidedControls();
       guidedPreview = null;
       previewToken = null;
@@ -304,6 +329,9 @@
   async function saveConfig() {
     try {
       await core.invoke("write_config", { contents: configText });
+      configSavedText = configText;
+      guidedPreset = "custom";
+      guidedDirtyKeys = new Set();
       dispatchToast("Configuration saved.", "success");
       const restartNow = await ask(
         "Restart Core now so the raw configuration changes take effect?",
@@ -336,6 +364,7 @@
     }
   }
   async function importConfig() {
+    if (!(await confirmDiscardConfigChanges())) return;
     try {
       const imported = await core.invoke("dialog_read_text_file", {
         title: "Import Hemp0x Configuration",
@@ -356,6 +385,7 @@
     }
   }
   async function createDefaultConfig() {
+    if (!(await confirmDiscardConfigChanges())) return;
     try {
       await core.invoke("create_default_config");
       dispatchToast("Default config created", "success");
@@ -393,6 +423,7 @@
     assetindex: false,
     timestampindex: false,
     spentindex: false,
+    messageindex: false,
     zmqpubrawtx: "",
     addnodeEntry: "",
     addnodeList: [],
@@ -405,11 +436,14 @@
   let guidedApplyLoading = false;
   let guidedDirtyKeys = new Set();
 
+  $: configHasUnsavedChanges =
+    configText !== configSavedText || guidedDirtyKeys.size > 0 || guidedPreset !== "custom";
+
   const CORE_DEFAULTS = {
     server: true, listen: true, daemon: false,
     dbcache: 450, maxconnections: 125, prune: 0,
     txindex: false, addressindex: false, assetindex: false,
-    timestampindex: false, spentindex: false,
+    timestampindex: false, spentindex: false, messageindex: false,
   };
 
   async function hydrateGuidedControls() {
@@ -426,6 +460,7 @@
       guidedControls.assetindex = parseBoolConfig(parsed, "assetindex", CORE_DEFAULTS.assetindex);
       guidedControls.timestampindex = parseBoolConfig(parsed, "timestampindex", CORE_DEFAULTS.timestampindex);
       guidedControls.spentindex = parseBoolConfig(parsed, "spentindex", CORE_DEFAULTS.spentindex);
+      guidedControls.messageindex = parseBoolConfig(parsed, "messageindex", CORE_DEFAULTS.messageindex);
       guidedControls.zmqpubrawtx = parsed["zmqpubrawtx"] || "";
 
       // Extract addnode entries from the raw config text
@@ -486,6 +521,7 @@
         assetindex: true,
         timestampindex: true,
         spentindex: true,
+        messageindex: true,
         zmqpubrawtx: "",
       };
     } else if (preset === "pruned") {
@@ -502,6 +538,7 @@
         assetindex: false,
         timestampindex: false,
         spentindex: false,
+        messageindex: false,
         zmqpubrawtx: "",
       };
     }
@@ -525,6 +562,7 @@
     if (include("assetindex")) changes.assetindex = guidedControls.assetindex ? "1" : "0";
     if (include("timestampindex")) changes.timestampindex = guidedControls.timestampindex ? "1" : "0";
     if (include("spentindex")) changes.spentindex = guidedControls.spentindex ? "1" : "0";
+    if (include("messageindex")) changes.messageindex = guidedControls.messageindex ? "1" : "0";
     if (include("zmqpubrawtx")) {
       changes.zmqpubrawtx = guidedControls.zmqpubrawtx.trim() || null;
     }
@@ -578,6 +616,8 @@
       });
       dispatchToast("Configuration applied. Backup created.", "success");
       configText = await core.invoke("read_config");
+      configSavedText = configText;
+      guidedPreset = "custom";
       await hydrateGuidedControls();
       if (result.changes && result.changes.length === 0) {
         dispatchToast("No changes to apply.", "info");
@@ -591,6 +631,7 @@
     guidedApplyLoading = false;
     previewToken = null;
     guidedPreview = null;
+    previewChanges = null;
   }
 
   async function restartCoreAfterConfigChange(repairModeNeeded) {
@@ -705,6 +746,88 @@
   let repairStatus = null;
   let repairPollingInterval = null;
   let repairActive = false;
+
+  // Message index recovery (Repair tab). Uses the same Core rescanmessages
+  // path as H0XC chat, via the shared messageIndex helpers.
+  /** @type {null | { enabled: boolean, mode: string, synced: boolean, synced_height: number, best_height: number, needs_rescan: boolean, rescan_in_progress: boolean, rescan_start_height: number, rescan_stop_height: number, rescan_current_height: number, rescan_scanned_blocks: number, rescan_messages_found: number, rescan_messages_added: number, rescan_last_error: string|null, pruned: boolean, pruned_limitation: string|null }} */
+  let msgIndexState = null;
+  let msgIndexUnavailable = false;
+  let msgIndexMissing = false;
+  let msgRescanBusy = false;
+  let msgRescanError = "";
+  let msgRescanResult = "";
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let msgRescanPollTimer = null;
+  const MSG_RESCAN_POLL_MS = 3000;
+  $: msgIndexStatusLabel = sharedMessageIndexStatusLabel(msgIndexState, msgIndexUnavailable, msgIndexMissing);
+  $: msgIndexStatus = sharedMessageIndexStatusText(msgIndexState, msgIndexUnavailable, msgIndexMissing);
+
+  async function refreshMessageIndexState() {
+    try {
+      const result = await fetchMessageIndexState();
+      if (!result) {
+        msgIndexUnavailable = true;
+        msgIndexMissing = false;
+        msgIndexState = null;
+        return;
+      }
+      msgIndexState = result.mi;
+      msgIndexUnavailable = !result.messagingAvailable;
+      msgIndexMissing = result.messagingAvailable && !result.mi;
+    } catch {
+      msgIndexUnavailable = true;
+      msgIndexMissing = false;
+    }
+  }
+
+  function stopMsgRescanPolling() {
+    if (msgRescanPollTimer) {
+      clearInterval(msgRescanPollTimer);
+      msgRescanPollTimer = null;
+    }
+  }
+
+  function startMsgRescanPolling() {
+    stopMsgRescanPolling();
+    const poll = async () => {
+      await refreshMessageIndexState();
+      if (msgIndexState && !msgIndexState.rescan_in_progress && !msgRescanBusy) {
+        stopMsgRescanPolling();
+      }
+    };
+    msgRescanPollTimer = setInterval(poll, MSG_RESCAN_POLL_MS);
+    poll();
+  }
+
+  async function runMessageHistoryRecovery() {
+    if (msgRescanBusy) return;
+    if (msgIndexState?.rescan_in_progress) {
+      startMsgRescanPolling();
+      return;
+    }
+    msgRescanBusy = true;
+    msgRescanError = "";
+    msgRescanResult = "";
+    startMsgRescanPolling();
+    try {
+      const result = await startMessageRescan();
+      if (result?.success) {
+        msgRescanResult = result.raw || "H0XC message history recovery started.";
+      } else {
+        msgRescanError = result?.error || "H0XC message history recovery did not start.";
+        if (msgRescanError.toLowerCase().includes("already in progress")) {
+          msgRescanError = "";
+        }
+      }
+    } catch (err) {
+      msgRescanError = String(err);
+    } finally {
+      msgRescanBusy = false;
+      if (msgRescanResult) {
+        setTimeout(() => { msgRescanResult = ""; }, 8000);
+      }
+    }
+  }
 
   async function loadRepairMode() {
     try {
@@ -913,13 +1036,12 @@
     }
   }
 
-  let daemonSettings = { auto_start_daemon_on_launch: false, keep_daemon_running_on_close: false, allow_non_bundled_core_next: false };
+  let daemonSettings = { auto_start_daemon_on_launch: false, allow_non_bundled_core_next: false };
 
   async function loadDaemonSettings() {
     try {
       const settings = await core.invoke("load_app_settings");
       daemonSettings.auto_start_daemon_on_launch = settings.auto_start_daemon_on_launch;
-      daemonSettings.keep_daemon_running_on_close = settings.keep_daemon_running_on_close;
       daemonSettings.allow_non_bundled_core_next = settings.allow_non_bundled_core_next;
     } catch {}
   }
@@ -952,10 +1074,17 @@
     loadRepairMode();
     loadCoreBinaryDir();
     loadRepairStatus();
+    refreshMessageIndexState();
     return () => {
       stopRepairPolling();
+      stopMsgRescanPolling();
     };
   });
+
+  // Refresh message-index state when the repair tab becomes visible.
+  $: if (activeSection === "repair") {
+    refreshMessageIndexState();
+  }
 </script>
 
 <div class="system-hub" in:fade={{ duration: 200 }}>
@@ -963,11 +1092,11 @@
     <div class="hub-tabs">
       <nav class="hub-tab-list" aria-label="System sections">
         {#each ["overview", "data", "config", "network", "logs", "repair"] as tab}
-          <button
-            class="hub-tab"
-            class:active={activeSection === tab}
-            on:click={() => (activeSection = tab)}
-          >
+            <button
+              class="hub-tab"
+              class:active={activeSection === tab}
+              on:click={() => selectSection(tab)}
+            >
             {tab.toUpperCase()}
           </button>
         {/each}
@@ -1032,10 +1161,6 @@
                 <label class="sh-check-row">
                   <input type="checkbox" checked={daemonSettings.auto_start_daemon_on_launch} on:change={(e) => saveDaemonSetting('auto_start_daemon_on_launch', e.target.checked)} />
                   <span>Auto-start daemon on launch</span>
-                </label>
-                <label class="sh-check-row">
-                  <input type="checkbox" checked={daemonSettings.keep_daemon_running_on_close} on:change={(e) => saveDaemonSetting('keep_daemon_running_on_close', e.target.checked)} />
-                  <span>Keep daemon running when Commander closes</span>
                 </label>
                 <label class="sh-check-row">
                   <input type="checkbox" checked={daemonSettings.allow_non_bundled_core_next} on:change={(e) => saveDaemonSetting('allow_non_bundled_core_next', e.target.checked)} />
@@ -1296,6 +1421,13 @@
                       <input type="checkbox" bind:checked={guidedControls.daemon} on:change={() => markGuidedDirty("daemon")} />
                       <span class="sh-toggle-label">Daemon Mode</span>
                     </label>
+                    <label class="sh-toggle-row" title="Indexes public on-chain asset messages for H0XC community chat. Recommended for full community chat history. Requires Core restart.">
+                      <input type="checkbox" bind:checked={guidedControls.messageindex} on:change={() => markGuidedDirty("messageindex")} />
+                      <span class="sh-toggle-label">MessageIndex</span>
+                    </label>
+                    {#if guidedControls.prune > 0 && guidedControls.messageindex}
+                      <span class="sh-toggle-warn">Historical message recovery is limited on pruned nodes.</span>
+                    {/if}
                   </div>
                 </div>
 
@@ -1327,7 +1459,7 @@
 
                 <div class="sh-guided-section">
                   <h4 class="sh-guided-section-title">PERFORMANCE</h4>
-                  <div class="sh-controls-grid">
+                  <div class="sh-controls-grid-wide">
                     <label class="sh-input-row">
                       <span class="sh-input-label">dbcache (MB)</span>
                       <input type="number" min="4" max="32768" step="128" bind:value={guidedControls.dbcache} on:change={() => markGuidedDirty("dbcache")} class="sh-num-input" />
@@ -1341,7 +1473,7 @@
 
                 <div class="sh-guided-section">
                   <h4 class="sh-guided-section-title">PRUNE</h4>
-                  <div class="sh-controls-grid">
+                  <div class="sh-controls-grid-wide">
                     <label class="sh-input-row">
                       <span class="sh-input-label">Prune Target (MiB)</span>
                       <input type="number" min="0" max="1048576" step="100" bind:value={guidedControls.prune} on:change={() => markGuidedDirty("prune")} class="sh-num-input" />
@@ -1358,14 +1490,14 @@
                   <h4 class="sh-guided-section-title">
                     ADVANCED
                   </h4>
-                  <div class="sh-controls-grid">
+                  <div class="sh-controls-grid-wide">
                     <label class="sh-input-row">
                       <span class="sh-input-label">ZMQ Raw TX</span>
                       <input type="text" placeholder="tcp://127.0.0.1:28332" bind:value={guidedControls.zmqpubrawtx} on:input={() => markGuidedDirty("zmqpubrawtx")} class="sh-text-input" />
                     </label>
                   </div>
                   <div class="sh-addnode-section">
-                    <div class="sh-input-row" style="flex: 1;">
+                    <div class="sh-input-row sh-input-row-inline" style="flex: 1;">
                       <span class="sh-input-label">addnode</span>
                       <input type="text" placeholder="IP:port" bind:value={guidedControls.addnodeEntry} class="sh-text-input" style="flex: 1;" on:keydown={(e) => e.key === "Enter" && addAddnode()} />
                     </div>
@@ -1602,6 +1734,49 @@
                 </div>
                 <div class="sh-divider"></div>
                 <p class="sh-danger-text">Back up wallet.dat before any repair. The daemon will be stopped and restarted automatically.</p>
+
+                <div class="sh-divider"></div>
+                <div class="sh-msg-repair">
+                  <div class="sh-msg-repair-head">
+                    <span class="sh-msg-repair-title">Recover H0XC Message History</span>
+                    <span class="sh-msg-repair-status" data-state={msgIndexStatusLabel}>{msgIndexStatus.label}</span>
+                  </div>
+                  <p class="sh-help-text">Backfills the local message index from blocks already stored on this node. Use after enabling messageindex=1, restoring a snapshot, or rebuilding message data.</p>
+                  <p class="sh-help-text sh-msg-repair-warn">Pruned nodes may not have older blocks available.</p>
+                  {#if msgIndexState?.rescan_in_progress}
+                    <div class="sh-msg-repair-progress">
+                      <span class="sh-repair-stat-label">PROGRESS</span>
+                      <span class="sh-repair-stat-value">
+                        {msgIndexState.rescan_current_height ?? 0}/{msgIndexState.rescan_stop_height || "?"}
+                        {#if msgIndexState.rescan_messages_found}
+                          | {msgIndexState.rescan_messages_found} found
+                        {/if}
+                      </span>
+                    </div>
+                    {#if msgIndexState.rescan_last_error}
+                      <p class="sh-danger-text">Last error: {msgIndexState.rescan_last_error}</p>
+                    {/if}
+                  {/if}
+                  {#if msgRescanResult}
+                    <p class="sh-help-text" style="color: var(--color-primary);">{msgRescanResult}</p>
+                  {/if}
+                  {#if msgRescanError}
+                    <p class="sh-danger-text">{msgRescanError}</p>
+                  {/if}
+                  <div class="sh-action-row wrap" style="margin-top: 0.5rem;">
+                    <button
+                      class="sh-btn sh-btn-sm"
+                      on:click={runMessageHistoryRecovery}
+                      disabled={msgRescanBusy || msgIndexState?.rescan_in_progress}
+                      title="Backfill the message index (rescanmessages)"
+                    >
+                      {msgRescanBusy || msgIndexState?.rescan_in_progress ? "RECOVERING..." : "RECOVER H0XC HISTORY"}
+                    </button>
+                    <button class="sh-btn sh-btn-ghost sh-btn-sm" on:click={refreshMessageIndexState} disabled={msgRescanBusy}>
+                      REFRESH STATUS
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2191,6 +2366,47 @@
     gap: 0.6rem;
     margin-top: 0.75rem;
   }
+  .sh-msg-repair {
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid rgba(0, 255, 65, 0.12);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+  .sh-msg-repair-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+  }
+  .sh-msg-repair-title {
+    color: var(--color-primary);
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.4px;
+    font-family: var(--font-mono, monospace);
+  }
+  .sh-msg-repair-status {
+    font-size: 0.62rem;
+    color: #888;
+    font-family: var(--font-mono, monospace);
+  }
+  .sh-msg-repair-status[data-state="synced"] { color: var(--color-primary); }
+  .sh-msg-repair-status[data-state="recovering"] { color: #ffaa00; }
+  .sh-msg-repair-status[data-state="needs-recovery"] { color: #ffaa00; }
+  .sh-msg-repair-status[data-state="pruned"] { color: #ff5555; }
+  .sh-msg-repair-status[data-state="disabled"] { color: #888; }
+  .sh-msg-repair-status[data-state="unavailable"] { color: #ff5555; }
+  .sh-msg-repair-warn { color: #ffaa00; }
+  .sh-msg-repair-progress {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-top: 0.4rem;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.62rem;
+  }
   .sh-repair-btn {
     display: flex;
     flex-direction: column;
@@ -2486,6 +2702,13 @@
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.4rem;
   }
+  /* Wider grid for sections with labeled number inputs so the label text
+     does not overlap the adjacent input field. */
+  .sh-controls-grid-wide {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.4rem;
+  }
 
   /* TOGGLE ROW */
   .sh-toggle-row {
@@ -2505,6 +2728,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .sh-toggle-warn {
+    grid-column: 1 / -1;
+    color: #ffaa00;
+    font-size: 0.62rem;
+    font-family: var(--font-mono, monospace);
   }
   .sh-toggle-row input[type="checkbox"] {
     width: 13px;
@@ -2544,11 +2773,20 @@
   /* INPUT ROW */
   .sh-input-row {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
     padding: 0.35rem 0.5rem;
     background: rgba(0, 0, 0, 0.25);
     border-radius: 4px;
+    gap: 0.2rem;
+  }
+  /* Horizontal variant for rows that pair a label + input + sibling button
+     (e.g. the addnode row). Keeps the label and control on one line. */
+  .sh-input-row.sh-input-row-inline {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
   }
   .sh-input-label {
@@ -2556,10 +2794,11 @@
     font-size: 0.72rem;
     font-family: var(--font-mono, monospace);
     white-space: nowrap;
-    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .sh-num-input {
-    width: 80px;
+    width: 100%;
     padding: 0.25rem 0.4rem;
     background: #111;
     border: 1px solid rgba(0, 255, 65, 0.15);
@@ -2573,6 +2812,20 @@
   .sh-num-input:focus {
     border-color: var(--color-primary);
     box-shadow: 0 0 4px rgba(0, 255, 65, 0.15);
+  }
+  /* Style the native number-input spin buttons to match the app theme
+     instead of the default white OS arrows. */
+  .sh-num-input::-webkit-inner-spin-button,
+  .sh-num-input::-webkit-outer-spin-button {
+    opacity: 1;
+    filter: invert(1) hue-rotate(80deg) saturate(3);
+    cursor: pointer;
+  }
+  .sh-num-input {
+    -moz-appearance: textfield;
+  }
+  .sh-num-input::-webkit-inner-spin-button {
+    margin-right: 2px;
   }
   .sh-text-input {
     width: 180px;

@@ -555,6 +555,8 @@ const ALLOWED_METHODS: &[&str] = &[
     "viewallmessagechannels",
     "viewchannelmessages",
     "getmessagetxid",
+    "viewindexedmessagechannels",
+    "rescanmessages",
 ];
 
 #[tauri::command]
@@ -846,6 +848,10 @@ mod tests {
         assert!(ALLOWED_METHODS.contains(&"getmessaginginfo"));
         assert!(ALLOWED_METHODS.contains(&"viewallmessages"));
         assert!(ALLOWED_METHODS.contains(&"viewallmessagechannels"));
+        assert!(ALLOWED_METHODS.contains(&"viewchannelmessages"));
+        assert!(ALLOWED_METHODS.contains(&"getmessagetxid"));
+        assert!(ALLOWED_METHODS.contains(&"viewindexedmessagechannels"));
+        assert!(ALLOWED_METHODS.contains(&"rescanmessages"));
     }
 
     #[test]

@@ -420,6 +420,11 @@ fn is_wallet_scoped_method(method: &str) -> bool {
     matches!(method, "getwalletinfo" | "listtransactions" | "listunspent")
 }
 
+fn is_rpc_method_not_found(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("method not found") || lower.contains("error code: -32601")
+}
+
 fn active_vault_wallet_name() -> Option<String> {
     load_app_settings_impl()
         .ok()
@@ -433,7 +438,28 @@ pub(crate) fn call_active_wallet_or_default(
     params: &[serde_json::Value],
 ) -> Result<serde_json::Value, String> {
     if let Some(wallet_name) = active_vault_wallet_name() {
-        call_rpc_wallet(&wallet_name, method, params)
+        match call_rpc_wallet(&wallet_name, method, params) {
+            Ok(value) => Ok(value),
+            Err(err)
+                if method == "getwalletinfo"
+                    && params.is_empty()
+                    && is_rpc_method_not_found(&err) =>
+            {
+                let raw = crate::modules::commands::run_cli(&[
+                    format!("-wallet={wallet_name}"),
+                    String::from("getwalletinfo"),
+                ])
+                .map_err(|cli_err| {
+                    format!("{err}. CLI wallet fallback also failed for '{wallet_name}': {cli_err}")
+                })?;
+                serde_json::from_str(&raw).map_err(|parse_err| {
+                    format!(
+                        "Could not parse CLI getwalletinfo for wallet '{wallet_name}': {parse_err}"
+                    )
+                })
+            }
+            Err(err) => Err(err),
+        }
     } else {
         call_rpc(method, params)
     }

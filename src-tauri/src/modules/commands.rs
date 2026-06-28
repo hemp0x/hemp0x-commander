@@ -138,7 +138,7 @@ fn run_active_wallet_cli(args: &[String]) -> Result<String, String> {
     run_cli(&active_wallet_cli_args(args))
 }
 
-fn call_active_wallet_rpc_with_timeouts(
+fn call_migration_base_rpc_with_timeouts(
     method: &str,
     params: &[serde_json::Value],
     connect_timeout: std::time::Duration,
@@ -156,17 +156,7 @@ fn call_active_wallet_rpc_with_timeouts(
     };
     let deadline = std::time::Instant::now() + readiness_timeout;
     loop {
-        let result = if let Some(wallet_name) = active_vault_wallet_name() {
-            rpc::call_rpc_wallet_with_timeouts(
-                &wallet_name,
-                method,
-                params,
-                connect_timeout,
-                read_timeout,
-            )
-        } else {
-            rpc::call_rpc_with_timeouts(method, params, connect_timeout, read_timeout)
-        };
+        let result = rpc::call_rpc_with_timeouts(method, params, connect_timeout, read_timeout);
 
         match result {
             Ok(value) => return Ok(value),
@@ -1296,7 +1286,7 @@ pub fn validate_wallet_migration(
     }
     // Validation can be slow on large migration envelopes; allow up to 10
     // minutes. (Defensive — the 15s default is too tight for big envelopes.)
-    rpc::call_rpc_with_timeouts(
+    call_migration_base_rpc_with_timeouts(
         "validatewalletmigration",
         &params,
         std::time::Duration::from_secs(5),
@@ -1332,7 +1322,7 @@ pub fn restore_wallet_migration(
     // restorewalletmigration creates a new wallet AND triggers a rescan. The
     // rescan can take far longer than the 15s default RPC read timeout, so use
     // a generous read timeout here. The HTTP connect timeout stays short.
-    call_active_wallet_rpc_with_timeouts(
+    call_migration_base_rpc_with_timeouts(
         "restorewalletmigration",
         &params,
         std::time::Duration::from_secs(5),

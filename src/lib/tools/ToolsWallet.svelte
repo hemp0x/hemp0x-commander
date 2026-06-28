@@ -1183,6 +1183,37 @@
     let createWalletMnemonic = "";
     let createWalletWordCount = 12;
     let createWalletPhraseConfirmed = false;
+    let createWalletConfirmPositions = [];
+    let createWalletConfirmAnswers = {};
+    $: createWalletWords = createWalletMnemonic.split(/\s+/).filter(Boolean);
+    $: createWalletPhraseChallengePassed =
+        createWalletConfirmPositions.length > 0 &&
+        createWalletConfirmPositions.every((pos) =>
+            (createWalletConfirmAnswers[pos] || "").trim().toLowerCase() ===
+            (createWalletWords[pos] || "").toLowerCase()
+        );
+
+    function resetCreateWalletConfirmation() {
+        createWalletPhraseConfirmed = false;
+        createWalletConfirmPositions = [];
+        createWalletConfirmAnswers = {};
+    }
+
+    function setupCreateWalletConfirmation(mnemonic) {
+        const words = mnemonic.split(/\s+/).filter(Boolean);
+        if (words.length < 2) {
+            createWalletConfirmPositions = [];
+            createWalletConfirmAnswers = {};
+            return;
+        }
+        const first = Math.floor(Math.random() * words.length);
+        let second = Math.floor(Math.random() * words.length);
+        if (second === first) {
+            second = (second + Math.max(1, Math.floor(words.length / 2))) % words.length;
+        }
+        createWalletConfirmPositions = [first, second].sort((a, b) => a - b);
+        createWalletConfirmAnswers = {};
+    }
 
     function resetUnlockedVaultState() {
         vaultUnlocked = false;
@@ -1211,7 +1242,7 @@
         showCreateWalletModal = false;
         createWalletMnemonic = "";
         createWalletWordCount = 12;
-        createWalletPhraseConfirmed = false;
+        resetCreateWalletConfirmation();
         createWalletError = "";
         recoveryPhraseWords = "";
         recoveryPhrasePassphrase = "";
@@ -3165,6 +3196,7 @@
             const gen = await core.invoke("vault_generate_bip39_mnemonic", { wordCount: createWalletWordCount });
             const mnemonic = gen.mnemonic;
             createWalletMnemonic = mnemonic;
+            setupCreateWalletConfirmation(mnemonic);
             const walletName = createWalletName || "hemp0x-vault-main";
             const result = await withTimeout(
                 core.invoke("vault_restore_from_recovery_phrase", {
@@ -3241,7 +3273,7 @@
         createWalletDone = false;
         createWalletMnemonic = "";
         createWalletWordCount = 12;
-        createWalletPhraseConfirmed = false;
+        resetCreateWalletConfirmation();
     }
 
     async function doConfirmImportSwitch() {
@@ -4025,7 +4057,7 @@
                                     createWalletDone = false;
                                     createWalletMnemonic = "";
                                     createWalletWordCount = 12;
-                                    createWalletPhraseConfirmed = false;
+                                    resetCreateWalletConfirmation();
                                 }}>CREATE NEW WALLET</button>
                                 <button class="cyber-btn ghost small" on:click={() => { showRecoveryPhraseModal = true; }}>RESTORE FROM RECOVERY PHRASE</button>
                                 <button class="cyber-btn ghost small" on:click={unifiedImportWalletFile}>IMPORT WALLET FILE</button>
@@ -5384,11 +5416,33 @@
                         {/each}
                     </div>
                 </div>
+                {#if createWalletConfirmPositions.length > 0}
+                    <div style="border:1px solid rgba(0,255,65,0.16); background:rgba(0,255,65,0.04); border-radius:5px; padding:0.6rem 0.75rem; margin-bottom:0.6rem;">
+                        <p style="color:var(--color-primary); font-size:0.6rem; margin:0 0 0.4rem; font-weight:700;">CONFIRM RECOVERY PHRASE</p>
+                        <p style="color:#888; font-size:0.58rem; margin:0 0 0.45rem; line-height:1.4;">Enter the requested words to confirm you copied the phrase correctly.</p>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:0.45rem;">
+                            {#each createWalletConfirmPositions as pos}
+                                <label style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.6rem; color:#888;">
+                                    <span>WORD {pos + 1}</span>
+                                    <input
+                                        type="text"
+                                        class="input-glass"
+                                        autocomplete="off"
+                                        autocapitalize="none"
+                                        spellcheck="false"
+                                        bind:value={createWalletConfirmAnswers[pos]}
+                                        style="font-size:0.72rem; padding:0.42rem; width:100%; box-sizing:border-box;"
+                                    />
+                                </label>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
                 <label class="vault-connect-confirm" style="margin-bottom:0.6rem;">
                     <input type="checkbox" bind:checked={createWalletPhraseConfirmed} />
                     <span>I saved this phrase or I understand it remains encrypted inside my vault.</span>
                 </label>
-                <button class="cyber-btn primary-glow small wide" on:click={closeCreateWalletModal} disabled={!createWalletPhraseConfirmed}>
+                <button class="cyber-btn primary-glow small wide" on:click={closeCreateWalletModal} disabled={!createWalletPhraseConfirmed || !createWalletPhraseChallengePassed}>
                     CONTINUE
                 </button>
             {:else if createWalletWorking}

@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,33 @@ pub(crate) fn daemon_process_running() -> bool {
     #[cfg(not(any(unix, windows)))]
     {
         false
+    }
+}
+
+fn node_process_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn wait_for_daemon_process_exit(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while daemon_process_running() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(250));
+    }
+    !daemon_process_running()
+}
+
+fn settle_after_daemon_exit() {
+    // hemp0xd can daemonize/shutdown in multiple stages. Process table checks
+    // may report no live parent before child threads have released LevelDB /
+    // Berkeley DB region locks. A short quiet period avoids immediately
+    // starting a replacement daemon into a data directory that Core is still
+    // closing.
+    for _ in 0..6 {
+        thread::sleep(Duration::from_millis(500));
+        if daemon_process_running() {
+            let _ = wait_for_daemon_process_exit(Duration::from_secs(10));
+        }
     }
 }
 
@@ -202,6 +230,9 @@ fn request_stop_for_context(conf: &Path, datadir: &Path, timeout: Duration) -> R
 }
 
 fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
+    let _guard = node_process_lock()
+        .lock()
+        .map_err(|_| "Node process lock is poisoned".to_string())?;
     if !daemon_process_running() {
         cleanup_stale_runtime_files();
         return Ok(());
@@ -253,6 +284,7 @@ fn stop_node_and_wait_blocking(timeout: Duration) -> Result<(), String> {
         ));
     }
 
+    settle_after_daemon_exit();
     cleanup_stale_runtime_files();
     Ok(())
 }
@@ -272,6 +304,9 @@ pub async fn start_node() -> Result<(), String> {
 /// vault wallet. The async `start_node` Tauri command above wraps this
 /// in `spawn_blocking` for the frontend.
 pub fn start_node_blocking() -> Result<(), String> {
+    let _guard = node_process_lock()
+        .lock()
+        .map_err(|_| "Node process lock is poisoned".to_string())?;
     let settings: crate::modules::models::AppSettings = load_app_settings()?;
     let wallet_name: Option<String> = settings.active_vault_wallet_name.clone();
     start_node_inner(wallet_name.as_deref())?;
@@ -518,6 +553,9 @@ pub async fn stop_node() -> Result<(), String> {
 }
 
 pub fn stop_node_blocking() -> Result<(), String> {
+    let _guard = node_process_lock()
+        .lock()
+        .map_err(|_| "Node process lock is poisoned".to_string())?;
     if !daemon_process_running() {
         cleanup_stale_runtime_files();
         return Ok(());
@@ -526,11 +564,13 @@ pub fn stop_node_blocking() -> Result<(), String> {
     match run_cli(&[String::from("stop")]) {
         Ok(_) => {
             if !daemon_process_running() {
+                settle_after_daemon_exit();
                 cleanup_stale_runtime_files();
             }
             Ok(())
         }
         Err(e) if !daemon_process_running() => {
+            settle_after_daemon_exit();
             cleanup_stale_runtime_files();
             Ok(())
         }
@@ -597,6 +637,7 @@ fn stop_daemon_for_wallet_restart(timeout: Duration) -> Result<(), String> {
         ));
     }
 
+    settle_after_daemon_exit();
     cleanup_stale_runtime_files();
     Ok(())
 }
@@ -606,6 +647,9 @@ fn restart_node_with_wallet_robust_inner(
     poll_until_loaded: bool,
     force_restart: bool,
 ) -> Result<(), String> {
+    let _guard = node_process_lock()
+        .lock()
+        .map_err(|_| "Node process lock is poisoned".to_string())?;
     let _dir = data_dir()?;
 
     // Fast path: if Core is already running, try to load/query the target

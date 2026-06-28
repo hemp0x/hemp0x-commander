@@ -20,12 +20,7 @@ This is a major release. Back up `wallet.dat`, Hemp0x Vault files, and any impor
 
 ## Checksums
 
-```text
-18381b8fd9d835518ff1057df3a36a32bd84ec389932b06217f6aada1d5ccce9  Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
-79e3f66a06ed38f1eec0de6d484c810ecfb5744c00f3881e92b347b434297a96  Hemp0x_Commander_2.0.0_Windows_x64_Portable.zip
-```
-
-Verify the checksum before running.
+Final SHA256 checksums are published with the release artifacts in `SHA256SUMS.txt`. Verify the checksum before running.
 
 Windows PowerShell:
 

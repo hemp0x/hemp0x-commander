@@ -24,26 +24,25 @@
 
 Hemp0x Commander is a non-custodial desktop app for the Hemp0x blockchain. It controls bundled Hemp0x Core Next binaries through local authenticated RPC, so your wallet files and vault files stay on your machine.
 
-Commander 2.0 is a major rebuild. It adds portable Hemp0x Vault wallets, Core Next 4.8 integration, local chain tools, H0XC chat support, better Windows responsiveness, smarter node configuration, and a cleaner release build flow.
+Commander 2.0 is a major rebuild. It adds portable Hemp0x Vault wallets, Core Next 4.8 integration, local chain tools, H0XC chat support, wallet consolidation, a local explorer, and smarter node configuration.
 
 ## Commander 2.0 Highlights
 
 - **Bundled Core Next 4.8.0.0** with version matching and sidecar validation.
 - **Hemp0x Vault wallets** with portable BIP39 primary wallet records that can move between Commander and WebCom.
 - **Legacy wallet support** for `wallet.dat`, runtime wallet files, Core migration envelopes, and backup recovery.
-- **Wallet creation and recovery** with 12 or 24 word recovery phrases, vault storage, Core restore, and phrase confirmation.
+- **Wallet creation and recovery** with 12 or 24 word recovery phrases, vault storage, Core restore, phrase confirmation, and recovery-history tools.
 - **Local PIN unlock** for the Core runtime wallet on trusted devices.
 - **Node dashboard** with start, stop, sync state, reindex state, balance, activity, and daemon health.
-- **Smart config editor** for full node, storage saver, indexes, pruning, RPC, ZMQ, addnodes, and raw `hemp.conf` edits.
+- **Smart config editor** for full node, storage saver, messageindex, txindex, addressindex, assetindex, pruning, RPC, ZMQ, addnodes, and raw `hemp.conf` edits.
 - **Snapshot install and repair tools** for data directory maintenance and recovery.
-- **Asset tools** for owned assets, network browsing, transfers, rewards, consolidation, and raw transaction work.
-- **Local explorer** for transactions, addresses, blocks, assets, and wallet history without third-party explorer requests.
-- **H0XC community chat** with message indexing, message recovery, local moderation, history windows, and guest read mode.
-- **Responsive Windows build** with async backend calls so the UI remains usable while Core is busy.
+- **Asset tools** for owned assets, network browsing, transfers, rewards, asset messages, and raw transaction work.
+- **Wallet consolidation** for selecting eligible UTXOs and planning single-round or multi-round consolidation.
+- **Local explorer** for transactions, addresses, blocks, assets, UTXOs, wallet history, and copy/lookup actions without third-party explorer requests.
+- **Console and raw tools** for CLI/RPC commands, transaction decode, transaction builder, mempool checks, and advanced troubleshooting.
+- **H0XC community chat** with messageindex support, H0XSHT message parsing, message recovery, local moderation, history windows, and guest read mode.
 
 ## Screenshots
-
-The screenshots below are safe examples with wallet-sensitive fields hidden or test-only values.
 
 ### Dashboard
 
@@ -143,7 +142,7 @@ Bug reports and testing feedback are welcome in the Hemp0x Discord:
 
 ## License
 
-See the repository license and release notes for current distribution terms.
+See the repository license and release notes for current distribution terms. Community testing, issues, documentation updates, and pull requests are welcome.
 
 <p align="center">
   <a href="https://hemp0x.com">hemp0x.com</a>

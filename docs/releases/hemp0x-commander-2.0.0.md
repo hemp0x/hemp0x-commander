@@ -156,8 +156,10 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppIm
 
 ### Solo mining and Stratum
 
-- Improved solo mining UI and worker address handling.
-- Added Stratum status reporting.
+- Added a new solo mining workspace for running a local Stratum server from Commander.
+- Added worker address selection for solo mining payouts.
+- Added Stratum connection details for miner setup.
+- Added Stratum status reporting in the app header and solo mining page.
 - Added Core RPC readiness checks for solo mining startup.
 - Preserved solo-only behavior. Commander does not add pool payout, ledger, confirmation, or consolidation logic to solo mining.
 
@@ -178,6 +180,14 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppIm
 - Improved number input styling and app-wide button rendering.
 - Updated app icons and release packaging.
 - Added release build documentation for Windows portable and Linux AppImage artifacts.
+
+## License
+
+Hemp0x Commander 2.0.0 is released under the MIT License.
+
+Copyright (c) 2026 Hemp0x Devs
+
+The MIT License applies to the Commander codebase, including the H0XC and H0XSHT message handling code, encoder and decoder logic, and tables included in this repository.
 
 ## Known Notes
 

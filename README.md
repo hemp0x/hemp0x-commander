@@ -40,13 +40,10 @@ Commander 2.0 is a major rebuild. It adds portable Hemp0x Vault wallets, Core Ne
 - **Wallet consolidation** for selecting eligible UTXOs and planning single-round or multi-round consolidation.
 - **Local explorer** for transactions, addresses, blocks, assets, UTXOs, wallet history, and copy/lookup actions without third-party explorer requests.
 - **Console and raw tools** for CLI/RPC commands, transaction decode, transaction builder, mempool checks, and advanced troubleshooting.
+- **Solo mining tools** with local Stratum startup, worker address selection, RPC readiness checks, and status reporting.
 - **H0XC community chat** with messageindex support, H0XSHT message parsing, message recovery, local moderation, history windows, and guest read mode.
 
 ## Screenshots
-
-### Dashboard
-
-![Dashboard](screenshots/dashboard.png)
 
 ### H0XC Community Chat
 

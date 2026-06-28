@@ -7340,6 +7340,23 @@ pub fn vault_get_active_wallet_name() -> Result<Option<String>, String> {
     Ok(settings.active_vault_wallet_name)
 }
 
+fn clear_active_wallet_before_migration_restore() -> Result<(), String> {
+    let mut settings = crate::modules::files::load_app_settings_impl()?;
+    let previous_active = settings
+        .active_vault_wallet_name
+        .as_ref()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+
+    if previous_active.is_some() {
+        settings.active_vault_wallet_name = None;
+        crate::modules::files::save_app_settings_impl(&settings)?;
+        let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn vault_restart_core_with_wallet(wallet_name: String) -> Result<(), String> {
     let wn = wallet_name.clone();
@@ -8031,6 +8048,8 @@ fn restore_from_recovery_phrase_blocking(
             existing_state.wallet_file_path
         ));
     }
+
+    clear_active_wallet_before_migration_restore()?;
 
     let now = chrono::Utc::now().timestamp();
     let webcom_record = SecretRecord {

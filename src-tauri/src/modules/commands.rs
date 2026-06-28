@@ -1296,7 +1296,7 @@ pub fn validate_wallet_migration(
     }
     // Validation can be slow on large migration envelopes; allow up to 10
     // minutes. (Defensive — the 15s default is too tight for big envelopes.)
-    call_active_wallet_rpc_with_timeouts(
+    rpc::call_rpc_with_timeouts(
         "validatewalletmigration",
         &params,
         std::time::Duration::from_secs(5),

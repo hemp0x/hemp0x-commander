@@ -5432,15 +5432,7 @@ fn verify_exact_wallet_identity(
         ));
     }
 
-    let info: serde_json::Value =
-        crate::modules::rpc::call_rpc_wallet(wallet_name, "getwalletmigrationinfo", &[]).map_err(
-            |e| {
-                format!(
-                    "Cannot query wallet '{}' for identity check: {}",
-                    wallet_name, e
-                )
-            },
-        )?;
+    let info = query_wallet_migration_info_for_identity(wallet_name)?;
 
     let encrypted = info
         .get("encrypted")
@@ -5483,14 +5475,13 @@ fn verify_exact_wallet_identity(
         serde_json::Value::Bool(true),
         serde_json::Value::String(id_passphrase.as_str().to_string()),
     ];
-    crate::modules::rpc::call_rpc_wallet(wallet_name, "exportwalletmigration", &export_params)
-        .map_err(|e| {
-            let _ = relock_guard.relock_now();
-            format!(
-                "Cannot export wallet '{}' for identity check: {}",
-                wallet_name, e
-            )
-        })?;
+    export_wallet_migration_for_identity(wallet_name, &export_params).map_err(|e| {
+        let _ = relock_guard.relock_now();
+        format!(
+            "Cannot export wallet '{}' for identity check: {}",
+            wallet_name, e
+        )
+    })?;
 
     let envelope_content = fs::read_to_string(&id_temp.path).map_err(|e| {
         let _ = relock_guard.relock_now();
@@ -5527,6 +5518,70 @@ fn verify_exact_wallet_identity(
     }
 
     Ok(())
+}
+
+fn query_wallet_migration_info_for_identity(
+    wallet_name: &str,
+) -> Result<serde_json::Value, String> {
+    match crate::modules::rpc::call_rpc_wallet(wallet_name, "getwalletmigrationinfo", &[]) {
+        Ok(info) => Ok(info),
+        Err(rpc_err) => {
+            let args = vec![
+                format!("-wallet={wallet_name}"),
+                String::from("getwalletmigrationinfo"),
+            ];
+            let raw = crate::modules::commands::run_cli(&args).map_err(|cli_err| {
+                format!(
+                    "Cannot query wallet '{wallet_name}' for identity check. RPC error: {rpc_err}. CLI fallback error: {cli_err}"
+                )
+            })?;
+            serde_json::from_str(&raw).map_err(|parse_err| {
+                format!(
+                    "Cannot parse getwalletmigrationinfo for wallet '{wallet_name}' during identity check: {parse_err}"
+                )
+            })
+        }
+    }
+}
+
+fn export_wallet_migration_for_identity(
+    wallet_name: &str,
+    export_params: &[serde_json::Value],
+) -> Result<(), String> {
+    match crate::modules::rpc::call_rpc_wallet(wallet_name, "exportwalletmigration", export_params) {
+        Ok(_) => Ok(()),
+        Err(rpc_err) => {
+            let filename = export_params
+                .get(0)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing identity export filename".to_string())?;
+            let include_private = export_params
+                .get(1)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let allow_overwrite = export_params
+                .get(2)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let export_passphrase = export_params
+                .get(3)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let args = vec![
+                format!("-wallet={wallet_name}"),
+                String::from("exportwalletmigration"),
+                filename.to_string(),
+                include_private.to_string(),
+                allow_overwrite.to_string(),
+                export_passphrase.to_string(),
+            ];
+            crate::modules::commands::run_cli(&args).map(|_| ()).map_err(|cli_err| {
+                format!(
+                    "RPC error: {rpc_err}. CLI fallback error: {cli_err}"
+                )
+            })
+        }
+    }
 }
 ///
 /// This is the single, cheap read used after Core start/restart and after

@@ -6052,16 +6052,25 @@ fn verify_existing_wallet_after_duplicate(wallet_name: &str) -> Result<serde_jso
     let info: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| format!("Could not parse getwalletmigrationinfo for '{wallet_name}': {e}"))?;
 
-    let network = info
-        .get("chain")
-        .and_then(|c| c.get("network"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let coin_type = info
-        .get("chain")
-        .and_then(|c| c.get("coin_type_bip44"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let chain_info = crate::modules::rpc::call_rpc("getblockchaininfo", &[]).unwrap_or_default();
+    let (profile_network, profile_coin_type) =
+        core_migration_runtime_profile(&info, &chain_info);
+    let network = if profile_network.is_empty() {
+        info.get("chain")
+            .and_then(|c| c.get("network"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    } else {
+        profile_network
+    };
+    let coin_type = if profile_coin_type >= 0 {
+        profile_coin_type
+    } else {
+        info.get("chain")
+            .and_then(|c| c.get("coin_type_bip44"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    };
 
     if network != CORE_MIGRATION_MAINNET_NETWORK_ID {
         return Err(format!(

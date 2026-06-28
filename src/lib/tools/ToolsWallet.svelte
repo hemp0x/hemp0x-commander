@@ -5396,55 +5396,56 @@
         tabindex="0"
         on:keydown={(e) => !createWalletWorking && e.key === "Escape" && closeCreateWalletModal()}
     >
-        <div class="vault-connect-modal" style="max-width:440px; max-height:90vh; overflow-y:auto; padding:1.25rem;">
+        <div class="vault-connect-modal create-wallet-modal">
             {#if createWalletDone}
-                <h3 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
+                <h3 class="create-wallet-title">
                     WALLET CREATED
                 </h3>
-                <div class="vault-connect-success" style="margin-bottom:0.6rem;">
-                    <span class="vault-connect-check">&#10003;</span>
-                    <span>Wallet stored in vault and loaded in Core.</span>
-                </div>
-                <div style="border:1px solid rgba(255,170,0,0.3); background:rgba(255,170,0,0.06); border-radius:5px; padding:0.6rem 0.75rem; margin-bottom:0.6rem;">
-                    <p style="color:#ffaa00; font-size:0.6rem; margin:0 0 0.3rem; font-weight:700;">SAVE YOUR RECOVERY PHRASE</p>
-                    <p style="color:#aaa; font-size:0.6rem; margin:0 0 0.4rem; line-height:1.4;">Write this phrase down and store it offline. It is also encrypted inside your Hemp0x Vault.</p>
-                    <div style="background:rgba(0,0,0,0.4); border:1px dashed rgba(255,255,255,0.1); border-radius:4px; padding:0.5rem; display:flex; flex-wrap:wrap; gap:0.25rem; justify-content:center; user-select:all;">
-                        {#each createWalletMnemonic.split(/\s+/).filter(Boolean) as word, index}
-                            <span style="font-family:monospace; font-size:0.64rem; color:var(--color-primary); border:1px solid rgba(0,255,65,0.16); background:rgba(0,255,65,0.04); border-radius:4px; padding:0.16rem 0.32rem; white-space:nowrap;">
-                                {index + 1}. {word}
-                            </span>
-                        {/each}
+                <div class="create-wallet-scroll">
+                    <div class="vault-connect-success create-wallet-success">
+                        <span class="vault-connect-check">&#10003;</span>
+                        <span>Wallet stored in vault and loaded in Core.</span>
                     </div>
-                </div>
-                {#if createWalletConfirmPositions.length > 0}
-                    <div style="border:1px solid rgba(0,255,65,0.16); background:rgba(0,255,65,0.04); border-radius:5px; padding:0.6rem 0.75rem; margin-bottom:0.6rem;">
-                        <p style="color:var(--color-primary); font-size:0.6rem; margin:0 0 0.4rem; font-weight:700;">CONFIRM RECOVERY PHRASE</p>
-                        <p style="color:#888; font-size:0.58rem; margin:0 0 0.45rem; line-height:1.4;">Enter the requested words to confirm you copied the phrase correctly.</p>
-                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:0.45rem;">
-                            {#each createWalletConfirmPositions as pos}
-                                <label style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.6rem; color:#888;">
-                                    <span>WORD {pos + 1}</span>
-                                    <input
-                                        type="text"
-                                        class="input-glass"
-                                        autocomplete="off"
-                                        autocapitalize="none"
-                                        spellcheck="false"
-                                        bind:value={createWalletConfirmAnswers[pos]}
-                                        style="font-size:0.72rem; padding:0.42rem; width:100%; box-sizing:border-box;"
-                                    />
-                                </label>
+                    <div class="create-wallet-phrase-panel">
+                        <p class="create-wallet-panel-title warn">SAVE YOUR RECOVERY PHRASE</p>
+                        <p class="create-wallet-help">Write this phrase down and store it offline. It is also encrypted inside your Hemp0x Vault.</p>
+                        <div class="create-wallet-word-grid">
+                            {#each createWalletMnemonic.split(/\s+/).filter(Boolean) as word, index}
+                                <span class="create-wallet-word">{index + 1}. {word}</span>
                             {/each}
                         </div>
                     </div>
-                {/if}
-                <label class="vault-connect-confirm" style="margin-bottom:0.6rem;">
-                    <input type="checkbox" bind:checked={createWalletPhraseConfirmed} />
-                    <span>I saved this phrase or I understand it remains encrypted inside my vault.</span>
-                </label>
-                <button class="cyber-btn primary-glow small wide" on:click={closeCreateWalletModal} disabled={!createWalletPhraseConfirmed || !createWalletPhraseChallengePassed}>
-                    CONTINUE
-                </button>
+                    {#if createWalletConfirmPositions.length > 0}
+                        <div class="create-wallet-confirm-panel">
+                            <p class="create-wallet-panel-title">CONFIRM RECOVERY PHRASE</p>
+                            <p class="create-wallet-help">Enter the requested words to confirm you copied the phrase correctly.</p>
+                            <div class="create-wallet-confirm-grid">
+                                {#each createWalletConfirmPositions as pos}
+                                    <label class="create-wallet-confirm-field">
+                                        <span>WORD {pos + 1}</span>
+                                        <input
+                                            type="text"
+                                            class="input-glass"
+                                            autocomplete="off"
+                                            autocapitalize="none"
+                                            spellcheck="false"
+                                            bind:value={createWalletConfirmAnswers[pos]}
+                                        />
+                                    </label>
+                                {/each}
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+                <div class="create-wallet-footer">
+                    <label class="vault-connect-confirm">
+                        <input type="checkbox" bind:checked={createWalletPhraseConfirmed} />
+                        <span>I saved this phrase or I understand it remains encrypted inside my vault.</span>
+                    </label>
+                    <button class="cyber-btn primary-glow small wide" on:click={closeCreateWalletModal} disabled={!createWalletPhraseConfirmed || !createWalletPhraseChallengePassed}>
+                        CONTINUE
+                    </button>
+                </div>
             {:else if createWalletWorking}
                 <div class="vault-connect-loading" style="padding:1.5rem 0;">
                     <span class="vault-connect-spinner vault-connect-spinner-lg"></span>
@@ -6746,6 +6747,110 @@
         box-sizing: border-box;
         margin-top: 0;
     }
+    .create-wallet-modal {
+        width: min(92vw, 440px);
+        max-height: min(calc(100dvh - 6.25rem), 620px);
+        padding: 0.8rem 0.9rem 0.75rem !important;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .create-wallet-title {
+        color: var(--color-primary);
+        margin: 0 0 0.45rem;
+        font-size: 0.82rem;
+        letter-spacing: 1px;
+        text-align: center;
+        flex-shrink: 0;
+    }
+    .create-wallet-scroll {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        min-height: 0;
+        padding-right: 0.15rem;
+    }
+    .create-wallet-success {
+        margin-bottom: 0.45rem;
+        font-size: 0.66rem;
+    }
+    .create-wallet-phrase-panel,
+    .create-wallet-confirm-panel {
+        border-radius: 5px;
+        padding: 0.48rem 0.58rem;
+        margin-bottom: 0.45rem;
+    }
+    .create-wallet-phrase-panel {
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        background: rgba(255, 170, 0, 0.06);
+    }
+    .create-wallet-confirm-panel {
+        border: 1px solid rgba(0, 255, 65, 0.16);
+        background: rgba(0, 255, 65, 0.04);
+    }
+    .create-wallet-panel-title {
+        color: var(--color-primary);
+        font-size: 0.58rem;
+        margin: 0 0 0.28rem;
+        font-weight: 700;
+    }
+    .create-wallet-panel-title.warn {
+        color: #ffaa00;
+    }
+    .create-wallet-help {
+        color: #999;
+        font-size: 0.56rem;
+        margin: 0 0 0.34rem;
+        line-height: 1.32;
+    }
+    .create-wallet-word-grid {
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px dashed rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        padding: 0.4rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.2rem;
+        justify-content: center;
+        user-select: all;
+    }
+    .create-wallet-word {
+        font-family: monospace;
+        font-size: 0.58rem;
+        color: var(--color-primary);
+        border: 1px solid rgba(0, 255, 65, 0.16);
+        background: rgba(0, 255, 65, 0.04);
+        border-radius: 4px;
+        padding: 0.13rem 0.25rem;
+        white-space: nowrap;
+    }
+    .create-wallet-confirm-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.4rem;
+    }
+    .create-wallet-confirm-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.18rem;
+        font-size: 0.56rem;
+        color: #888;
+    }
+    .create-wallet-confirm-field input {
+        font-size: 0.68rem;
+        padding: 0.36rem 0.42rem;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .create-wallet-footer {
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid rgba(0, 255, 65, 0.1);
+        background: rgba(0, 0, 0, 0.98);
+    }
     .wallet-import-options {
         display: flex;
         flex-direction: column;
@@ -6779,6 +6884,42 @@
         .unified-wallet-import-modal .input-glass {
             padding: 0.36rem 0.45rem !important;
             font-size: 0.66rem !important;
+        }
+        .create-wallet-modal {
+            width: calc(100% - 1rem);
+            max-height: calc(100dvh - 6.9rem);
+            padding: 0.62rem 0.7rem !important;
+        }
+        .create-wallet-title {
+            font-size: 0.76rem;
+            margin-bottom: 0.35rem;
+        }
+        .create-wallet-success {
+            margin-bottom: 0.35rem;
+        }
+        .create-wallet-phrase-panel,
+        .create-wallet-confirm-panel {
+            padding: 0.42rem 0.48rem;
+            margin-bottom: 0.36rem;
+        }
+        .create-wallet-word-grid {
+            padding: 0.32rem;
+            gap: 0.16rem;
+        }
+        .create-wallet-word {
+            font-size: 0.54rem;
+            padding: 0.1rem 0.2rem;
+        }
+        .create-wallet-help {
+            font-size: 0.53rem;
+            line-height: 1.25;
+        }
+        .create-wallet-confirm-grid {
+            gap: 0.32rem;
+        }
+        .create-wallet-footer {
+            gap: 0.4rem;
+            padding-top: 0.42rem;
         }
         .migration-tools-grid {
             grid-template-columns: 1fr;

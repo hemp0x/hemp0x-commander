@@ -135,6 +135,28 @@ echo "[inner] stripping shared libs + Commander main binary only"
 find "$APPDIR/usr/lib" -type f -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
 strip --strip-unneeded "$APPDIR/usr/bin/hemp0x-commander" 2>/dev/null || true
 
+# Prune non-essential binaries and libraries to reduce AppImage size.
+# The Commander app does not use SVG icons (librsvg), HTML5 media playback
+# (GStreamer), printing (CUPS), or desktop search (Tracker).
+echo "[inner] pruning non-essential binaries and libraries"
+rm -f "$APPDIR/usr/bin/short_message_corpus_audit" 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/librsvg"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libgst"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libcups"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libtiff"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/liborc"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libjbig"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libwebp"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libmanette"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libgupnp"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libgssdp"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libnice"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libgudev"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libgck"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libsecret"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libavahi"* 2>/dev/null || true
+rm -f "$APPDIR/usr/lib/libtracker"* 2>/dev/null || true
+
 # Intermediate AppImage via the image's bundled appimagetool
 command -v file >/dev/null 2>&1 || (apt-get update && apt-get install -y file)
 ARCH=x86_64 /build_tools/appimagetool-x86_64.AppImage --no-appstream "$APPDIR" /app/_internal.AppImage
@@ -168,6 +190,45 @@ chmod +x "$INTERMEDIATE_APPIMAGE"
 export APPIMAGE_EXTRACT_AND_RUN=1
 ( cd "$WORKDIR" && "$INTERMEDIATE_APPIMAGE" --appimage-extract >/tmp/hemp0x-universal-extract.log 2>&1 )
 [ -d "$WORKDIR/squashfs-root" ] || { echo "BLOCKER: extraction did not produce squashfs-root"; tail -40 /tmp/hemp0x-universal-extract.log; exit 1; }
+
+echo "== Replacing AppRun with fixed launcher (avoids bundled-lib conflicts) =="
+cat > "$WORKDIR/squashfs-root/AppRun" << 'APPRUNEOF'
+#!/usr/bin/env bash
+set -e
+
+APPDIR="$(cd "$(dirname "$0")" && pwd)"
+export APPDIR
+
+export GTK_DATA_PREFIX="$APPDIR"
+export GTK_THEME="${APPIMAGE_GTK_THEME:-"Adwaita:light"}"
+export GDK_BACKEND=x11
+export XDG_DATA_DIRS="$APPDIR/usr/share:/usr/share:$XDG_DATA_DIRS"
+export GSETTINGS_SCHEMA_DIR="$APPDIR/usr/share/glib-2.0/schemas"
+export GTK_EXE_PREFIX="$APPDIR/usr"
+export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"
+
+if [ -f "$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache" ]; then
+    export GTK_IM_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"
+fi
+if [ -f "$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache" ]; then
+    export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+fi
+if [ -d "$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules" ]; then
+    export GIO_EXTRA_MODULES="$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules"
+fi
+
+HOST_ROOT="/usr/lib64:/usr/lib:/lib64"
+BUNDLED_LIBS="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu"
+if [ -n "$LD_LIBRARY_PATH" ]; then
+    export LD_LIBRARY_PATH="$HOST_ROOT:$LD_LIBRARY_PATH:$BUNDLED_LIBS"
+else
+    export LD_LIBRARY_PATH="$HOST_ROOT:$BUNDLED_LIBS"
+fi
+
+exec "$APPDIR/usr/bin/hemp0x-commander" "$@"
+APPRUNEOF
+chmod +x "$WORKDIR/squashfs-root/AppRun"
+rm -f "$WORKDIR/squashfs-root/AppRun.wrapped"
 
 echo "== Repacking payload (zstd-22) =="
 mksquashfs "$WORKDIR/squashfs-root" "$WORKDIR/payload.sqfs" \

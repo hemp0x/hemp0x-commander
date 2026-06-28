@@ -4112,10 +4112,14 @@ impl WalletRelockGuard {
         self.was_unlocked_by_us = false;
         if self.is_default_wallet {
             crate::modules::rpc::call_rpc("walletlock", &[])
+                .map_err(|e| format!("Failed to relock wallet '{}': {}", self.wallet_name, e))?;
         } else {
-            crate::modules::rpc::call_rpc_wallet(&self.wallet_name, "walletlock", &[])
+            crate::modules::commands::run_named_wallet_cli(
+                &self.wallet_name,
+                &[String::from("walletlock")],
+            )
+            .map_err(|e| format!("Failed to relock wallet '{}': {}", self.wallet_name, e))?;
         }
-        .map_err(|e| format!("Failed to relock wallet '{}': {}", self.wallet_name, e))?;
         Ok(())
     }
 }
@@ -4124,6 +4128,31 @@ impl Drop for WalletRelockGuard {
     fn drop(&mut self) {
         let _ = self.relock_now();
     }
+}
+
+fn unlock_core_wallet_for_vault_flow(
+    wallet_name: Option<&str>,
+    passphrase: &str,
+    duration_secs: u64,
+) -> Result<(), String> {
+    if let Some(name) = wallet_name.map(str::trim).filter(|name| !name.is_empty()) {
+        crate::modules::commands::run_named_wallet_cli(
+            name,
+            &[
+                String::from("walletpassphrase"),
+                passphrase.to_string(),
+                duration_secs.max(1).to_string(),
+            ],
+        )?;
+        return Ok(());
+    }
+
+    let unlock_params = vec![
+        serde_json::Value::String(passphrase.to_string()),
+        serde_json::Value::Number(serde_json::value::Number::from(duration_secs.max(1))),
+    ];
+    crate::modules::rpc::call_rpc("walletpassphrase", &unlock_params)?;
+    Ok(())
 }
 
 // ─── Transactional Promotion — slice 66b ────────────────────────────────
@@ -4732,19 +4761,15 @@ fn promote_core_wallet_to_portable_primary_blocking(
         if unlock_pass.is_empty() {
             return Err("WALLET_UNLOCK_REQUIRED::The Core wallet is encrypted and locked. Provide the wallet unlock passphrase to continue.".to_string());
         }
-        let unlock_params = vec![
-            serde_json::Value::String(unlock_pass.to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(60)),
-        ];
-        if target_wallet_name.is_empty() {
-            crate::modules::rpc::call_rpc("walletpassphrase", &unlock_params)
-        } else {
-            crate::modules::rpc::call_rpc_wallet(
-                &target_wallet_name,
-                "walletpassphrase",
-                &unlock_params,
-            )
-        }
+        unlock_core_wallet_for_vault_flow(
+            if target_wallet_name.is_empty() {
+                None
+            } else {
+                Some(target_wallet_name.as_str())
+            },
+            unlock_pass,
+            60,
+        )
         .map_err(|e| format!("Failed to unlock wallet: {e}"))?;
         relock_guard.was_unlocked_by_us = true;
     }
@@ -5016,15 +5041,7 @@ fn export_core_migration_wallet_blocking(
             return Err("WALLET_UNLOCK_REQUIRED::The Core wallet is encrypted and locked. Provide the wallet unlock passphrase to export.".to_string());
         }
 
-        let unlock_params = vec![
-            serde_json::Value::String(unlock_pass.to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(60)),
-        ];
-        if let Some(ref name) = export_wallet_name {
-            crate::modules::rpc::call_rpc_wallet(name, "walletpassphrase", &unlock_params)
-        } else {
-            crate::modules::rpc::call_rpc("walletpassphrase", &unlock_params)
-        }
+        unlock_core_wallet_for_vault_flow(export_wallet_name.as_deref(), unlock_pass, 60)
         .map_err(|e| format!("Failed to unlock wallet: {e}"))?;
         relock_guard.was_unlocked_by_us = true;
     }
@@ -5453,11 +5470,7 @@ fn verify_exact_wallet_identity(
         if unlock_pass.is_empty() {
             return Err(format!("WALLET_UNLOCK_REQUIRED::The runtime wallet '{wallet_name}' is encrypted and locked. Provide the wallet unlock passphrase."));
         }
-        let unlock_params = vec![
-            serde_json::Value::String(unlock_pass.to_string()),
-            serde_json::Value::Number(serde_json::value::Number::from(60)),
-        ];
-        crate::modules::rpc::call_rpc_wallet(wallet_name, "walletpassphrase", &unlock_params)
+        unlock_core_wallet_for_vault_flow(Some(wallet_name), unlock_pass, 60)
             .map_err(|e| format!("Cannot unlock wallet '{}': {}", wallet_name, e))?;
         relock_guard.was_unlocked_by_us = true;
     }

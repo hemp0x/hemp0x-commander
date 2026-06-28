@@ -430,7 +430,14 @@ pub fn unlock_active_wallet(password: &str, duration: u64) -> Result<(), String>
     ];
     match active_wallet_name()? {
         Some(name) => {
-            rpc::call_rpc_wallet(&name, "walletpassphrase", &params)?;
+            crate::modules::commands::run_named_wallet_cli(
+                &name,
+                &[
+                    String::from("walletpassphrase"),
+                    password.to_string(),
+                    duration.max(1).to_string(),
+                ],
+            )?;
         }
         None => {
             rpc::call_rpc("walletpassphrase", &params)?;

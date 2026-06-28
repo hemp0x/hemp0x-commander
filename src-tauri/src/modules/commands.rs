@@ -138,6 +138,13 @@ fn run_active_wallet_cli(args: &[String]) -> Result<String, String> {
     run_cli(&active_wallet_cli_args(args))
 }
 
+pub(crate) fn run_named_wallet_cli(wallet_name: &str, args: &[String]) -> Result<String, String> {
+    let mut scoped = Vec::with_capacity(args.len() + 1);
+    scoped.push(format!("-wallet={}", wallet_name));
+    scoped.extend(args.iter().cloned());
+    run_cli(&scoped)
+}
+
 fn call_migration_base_rpc_with_timeouts(
     method: &str,
     params: &[serde_json::Value],
@@ -1357,12 +1364,7 @@ pub fn wallet_encrypt(password: String) -> Result<String, String> {
 #[tauri::command]
 pub fn wallet_encrypt_named(wallet_name: String, password: String) -> Result<String, String> {
     ensure_config()?;
-    let args = vec![
-        format!("-wallet={}", wallet_name),
-        String::from("encryptwallet"),
-        password,
-    ];
-    run_cli(&args)
+    run_named_wallet_cli(&wallet_name, &[String::from("encryptwallet"), password])
 }
 
 #[tauri::command]
@@ -1490,17 +1492,17 @@ pub fn wallet_unlock_named(
     duration: u64,
 ) -> Result<String, String> {
     ensure_config()?;
-    let result = rpc::call_rpc_wallet(
+    let result = run_named_wallet_cli(
         &wallet_name,
-        "walletpassphrase",
         &[
-            serde_json::Value::String(password),
-            serde_json::Value::Number(serde_json::value::Number::from(duration)),
+            String::from("walletpassphrase"),
+            password,
+            duration.max(1).to_string(),
         ],
     )?;
     // Same PIN-record refresh as the default-wallet unlock path.
     let _ = crate::modules::wallet_pin_unlock::refresh_after_passphrase_unlock();
-    Ok(result.as_str().unwrap_or("").to_string())
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1512,8 +1514,7 @@ pub fn wallet_lock() -> Result<String, String> {
 #[tauri::command]
 pub fn wallet_lock_named(wallet_name: String) -> Result<String, String> {
     ensure_config()?;
-    let result = rpc::call_rpc_wallet(&wallet_name, "walletlock", &[])?;
-    Ok(result.as_str().unwrap_or("").to_string())
+    run_named_wallet_cli(&wallet_name, &[String::from("walletlock")])
 }
 
 #[tauri::command]
@@ -1540,16 +1541,16 @@ pub fn change_wallet_password_named(
     new_pass: String,
 ) -> Result<String, String> {
     ensure_config()?;
-    let result = rpc::call_rpc_wallet(
+    let result = run_named_wallet_cli(
         &wallet_name,
-        "walletpassphrasechange",
         &[
-            serde_json::Value::String(old_pass),
-            serde_json::Value::String(new_pass),
+            String::from("walletpassphrasechange"),
+            old_pass,
+            new_pass,
         ],
     )?;
     let _ = crate::modules::wallet_pin_unlock::invalidate_pin_record();
-    Ok(result.as_str().unwrap_or("").to_string())
+    Ok(result)
 }
 
 #[tauri::command]

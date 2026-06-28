@@ -75,17 +75,21 @@ The working model is:
 6. Reuse the known-good older AppImage runtime header from the 1.2 universal
    AppImage so the final artifact works on systems without `libfuse2`.
 
-The existing reference script is `scripts/build_linux_universal.sh`. It still
-contains 1.3-era names and assumptions, so treat it as the documented
-procedure, not a finished 2.0 release command. Before using it for 2.0:
+For Commander 2.0.0, use `scripts/build_linux_universal_2_0.sh`. It stages
+against the current `src-tauri/binaries/` layout, includes all three Linux Core
+Next sidecars (`hemp0xd`, `hemp0x-cli`, and `hemp0x-tx`), preserves committed
+lockfiles, and avoids re-stripping the Core sidecars.
 
-- Update the version and output filename to 2.0.0.
-- Stage all three Linux Core Next sidecars: `hemp0xd`, `hemp0x-cli`, and
-  `hemp0x-tx`.
+Before running it:
+
+- Run `npm run stage:core-next`.
 - Confirm `LEGACY_APPIMAGE_PATH` points to the known-good 1.2 universal
   AppImage runtime source.
-- Build inside the intended container image and test the output on at least
-  one modern distro and one older LTS distro.
+- Confirm the `hemp0x-builder-2204` container image exists.
+- Test the output on at least one modern distro and one older LTS distro.
+
+The older `scripts/build_linux_universal.sh` remains as the 1.3-era reference
+script only.
 
 Expected output shape:
 

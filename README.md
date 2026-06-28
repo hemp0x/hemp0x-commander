@@ -5,16 +5,16 @@
     <img src="src/assets/hemp0xgit.png" alt="Hemp0x Logo" width="160" />
   </a>
 
-  <h3>Interface for the Hemp0x Blockchain</h3>
+  <h3>All-In-One Manager for the Hemp0x Blockchain</h3>
 
   <p>
-    A secure, non-custodial, and cross-platform dashboard for managing your node and assets.
+    A secure, non-custodial, cross-platform desktop app for managing your Hemp0x node, wallet, assets, vaults, and H0XC community chat.
   </p>
 
   <br />
 
   [![Website](https://img.shields.io/badge/WEBSITE-hemp0x.com-000000?style=for-the-badge&logo=globe&logoColor=00ff00&labelColor=000000)](https://hemp0x.com)
-  [![Download](https://img.shields.io/badge/DOWNLOAD-v2.0.0-000000?style=for-the-badge&logo=windows&logoColor=00ff00&labelColor=000000)](https://github.com/beyondcr/hemp0x-commander/releases)
+  [![Download](https://img.shields.io/badge/DOWNLOAD-v2.0.0-000000?style=for-the-badge&logo=windows&logoColor=00ff00&labelColor=000000)](https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.0)
   [![Discord](https://img.shields.io/badge/DISCORD-JOIN_US-000000?style=for-the-badge&logo=discord&logoColor=00ff00&labelColor=000000)](https://discord.gg/FMEKJUwcsu)
   [![Build Guides](https://img.shields.io/badge/DOCS-BUILD_GUIDES-000000?style=for-the-badge&logo=rust&logoColor=00ff00&labelColor=000000)](docs/BUILDING.md)
 </div>
@@ -25,32 +25,33 @@
 
 ---
 
-## ⚡ Overview
+## Overview
 
-**Hemp0x Commander** brings the power of the Hemp0x blockchain to your desktop. Built with **Tauri v2** (Rust) and **Svelte 5**, it combines the security of a local full node with the ease of use of a modern web application.
+**Hemp0x Commander** brings Hemp0x Core Next to the desktop. Built with **Tauri v2** (Rust) and **Svelte 5**, it combines local-node security with a modern interface for wallet, asset, vault, message, and node operations.
 
 > [!WARNING]
-> ### ⚠️ STATE: ACTIVE DEVELOPMENT
-> **This software is currently in Beta (v2.0). While functional, it is evolving.**
+> ### Release Notice
+> **Hemp0x Commander 2.0.0 is a major release and should still be treated as early production software.**
 >
-> *   🐛 **Expect bugs.**
-> *   🎨 **Expect UI changes.**
-> *   � **Use at your own risk.** We are not responsible for lost funds or data.
-> *   💾 **Always backup your `wallet.dat`.**
+> * Verify release checksums before running downloaded artifacts.
+> * Back up `wallet.dat` and Hemp0x Vault files before wallet, vault, or node maintenance.
+> * Unsigned Windows builds may trigger SmartScreen or antivirus warnings.
+> * Use at your own risk. We are not responsible for lost funds or data.
 
-### ✨ Key Features
+### Key Features
 
 | Feature | Description | Status |
 | :--- | :--- | :--- |
-| **🪙 Asset Management** | Issue, reissue, and transfer unique Hemp0x assets directly from the UI. Visualize your portfolio with rich metadata. | 🚧 **In Testing** |
-| **🛡️ Privacy First** | Connects to your own local `hemp0xd` node via authenticated RPC. No third-party servers track your transactions. | ✅ **Stable** |
-| **🔧 Coin Control** | (Advanced) Manually select which UTXOs to spend. Optimize privacy or reduce transaction fees. | ✅ **Stable** |
-| **🖥️ Node Control** | Start, stop, and monitor your blockchain daemon seamlessly. View sync progress, peer count, and network difficulty. | ✅ **Stable** |
-| **🔒 Encryption** | Secures your wallet with AES-256 encryption. Unlock only when necessary to sign transactions. | ✅ **Stable** |
+| **Node Control** | Start, stop, configure, repair, and monitor bundled Hemp0x Core Next from Commander. | **Ready** |
+| **Wallet & Vaults** | Use legacy `wallet.dat`, portable Hemp0x Vault wallets, recovery phrases, wallet imports, and local PIN unlock. | **Ready** |
+| **Asset Management** | Issue, reissue, transfer, browse, and inspect Hemp0x assets through your local node. | **Ready** |
+| **H0XC Community Chat** | Use message-index backed on-chain community chat with local moderation and history recovery. | **Ready** |
+| **Local Explorer** | Inspect local transactions, addresses, assets, UTXOs, and wallet history without third-party explorers. | **Ready** |
+| **Privacy First** | Uses authenticated local RPC. No hosted wallet service is required. | **Ready** |
 
 ---
 
-## 📸 Gallery
+## Gallery
 
 <div align="center">
 
@@ -76,23 +77,35 @@
 
 ---
 
-## 📦 Installation
+## Installation
 
-**Windows** & **Linux** supported.
+Windows and Linux builds are provided on the GitHub release page.
 
 ### Windows
-1.  Navigate to the **[Releases Page](https://github.com/beyondcr/hemp0x-commander/releases)**.
-2.  Download the **Portable Version** (`.zip`).
-3.  Extract and launch `Hemp0x Commander.exe`.
+1. Download `Hemp0x_Commander_2.0.0_Windows_x64_Portable.zip` from the **[v2.0.0 release](https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.0)**.
+2. Verify the SHA256 checksum from the release notes.
+3. Extract the zip to a writable folder.
+4. Launch `hemp0x-commander.exe`.
 
 ### Linux
-1.  Download the **AppImage** from **[Releases](https://github.com/beyondcr/hemp0x-commander/releases)**.
-2.  `chmod +x Hemp0x_Commander_*.AppImage`
-3.  ./Launch
+1. Download `Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage` from the **[v2.0.0 release](https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.0)**.
+2. Verify the SHA256 checksum from the release notes.
+3. Make it executable and run it:
+
+```bash
+chmod +x Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
+./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
+```
+
+If your distribution blocks AppImage mounting, use:
+
+```bash
+APPIMAGE_EXTRACT_AND_RUN=1 ./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
+```
 
 ---
 
-## 💀 Contributing & Bugs
+## Contributing & Bugs
 
 This application is merely a **Visual Shell** interacting with the core `hemp0xd` binaries. If the shell breaks, your coins are safe in the daemon.
 
@@ -101,7 +114,7 @@ We value your feedback.
 *   **Report it** on the [Hemp0x Discord](https://discord.gg/FMEKJUwcsu).
 *   **Fix it** and submit a PR.
 
-*Together we build the future of Hemp0x.*
+Together we build the future of Hemp0x.
 
 ---
 

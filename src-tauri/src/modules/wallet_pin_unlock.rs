@@ -133,15 +133,6 @@ fn active_wallet_name() -> Result<Option<String>, String> {
         .filter(|n| !n.is_empty()))
 }
 
-/// Call an RPC method on the active wallet (named vault wallet if set, else
-/// the default wallet), mirroring `rpc::call_active_wallet_or_default`.
-fn call_active_wallet(method: &str, params: &[serde_json::Value]) -> Result<serde_json::Value, String> {
-    match active_wallet_name()? {
-        Some(name) => rpc::call_rpc_wallet(&name, method, params),
-        None => rpc::call_rpc(method, params),
-    }
-}
-
 /// Compute a non-secret fingerprint binding the record to the active runtime
 /// wallet identity. Returns `None` (fail closed) if Core cannot be reached to
 /// prove identity.
@@ -153,7 +144,7 @@ fn call_active_wallet(method: &str, params: &[serde_json::Value]) -> Result<serd
 pub fn compute_wallet_fingerprint() -> Result<Option<String>, String> {
     let wallet_name_setting = active_wallet_name()?.unwrap_or_default();
     let data_dir = active_data_dir()?;
-    let info = match call_active_wallet("getwalletinfo", &[]) {
+    let info = match rpc::call_active_wallet_or_default("getwalletinfo", &[]) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };

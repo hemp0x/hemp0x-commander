@@ -142,7 +142,11 @@ Bug reports and testing feedback are welcome in the Hemp0x Discord:
 
 ## License
 
-See the repository license and release notes for current distribution terms. Community testing, issues, documentation updates, and pull requests are welcome.
+Hemp0x Commander is released under the MIT License.
+
+Copyright (c) 2026 Hemp0x Devs
+
+The license applies to the Commander codebase, including the H0XC and H0XSHT message handling code, encoder and decoder logic, and tables included in this repository. Community testing, issues, documentation updates, and pull requests are welcome.
 
 <p align="center">
   <a href="https://hemp0x.com">hemp0x.com</a>

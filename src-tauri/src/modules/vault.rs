@@ -7357,6 +7357,31 @@ fn clear_active_wallet_before_migration_restore() -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_core_ready_for_migration_restore() -> Result<(), String> {
+    let ready = crate::modules::runtime::wait_for_daemon_ready_blocking(Some(1_500));
+    if ready.ready {
+        return Ok(());
+    }
+
+    crate::modules::process::start_node_blocking()
+        .map_err(|e| format!("Core must be running to create the vault wallet: {e}"))?;
+
+    let ready = crate::modules::runtime::wait_for_daemon_ready_blocking(Some(120_000));
+    if ready.ready {
+        Ok(())
+    } else {
+        Err(format!(
+            "Core started but RPC was not ready for wallet creation after {} ms: {}",
+            ready.elapsed_ms,
+            if ready.rpc_error.is_empty() {
+                ready.progress
+            } else {
+                ready.rpc_error
+            }
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn vault_restart_core_with_wallet(wallet_name: String) -> Result<(), String> {
     let wn = wallet_name.clone();
@@ -8050,6 +8075,7 @@ fn restore_from_recovery_phrase_blocking(
     }
 
     clear_active_wallet_before_migration_restore()?;
+    ensure_core_ready_for_migration_restore()?;
 
     let now = chrono::Utc::now().timestamp();
     let webcom_record = SecretRecord {

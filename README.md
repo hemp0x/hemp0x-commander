@@ -49,13 +49,13 @@ The screenshots below are safe examples with wallet-sensitive fields hidden or t
 
 ![Dashboard](screenshots/dashboard.png)
 
-### Assets and H0XC
+### H0XC Community Chat
 
-![Assets and H0XC](screenshots/assets.png)
+![H0XC community chat](screenshots/assets.png)
 
-### Local Explorer
+### Wallet Consolidation
 
-![Local explorer](screenshots/network.png)
+![Wallet consolidation](screenshots/network.png)
 
 ### System Configuration
 

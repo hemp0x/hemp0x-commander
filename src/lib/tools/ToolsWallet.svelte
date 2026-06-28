@@ -5447,9 +5447,9 @@
                     </button>
                 </div>
             {:else if createWalletWorking}
-                <div class="vault-connect-loading" style="padding:1.5rem 0;">
+                <div class="create-wallet-working">
                     <span class="vault-connect-spinner vault-connect-spinner-lg"></span>
-                    <p style="color:#aaa; font-size:0.7rem; margin:0.5rem 0 0;">Generating wallet and storing in vault…</p>
+                    <p>Generating wallet and storing in vault...</p>
                 </div>
             {:else}
                 <h3 style="color:var(--color-primary); margin:0 0 0.5rem; font-size:0.85rem; letter-spacing:1px; text-align:center;">
@@ -6763,6 +6763,22 @@
         letter-spacing: 1px;
         text-align: center;
         flex-shrink: 0;
+    }
+    .create-wallet-working {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
+        min-height: 150px;
+        padding: 1rem 0;
+        text-align: center;
+    }
+    .create-wallet-working p {
+        color: #aaa;
+        font-size: 0.7rem;
+        line-height: 1.35;
+        margin: 0;
     }
     .create-wallet-scroll {
         overflow-y: auto;

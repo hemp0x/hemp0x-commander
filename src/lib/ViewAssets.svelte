@@ -293,8 +293,14 @@
                 reissueAsset = myAssets[0].name;
         } catch (err) {
             console.warn("list_assets error:", err);
-            nodeOnline = false;
-            status = String(err).includes("error") ? "Node may be offline" : "";
+            try {
+                await core.invoke("get_info");
+                nodeOnline = true;
+                status = "";
+            } catch {
+                nodeOnline = false;
+                status = "Node may be offline";
+            }
             myAssets = [];
         }
     }
@@ -1226,6 +1232,10 @@
                         inline
                         isOpen={true}
                         on:close={() => (browseModalOpen = false)}
+                        on:loaded={() => {
+                            nodeOnline = true;
+                            status = "";
+                        }}
                         on:viewAsset={(e) => {
                             const a = e.detail;
                             detailFromBrowse = true;

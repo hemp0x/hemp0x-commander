@@ -212,6 +212,7 @@
             lastFetchTime = new Date().toLocaleTimeString();
             saveCache();
             applyFilters();
+            dispatch("loaded", { count: allResults.length });
         } catch (err) {
             error = String(err);
             allResults = [];
@@ -231,6 +232,7 @@
             lastFetchTime = new Date().toLocaleTimeString();
             saveCache();
             applyFilters();
+            dispatch("loaded", { count: allResults.length });
         } catch (err) {
             error = String(err);
         } finally {
@@ -251,6 +253,7 @@
             lastFetchTime = new Date().toLocaleTimeString();
             saveCache();
             applyFilters();
+            dispatch("loaded", { count: allResults.length });
         } catch (err) {
             error = String(err);
         } finally {

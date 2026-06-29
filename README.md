@@ -145,6 +145,8 @@ Copyright (c) 2026 Hemp0x Devs
 
 The license applies to the Commander codebase, including the H0XC and H0XSHT message handling code, encoder and decoder logic, and tables included in this repository. Community testing, issues, documentation updates, and pull requests are welcome.
 
+Bundled Core Next binaries, platform runtimes, and third-party dependencies keep their own licenses. See [Third-Party Notices](docs/THIRD_PARTY_NOTICES.md).
+
 <p align="center">
   <a href="https://hemp0x.com">hemp0x.com</a>
 </p>

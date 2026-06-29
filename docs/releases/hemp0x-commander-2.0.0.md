@@ -184,6 +184,8 @@ Copyright (c) 2026 Hemp0x Devs
 
 The MIT License applies to the Commander codebase, including the H0XC and H0XSHT message handling code, encoder and decoder logic, and tables included in this repository.
 
+Bundled Core Next binaries, platform runtimes, and third-party dependencies keep their own licenses. See `docs/THIRD_PARTY_NOTICES.md`.
+
 ## Known Notes
 
 - H0XC full history requires `messageindex=1` and a completed message backfill on nodes that synced before enabling the index.

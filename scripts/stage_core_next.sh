@@ -8,14 +8,14 @@ set -euo pipefail
 #
 # Environment overrides:
 #   CORE_NEXT_ARTIFACT_DIR  Path to the directory containing the release archives and SHA256SUMS.
-#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-messageindex/
+#                           Default: /home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-asset-overflow/
 #   STAGING_DIR             Destination directory for staged binaries.
 #                           Default: <repo root>/src-tauri/binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-messageindex"
+DEFAULT_ARTIFACT_DIR="/home/bcr/projects/hemp0x-core-next/untracked/release-artifacts/final-core-next-v4.8.0.0-asset-overflow"
 ARTIFACT_DIR="${CORE_NEXT_ARTIFACT_DIR:-$DEFAULT_ARTIFACT_DIR}"
 STAGING_DIR="${STAGING_DIR:-$REPO_ROOT/src-tauri/binaries}"
 

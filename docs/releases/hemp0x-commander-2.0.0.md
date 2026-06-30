@@ -6,12 +6,13 @@ This is a major release. Back up `wallet.dat`, Hemp0x Vault files, and any impor
 
 ## Bundled Core Next
 
-- Core Next version: `v4.8.0.0-6c18fe5a2`
+- Core Next version: `v4.8.0.0-fed84d517`
 - Bundled binaries:
   - `hemp0xd`
   - `hemp0x-cli`
   - `hemp0x-tx`
 - Commander validates the bundled Core Next build and warns if a running daemon does not match the expected release build.
+- Core Next v4.8.0.0 was refreshed to build `fed84d517` with asset amount validation hardening.
 
 ## Downloads
 

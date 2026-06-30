@@ -18,7 +18,7 @@
         "fullscreen": false,
         "transparent": false,
         "dragDropEnabled": false,
-        "additionalBrowserArgs": "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --metrics-recording-only --no-first-run --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        "additionalBrowserArgs": "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --metrics-recording-only --no-first-run --disable-features=msWebOOUI,msPdfOOUI"
       }
     ],
     "security": {

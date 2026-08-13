@@ -1,6 +1,6 @@
-# Release Building - Hemp0x Commander 2.0.0
+# Release Building - Hemp0x Commander 2.0.x
 
-This document covers repeatable local build steps for Hemp0x Commander 2.0.0.
+This document covers repeatable local build steps for Hemp0x Commander 2.0.x.
 
 ## Prerequisites
 
@@ -49,7 +49,7 @@ npm run tauri build -- -b appimage
 
 The `-b appimage` flag builds only the AppImage bundle (skipping deb/rpm).
 
-Output: `src-tauri/target/release/bundle/appimage/Hemp0x Commander_2.0.0_amd64.AppImage`
+Output: `src-tauri/target/release/bundle/appimage/Hemp0x Commander_<version>_amd64.AppImage`
 
 The AppImage bundles the Core Next binaries as Tauri `externalBin` resources. At runtime, Commander resolves them relative to the AppImage extraction path.
 
@@ -75,7 +75,7 @@ The working model is:
 6. Reuse the known-good older AppImage runtime header from the 1.2 universal
    AppImage so the final artifact works on systems without `libfuse2`.
 
-For Commander 2.0.0, use `scripts/build_linux_universal_2_0.sh`. It stages
+For Commander 2.0.x, use `scripts/build_linux_universal_2_0.sh`. It stages
 against the current `src-tauri/binaries/` layout, includes all three Linux Core
 Next sidecars (`hemp0xd`, `hemp0x-cli`, and `hemp0x-tx`), preserves committed
 lockfiles, and avoids re-stripping the Core sidecars.
@@ -94,7 +94,7 @@ script only.
 Expected output shape:
 
 ```text
-release/Hemp0x_Commander_2.0.0_Universal_Linux.AppImage
+release/Hemp0x_Commander_<version>_Universal_Linux_x86_64.AppImage
 ```
 
 This universal path is release engineering, not app logic. Do not replace it
@@ -119,7 +119,7 @@ For distribution, zip the following files together:
 - `hemp0x-cli.exe`
 - `hemp0x-tx.exe`
 
-Do not publish NSIS/MSI installer artifacts for Commander 2.0.0 unless the release
+Do not publish NSIS/MSI installer artifacts for Commander 2.0.x unless the release
 scope changes.
 
 #### Linux-to-Windows MSVC Cross-Build
@@ -195,7 +195,7 @@ In Windows portable builds, `externalBin` places `.exe` files adjacent to the ma
 
 Commander's **Extract Binaries** button (SYSTEM tab) copies the resolved `hemp0xd`, `hemp0x-cli`, and `hemp0x-tx` binaries from the bundled location to a user-chosen directory. This is useful for advanced users who want to run the daemon outside Commander while still using the bundled Core Next build.
 
-## 5. Intentionally NOT Done for 2.0.0
+## 5. Intentionally NOT Done for 2.0.x
 
 - No auto-updater mechanism
 - No installer (NSIS/MSI on Windows, deb/rpm on Linux)

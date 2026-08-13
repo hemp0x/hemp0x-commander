@@ -1,6 +1,6 @@
 # Build Guide for Hemp0x Commander
 
-> **Note:** This is a legacy v1.x cross-compilation guide. For current Hemp0x Commander 2.0.0 builds, use the staging-based flow in [`RELEASE_BUILDING.md`](RELEASE_BUILDING.md): run `npm run stage:core-next` to stage Core Next 4.8.0.0 binaries into `src-tauri/binaries/` (with target-triple suffixes), then `npm run tauri build`. Do not place binaries directly into `src-tauri/`. The manual placement steps below are retained as historical reference only.
+> **Note:** This is a legacy v1.x cross-compilation guide. For current Hemp0x Commander 2.0.x builds, use the staging-based flow in [`RELEASE_BUILDING.md`](RELEASE_BUILDING.md): run `npm run stage:core-next` to stage Core Next binaries into `src-tauri/binaries/` (with target-triple suffixes), then `npm run tauri build`. Do not place binaries directly into `src-tauri/`. The manual placement steps below are retained as historical reference only.
 
 This generic guide outlines the process for building the Hemp0x Commander application from source. It covers setting up the unique cross-compilation environment required to produce stable binaries for both Windows and Linux platforms.
 

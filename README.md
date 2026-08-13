@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://hemp0x.com"><img src="https://img.shields.io/badge/Website-hemp0x.com-000000?style=for-the-badge&labelColor=000000&color=00aa33" alt="Website" /></a>
-  <a href="https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.0"><img src="https://img.shields.io/badge/Download-v2.0.0-000000?style=for-the-badge&labelColor=000000&color=00aa33" alt="Download" /></a>
+  <a href="https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.1"><img src="https://img.shields.io/badge/Download-v2.0.1-000000?style=for-the-badge&labelColor=000000&color=00aa33" alt="Download" /></a>
   <a href="https://discord.gg/FMEKJUwcsu"><img src="https://img.shields.io/badge/Discord-Hemp0x-000000?style=for-the-badge&labelColor=000000&color=00aa33" alt="Discord" /></a>
 </p>
 
@@ -28,7 +28,7 @@ Commander 2.0 is a major rebuild. It adds portable Hemp0x Vault wallets, Core Ne
 
 ## Commander 2.0 Highlights
 
-- **Bundled Core Next 4.8.0.0** with version matching and sidecar validation.
+- **Bundled Core Next 4.8.1.0** with version matching and sidecar validation.
 - **Hemp0x Vault wallets** with portable BIP39 primary wallet records that can move between Commander and WebCom.
 - **Legacy wallet support** for `wallet.dat`, runtime wallet files, Core migration envelopes, and backup recovery.
 - **Wallet creation and recovery** with 12 or 24 word recovery phrases, vault storage, Core restore, phrase confirmation, and recovery-history tools.
@@ -61,7 +61,7 @@ Commander 2.0 is a major rebuild. It adds portable Hemp0x Vault wallets, Core Ne
 
 Release builds are published on the GitHub releases page:
 
-<https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.0>
+<https://github.com/hemp0x/hemp0x-commander/releases/tag/v2.0.1>
 
 ### Windows
 
@@ -78,14 +78,14 @@ Windows SmartScreen or antivirus products may warn on unsigned builds. Verify th
 Download the universal AppImage, make it executable, then run it:
 
 ```bash
-chmod +x Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
-./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
+chmod +x Hemp0x_Commander_2.0.1_Universal_Linux_x86_64.AppImage
+./Hemp0x_Commander_2.0.1_Universal_Linux_x86_64.AppImage
 ```
 
 If your distribution blocks AppImage mounting, run:
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./Hemp0x_Commander_2.0.0_Universal_Linux_x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./Hemp0x_Commander_2.0.1_Universal_Linux_x86_64.AppImage
 ```
 
 ## Before You Use It
@@ -127,7 +127,7 @@ For release builds, use the documented release flow:
 
 - [Build guide](docs/BUILDING.md)
 - [Release build guide](docs/RELEASE_BUILDING.md)
-- [Commander 2.0 release notes](docs/releases/hemp0x-commander-2.0.0.md)
+- [Commander 2.0.1 release notes](docs/releases/hemp0x-commander-2.0.1.md)
 
 ## Project Notes
 

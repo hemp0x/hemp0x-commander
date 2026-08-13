@@ -12,8 +12,8 @@ use crate::modules::rpc::rpc_context;
 use crate::modules::rpc::RpcContext;
 use crate::modules::utils::{hide_console_window, resolve_bin, resolve_bin_with_override};
 
-const REQUIRED_CORE_NEXT_COMMIT: &str = "fed84d517";
-const REQUIRED_CORE_BASE_VERSION: &str = "4.8.0.0";
+const REQUIRED_CORE_NEXT_COMMIT: &str = "3e061497a";
+const REQUIRED_CORE_BASE_VERSION: &str = "4.8.1.0";
 const DEFAULT_RPC_PORT: u16 = 42068;
 const DEFAULT_P2P_PORT: u16 = 42069;
 
@@ -1057,7 +1057,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_matches_required_hash() {
-        let raw = "Hemp0x Core Daemon version v4.8.0.0-fed84d517";
+        let raw = "Hemp0x Core Daemon version v4.8.1.0-3e061497a";
         let result = parse_commit_hash(raw);
         assert_eq!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }
@@ -1071,7 +1071,7 @@ generatetoaddress nblocks address (maxtries)
 
     #[test]
     fn parse_commit_hash_does_not_match_required_hash_as_substring() {
-        let raw = "Hemp0x Core Daemon version v4.8.0.0-0fed84d517ff";
+        let raw = "Hemp0x Core Daemon version v4.8.1.0-03e061497aff";
         let result = parse_commit_hash(raw);
         assert_ne!(result.as_deref(), Some(REQUIRED_CORE_NEXT_COMMIT));
     }

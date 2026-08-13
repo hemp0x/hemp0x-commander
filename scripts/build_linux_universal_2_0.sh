@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Hemp0x Commander 2.0.0 - Universal Linux AppImage builder (release eng.)
+# Hemp0x Commander 2.0.x - Universal Linux AppImage builder (release eng.)
 # =============================================================================
 # Release-engineering only. Does NOT modify application source code.
 # Builds Commander inside an Ubuntu 22.04 (glibc 2.35) container for broad
@@ -8,7 +8,7 @@
 # legacy 1.2 AppImage runtime header so the artifact runs without libfuse2.
 #
 # Replaces the 1.3-era scripts/build_linux_universal.sh assumptions:
-#   - version 2.0.0
+#   - version 2.0.x
 #   - all three Linux sidecars (hemp0xd, hemp0x-cli, hemp0x-tx) staged via
 #     ./scripts/stage_core_next.sh before running this script
 #   - NO `cargo update` (preserves the committed Cargo.lock)
@@ -25,7 +25,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-VERSION="2.0.0"
+VERSION="2.0.1"
 APP_NAME="Hemp0x_Commander"
 ENGINE="${ENGINE:-podman}"
 if ! command -v "$ENGINE" >/dev/null 2>&1; then
@@ -35,7 +35,7 @@ DOCKER_IMAGE_NAME="${DOCKER_IMAGE_NAME:-hemp0x-builder-2204}"
 LEGACY_APPIMAGE_PATH="${LEGACY_APPIMAGE_PATH:-$PROJECT_DIR/Hemp0x_Commander_1.2.0_Universal_Fixed.AppImage}"
 OUTPUT_DIR="$PROJECT_DIR/untracked/release-candidates"
 INTERMEDIATE_APPIMAGE="$OUTPUT_DIR/_internal_universal_intermediate.AppImage"
-FINAL_APPIMAGE="$OUTPUT_DIR/${APP_NAME}_${VERSION}_Universal_Linux.AppImage"
+FINAL_APPIMAGE="$OUTPUT_DIR/${APP_NAME}_${VERSION}_Universal_Linux_x86_64.AppImage"
 FINAL_SHA256="$FINAL_APPIMAGE.sha256"
 
 mkdir -p "$OUTPUT_DIR"

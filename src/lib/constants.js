@@ -4,7 +4,7 @@
  */
 
 // Application version (single source of truth)
-export const APP_VERSION = "v2.0.0";
+export const APP_VERSION = "v2.0.1";
 
 // Asset creation fees (in HEMP)
 export const ASSET_CREATION_FEE = "0.25";
